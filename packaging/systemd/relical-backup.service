@@ -6,4 +6,11 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/relical backup --all
-ExecStartPost=/usr/local/bin/relical forget --all
+# Retention runs after every backup run, whatever its result: ExecStartPost=
+# would be skipped when one domain's backup fails, and then no domain's old
+# snapshots would ever be pruned. ExecStopPost= runs regardless of result
+# (the unit still records the backup's failure).
+ExecStopPost=/usr/local/bin/relical forget --all
+# ExecStopPost= is bounded by TimeoutStopSec= (default 90s), which a prune
+# can easily exceed.
+TimeoutStopSec=infinity
