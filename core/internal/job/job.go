@@ -174,6 +174,11 @@ func (e Env) Forget(ctx context.Context, domain string) Result {
 		res.Note = "pruning runs on the destination host (prune: remote)"
 		return res
 	}
+	// A restic killed mid-run (SIGKILL, OOM, power loss) leaves a stale lock
+	// that would make forget --prune and check fail until it is removed.
+	if err := r.Unlock(ctx); err != nil {
+		return failed(res, err)
+	}
 	if err := r.Forget(ctx, "backup", e.Cfg.Retention, true); err != nil {
 		return failed(res, err)
 	}
@@ -185,6 +190,9 @@ func (e Env) Check(ctx context.Context, domain, subset string) Result {
 	res := e.result(domain, "check")
 	r, _, err := e.Runner(domain)
 	if err != nil {
+		return failed(res, err)
+	}
+	if err := r.Unlock(ctx); err != nil {
 		return failed(res, err)
 	}
 	if err := r.Check(ctx, subset); err != nil {

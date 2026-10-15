@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -76,6 +77,9 @@ func doveadm(ctx context.Context, env job.Env, args ...string) ([]byte, error) {
 // doveadmRun also returns stderr, for the callers that must read it.
 func doveadmRun(ctx context.Context, env job.Env, args ...string) (out, stderr []byte, err error) {
 	cmd := exec.CommandContext(ctx, env.Cfg.DoveadmBin, args...)
+	// On cancellation ask doveadm to stop cleanly; kill it only if it has not exited a minute later.
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = 60 * time.Second
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
 	for k, v := range env.ExtraEnv {
 		cmd.Env = append(cmd.Env, k+"="+v)

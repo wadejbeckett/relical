@@ -125,6 +125,57 @@ func TestCheckWithoutKeyFails(t *testing.T) {
 	}
 }
 
+// logLines returns the restic invocations in order, without global flags.
+func logLines(log string) []string {
+	var out []string
+	for _, l := range strings.Split(strings.TrimSpace(log), "\n") {
+		f := strings.Fields(l)
+		for len(f) > 1 && strings.HasPrefix(f[0], "--") {
+			f = f[2:]
+		}
+		out = append(out, strings.Join(f, " "))
+	}
+	return out
+}
+
+func TestForgetUnlocksStaleLocksFirst(t *testing.T) {
+	e, _, log := setup(t, "local")
+	keysEnsure(t, e)
+	if r := e.Forget(context.Background(), "example.test"); !r.OK {
+		t.Fatalf("%+v", r)
+	}
+	l := logLines(log())
+	if len(l) != 2 || l[0] != "unlock" || !strings.HasPrefix(l[1], "forget ") || !strings.HasSuffix(l[1], " --prune") {
+		t.Fatalf("want unlock then forget --prune, got %q", l)
+	}
+}
+
+func TestCheckUnlocksStaleLocksFirst(t *testing.T) {
+	e, _, log := setup(t, "local")
+	keysEnsure(t, e)
+	if r := e.Check(context.Background(), "example.test", "5%"); !r.OK {
+		t.Fatalf("%+v", r)
+	}
+	l := logLines(log())
+	if len(l) != 2 || l[0] != "unlock" || l[1] != "check --read-data-subset 5%" {
+		t.Fatalf("want unlock then check, got %q", l)
+	}
+}
+
+func TestUnlockFailureFailsForgetAndCheck(t *testing.T) {
+	e, env, log := setup(t, "local")
+	keysEnsure(t, e)
+	env["FAKE_UNLOCK_EXIT"] = "1"
+	for _, r := range []Result{e.Forget(context.Background(), "example.test"), e.Check(context.Background(), "example.test", "")} {
+		if r.OK || !strings.Contains(r.Error, "restic unlock: exit 1") {
+			t.Errorf("%+v", r)
+		}
+	}
+	if strings.Contains(log(), "forget") || strings.Contains(log(), "check") {
+		t.Errorf("ran forget or check after unlock failed:\n%s", log())
+	}
+}
+
 func TestLockIsExclusive(t *testing.T) {
 	e, _, _ := setup(t, "local")
 	unlock, err := Lock(e.Cfg.StateDir)

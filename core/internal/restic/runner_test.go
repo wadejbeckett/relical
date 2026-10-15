@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wadejbeckett/relical/core/internal/config"
 	"github.com/wadejbeckett/relical/core/internal/testutil"
@@ -27,7 +28,7 @@ func TestBackupParsesSummaryAndBuildsArgs(t *testing.T) {
 		t.Errorf("summary = %+v", sum)
 	}
 	got := log()
-	want := "backup --json --one-file-system --tag backup --exclude **/dovecot.index* /m/a/Maildir /m/b/Maildir"
+	want := "--retry-lock 30m backup --json --one-file-system --tag backup --exclude **/dovecot.index* /m/a/Maildir /m/b/Maildir"
 	if !strings.Contains(got, want) {
 		t.Errorf("args:\n%s\nwant %s", got, want)
 	}
@@ -90,7 +91,7 @@ func TestForgetArgs(t *testing.T) {
 	if err := r.Forget(context.Background(), "backup", config.Retention{Daily: 14, Weekly: 8, Monthly: 12}, true); err != nil {
 		t.Fatal(err)
 	}
-	want := "forget --tag backup --group-by host,tags --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune"
+	want := "--retry-lock 30m forget --tag backup --group-by host,tags --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune"
 	if !strings.Contains(log(), want) {
 		t.Errorf("%s\nwant %s", log(), want)
 	}
@@ -102,8 +103,57 @@ func TestGlobalFlagsAndLowPriority(t *testing.T) {
 	r.LowPriority = true
 	cmd := r.command(context.Background(), "check")
 	got := strings.Join(cmd.Args, " ")
-	want := "nice -n 19 ionice -c 3 " + r.Bin + " --limit-upload 5120 check"
+	want := "nice -n 19 ionice -c 3 " + r.Bin + " --limit-upload 5120 --retry-lock 30m check"
 	if got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}
+
+func TestCheckArgsRetryLock(t *testing.T) {
+	r, _, log := fake(t)
+	if err := r.Check(context.Background(), "5%"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.TrimSpace(log()), "--retry-lock 30m check --read-data-subset 5%"; got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}
+
+func TestUnlockRemovesOnlyStaleLocks(t *testing.T) {
+	r, env, log := fake(t)
+	if err := r.Unlock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(log()); got != "unlock" {
+		t.Errorf("args = %q, want plain unlock (never --remove-all)", got)
+	}
+	env["FAKE_UNLOCK_EXIT"] = "1"
+	if err := r.Unlock(context.Background()); ExitCode(err) != 1 {
+		t.Errorf("unlock failure not reported: %v", err)
+	}
+}
+
+func TestCommandCancelsGracefully(t *testing.T) {
+	r, _, _ := fake(t)
+	cmd := r.command(context.Background(), "check")
+	if cmd.WaitDelay != 60*time.Second {
+		t.Errorf("WaitDelay = %v, want 60s", cmd.WaitDelay)
+	}
+}
+
+func TestCancelledRunSendsSIGTERMAndSaysCancelled(t *testing.T) {
+	r, env, log := fake(t)
+	env["FAKE_HANG"] = "1"
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := r.Check(ctx, "")
+	if err == nil {
+		t.Fatal("cancelled run reported success")
+	}
+	if !strings.Contains(err.Error(), "cancelled") || !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Errorf("error does not say the run was cancelled: %v", err)
+	}
+	if !strings.Contains(log(), "got SIGTERM") {
+		t.Errorf("restic was not sent SIGTERM:\n%s", log())
 	}
 }

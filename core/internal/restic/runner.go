@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/wadejbeckett/relical/core/internal/config"
@@ -26,15 +27,19 @@ const (
 )
 
 type ExitError struct {
-	Command string
-	Code    int
-	Stderr  string
+	Command   string
+	Code      int
+	Stderr    string
+	Cancelled error // the context error when the run was cancelled
 }
 
 func (e *ExitError) Error() string {
 	lines := strings.Split(strings.TrimSpace(e.Stderr), "\n")
 	if len(lines) > 5 {
 		lines = lines[len(lines)-5:]
+	}
+	if e.Cancelled != nil {
+		return fmt.Sprintf("restic %s: cancelled (%v): exit %d: %s", e.Command, e.Cancelled, e.Code, strings.Join(lines, " | "))
 	}
 	return fmt.Sprintf("restic %s: exit %d: %s", e.Command, e.Code, strings.Join(lines, " | "))
 }
@@ -87,12 +92,24 @@ func (s Snapshot) Short() string {
 	return s.ID[:8]
 }
 
+// RetryLock is how long backup, check and forget wait for a repository
+// lock held by another live restic process before giving up.
+const RetryLock = "30m"
+
+// retriesLock lists the commands that get --retry-lock.
+var retriesLock = map[string]bool{"backup": true, "check": true, "forget": true}
+
 // command builds the exec.Cmd. The environment is built from scratch so
-// that RESTIC_* variables from the caller never leak in.
+// that RESTIC_* variables from the caller never leak in. Cancelling ctx
+// sends SIGTERM, on which restic removes its own lock; restic is killed
+// only if it has not exited 60 seconds later.
 func (r Runner) command(ctx context.Context, args ...string) *exec.Cmd {
 	full := []string{}
 	if r.LimitUploadKiB > 0 {
 		full = append(full, "--limit-upload", strconv.Itoa(r.LimitUploadKiB))
+	}
+	if len(args) > 0 && retriesLock[args[0]] {
+		full = append(full, "--retry-lock", RetryLock)
 	}
 	full = append(full, args...)
 	name := r.Bin
@@ -101,6 +118,8 @@ func (r Runner) command(ctx context.Context, args ...string) *exec.Cmd {
 		name = "nice"
 	}
 	cmd := exec.CommandContext(ctx, name, full...)
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = 60 * time.Second
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"),
 		"RESTIC_REPOSITORY=" + r.Repository,
@@ -121,7 +140,7 @@ func (r Runner) run(ctx context.Context, args ...string) ([]byte, error) {
 	if err := cmd.Run(); err != nil {
 		var xe *exec.ExitError
 		if errors.As(err, &xe) {
-			return stdout.Bytes(), &ExitError{Command: args[0], Code: xe.ExitCode(), Stderr: stderr.String()}
+			return stdout.Bytes(), &ExitError{Command: args[0], Code: xe.ExitCode(), Stderr: stderr.String(), Cancelled: ctx.Err()}
 		}
 		return stdout.Bytes(), err
 	}
@@ -234,5 +253,12 @@ func (r Runner) Check(ctx context.Context, readDataSubset string) error {
 
 func (r Runner) Restore(ctx context.Context, snapshotID, include, target string) error {
 	_, err := r.run(ctx, "restore", snapshotID, "--target", target, "--include", include)
+	return err
+}
+
+// Unlock removes stale locks only (never --remove-all), such as those
+// left by a restic process that was killed before it could clean up.
+func (r Runner) Unlock(ctx context.Context) error {
+	_, err := r.run(ctx, "unlock")
 	return err
 }

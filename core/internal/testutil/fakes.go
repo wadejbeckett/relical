@@ -15,6 +15,13 @@ echo "$*" >> "$FAKE_LOG"
 env | grep -E '^RESTIC_' | sort >> "$FAKE_LOG.env"
 [ -n "$RESTIC_PASSWORD" ] && echo "LEAKED RESTIC_PASSWORD" >> "$FAKE_LOG"
 while [ "${1#--}" != "$1" ]; do shift 2; done
+if [ -n "$FAKE_HANG" ]; then
+  # Stand-in for a long restic run; restic removes its own lock on SIGTERM.
+  trap 'kill $! 2>/dev/null; echo "got SIGTERM" >> "$FAKE_LOG"; exit 130' TERM
+  sleep 30 >/dev/null 2>&1 &
+  wait
+  exit 0
+fi
 case "$1" in
   cat) exit "${FAKE_CAT_EXIT:-0}" ;;
   backup) cat "$FAKE_BACKUP_OUT"; exit "${FAKE_BACKUP_EXIT:-0}" ;;
@@ -29,6 +36,7 @@ case "$1" in
     printf 'Subject: one\n\nx\n' > "$t$i/cur/1.host:2,S"
     printf 'Subject: sent\n\nx\n' > "$t$i/.Sent/cur/2.host:2,S"
     exit "${FAKE_RESTORE_EXIT:-0}" ;;
+  unlock) exit "${FAKE_UNLOCK_EXIT:-0}" ;;
   forget|check|init) exit "${FAKE_OTHER_EXIT:-0}" ;;
 esac
 exit 0
@@ -39,7 +47,11 @@ echo "$*" >> "$FAKE_LOG"
 case "$*" in
   "mailbox list"*) cat "$FAKE_LIST" 2>/dev/null; exit 0 ;;
   "import"*) for a in "$@"; do case "$a" in maildir:*) p="${a#maildir:}"; p="${p%%:*}"; ls -R "$p" >> "$FAKE_LOG";; esac; done
-             [ -n "$FAKE_IMPORT_SLEEP" ] && sleep "$FAKE_IMPORT_SLEEP"
+             if [ -n "$FAKE_IMPORT_SLEEP" ]; then
+               trap 'kill $! 2>/dev/null; echo "import got SIGTERM" >> "$FAKE_LOG"; exit 130' TERM
+               sleep "$FAKE_IMPORT_SLEEP" >/dev/null 2>&1 &
+               wait
+             fi
              [ -n "$FAKE_IMPORT_STDERR_ERROR" ] && echo "doveadm(alice@example.test)<1><x>: Error: opendir($p) failed: Permission denied" >&2
              [ -n "$FAKE_IMPORT_STDERR_OTHER" ] && echo "doveadm(alice@example.test)<1><x>: Error: Mailbox INBOX: Deleting corrupted cache: File too small" >&2
              exit "${FAKE_IMPORT_EXIT:-0}" ;;

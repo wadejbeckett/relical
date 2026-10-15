@@ -5,6 +5,7 @@ package restic
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"net"
 	"os"
 	"os/exec"
@@ -134,5 +135,69 @@ func TestAppendOnlyRefusesForget(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exit") {
 		t.Errorf("unexpected error shape: %v", err)
+	}
+}
+
+// TestStaleLockIsRemovedByUnlock leaves the stale lock that a SIGKILLed
+// backup leaves behind, shows check cannot get past it, and shows that
+// Unlock (as run before every forget and check) clears it.
+func TestStaleLockIsRemovedByUnlock(t *testing.T) {
+	ctx := context.Background()
+	repo := filepath.Join(t.TempDir(), "repo")
+	r := realRunner(t, repo)
+	if err := r.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	src := t.TempDir()
+	big := make([]byte, 8<<20) // incompressible, so the upload limit really slows the backup
+	rand.New(rand.NewSource(1)).Read(big)
+	if err := os.WriteFile(filepath.Join(src, "big"), big, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	slow := r
+	slow.LimitUploadKiB = 64 // keeps the backup running long enough to be killed mid-run
+	cmd := slow.command(ctx, "backup", src)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	locked := false
+	for i := 0; i < 300 && !locked; i++ {
+		if e, _ := os.ReadDir(filepath.Join(repo, "locks")); len(e) > 0 {
+			locked = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// Let restic finish writing the lock file and get into the upload, as
+	// a backup killed by the OOM killer or a power loss would be.
+	time.Sleep(time.Second)
+	cmd.Process.Kill()
+	t.Logf("killed backup: %v", cmd.Wait())
+	if !locked {
+		t.Fatal("backup never took a lock")
+	}
+	if e, _ := os.ReadDir(filepath.Join(repo, "locks")); len(e) == 0 {
+		t.Fatal("SIGKILLed backup left no lock behind")
+	}
+
+	blocked, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	err := r.Check(blocked, "")
+	if err == nil {
+		t.Fatal("check succeeded despite the stale lock")
+	}
+	if !strings.Contains(err.Error(), "cancelled") {
+		t.Errorf("check before unlock: %v", err)
+	}
+	t.Logf("check before unlock: %v", err)
+
+	if err := r.Unlock(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := os.ReadDir(filepath.Join(repo, "locks")); len(e) != 0 {
+		t.Errorf("locks left after unlock: %d", len(e))
+	}
+	if err := r.Check(ctx, ""); err != nil {
+		t.Fatalf("check after unlock: %v", err)
 	}
 }

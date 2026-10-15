@@ -115,6 +115,9 @@ func TestRestoreCleansUpWhenContextCancelledDuringImport(t *testing.T) {
 	if !strings.Contains(log(), "mailbox delete -r -s -u alice@example.test") {
 		t.Errorf("partial folder not removed after cancellation:\n%s", log())
 	}
+	if !strings.Contains(log(), "import got SIGTERM") {
+		t.Errorf("doveadm import was not sent SIGTERM on cancellation:\n%s", log())
+	}
 }
 
 func TestRestoreRejectsBadInput(t *testing.T) {
