@@ -166,6 +166,12 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 	if err := r.Restore(ctx, snap.ID, box.Path, stage); err != nil {
 		return res, err
 	}
+	// restic restore exits 0 when --include matches nothing in the snapshot.
+	if _, err := os.Lstat(filepath.Join(stage, box.Path)); errors.Is(err, fs.ErrNotExist) {
+		return res, fmt.Errorf("mailbox %s is not in snapshot %s", box.Login, snap.Short())
+	} else if err != nil {
+		return res, err
+	}
 	// doveadm drops to the mail user, which must be able to read the staging copy.
 	err = filepath.WalkDir(stage, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {

@@ -195,3 +195,15 @@ func TestErrorLinesMentioning(t *testing.T) {
 		t.Errorf("%q", got)
 	}
 }
+
+func TestRestoreFailsWhenMailboxIsNotInSnapshot(t *testing.T) {
+	e, env, log := setup(t)
+	env["FAKE_RESTORE_EMPTY"] = "1"
+	_, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest"})
+	if err == nil || err.Error() != "mailbox alice@example.test is not in snapshot fedcba98" {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(log(), "import ") {
+		t.Errorf("ran doveadm import with nothing restored:\n%s", log())
+	}
+}

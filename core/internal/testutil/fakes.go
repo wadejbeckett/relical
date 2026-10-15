@@ -32,6 +32,7 @@ case "$1" in
       case "$1" in --target) t="$2"; shift ;; --include) i="$2"; shift ;; esac
       shift
     done
+    [ -n "$FAKE_RESTORE_EMPTY" ] && exit 0
     mkdir -p "$t$i/cur" "$t$i/.Sent/cur"
     printf 'Subject: one\n\nx\n' > "$t$i/cur/1.host:2,S"
     printf 'Subject: sent\n\nx\n' > "$t$i/.Sent/cur/2.host:2,S"
@@ -61,7 +62,8 @@ case "$*" in
     # Real Dovecot 2.3 prints the mailbox name, then key=value pairs (no mailbox= key).
     [ -n "$FAKE_STATUS_EMPTY" ] && exit 0
     for a in "$@"; do t="${a%\*}"; done
-    echo "$t.INBOX messages=1"; echo "$t.Sent messages=1"; exit 0 ;;
+    echo "$t.INBOX messages=1"; echo "$t.Sent messages=1"
+    exit 0 ;;
 esac
 exit 0
 `
