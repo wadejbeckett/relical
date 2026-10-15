@@ -75,6 +75,27 @@ if $R restore --domain example.test --mailbox alice > /tmp/again.json; then
 fi
 grep -q 'already exists' /tmp/again.json
 
+# Folder restore. The first snapshot's "Restored" folder now exists, so take a
+# second snapshot (it still holds the Sent message), then lose that message.
+$R backup --domain example.test | tee /tmp/backup2.json
+grep -q '"ok": true' /tmp/backup2.json
+rm "$M/.Sent/cur/1002.M3.e2e:2,S"
+$R restore --domain example.test --mailbox alice --folder Sent | tee /tmp/restore-folder.json
+grep -q '"messages": 1' /tmp/restore-folder.json
+restored_to() { sed -n 's/^ *"restored_to": "\(.*\)",*$/\1/p' "$1"; }
+T1=$(restored_to /tmp/restore.json)
+T2=$(restored_to /tmp/restore-folder.json)
+if [ -z "$T2" ] || [ "$T2" = "$T1" ]; then
+  echo "FAIL: folder restore target is '$T2' (first restore: '$T1')"; exit 1
+fi
+doveadm mailbox list -u alice@example.test | tee /tmp/list2.txt
+doveadm fetch -u alice@example.test 'mailbox hdr.subject' mailbox "$T2*" | tee /tmp/fetch-folder.txt
+grep -q '^hdr.subject: sent$' /tmp/fetch-folder.txt
+grep -q "^mailbox: $T2" /tmp/fetch-folder.txt
+if grep -q -E '^hdr.subject: (one|two)$' /tmp/fetch-folder.txt; then
+  echo "FAIL: folder restore of Sent imported INBOX messages"; exit 1
+fi
+
 $R forget --domain example.test | grep -q '"ok": true'
 $R check --domain example.test --read-data-subset 100% | grep -q '"ok": true'
 echo "E2E PASS"
