@@ -144,7 +144,10 @@ func (e Env) Backup(ctx context.Context, domain string) Result {
 		return failed(res, err)
 	}
 	if err != nil {
-		res.Note = "some files changed or vanished during the run; the snapshot was saved and the next run picks them up"
+		if sum.SnapshotID == "" {
+			return failed(res, err)
+		}
+		res.Note = "restic could not read some files (they may have changed, vanished or be unreadable); the snapshot was saved: " + err.Error()
 	}
 	res.OK = true
 	res.Snapshot = sum.SnapshotID

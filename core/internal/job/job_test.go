@@ -75,7 +75,19 @@ func TestBackupPartialIsOKWithNote(t *testing.T) {
 	e, env, _ := setup(t, "local")
 	env["FAKE_BACKUP_EXIT"] = "3"
 	r := e.Backup(context.Background(), "example.test")
-	if !r.OK || r.Snapshot == "" || r.Note == "" {
+	if !r.OK || r.Snapshot == "" || r.Note == "" || !strings.Contains(r.Note, "exit 3") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestBackupPartialWithoutSummaryFails(t *testing.T) {
+	e, env, _ := setup(t, "local")
+	env["FAKE_BACKUP_EXIT"] = "3"
+	if err := os.WriteFile(env["FAKE_BACKUP_OUT"], []byte(`{"message_type":"status"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := e.Backup(context.Background(), "example.test")
+	if r.OK || r.Snapshot != "" || r.Error == "" {
 		t.Fatalf("%+v", r)
 	}
 }
