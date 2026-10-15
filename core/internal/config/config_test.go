@@ -103,3 +103,17 @@ func TestDestinationFor(t *testing.T) {
 		t.Error("Enabled wrong")
 	}
 }
+
+func TestExamplePackagingConfigLoads(t *testing.T) {
+	b, err := os.ReadFile("../../../packaging/config.example.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(write(t, string(b), 0o600))
+	if err != nil {
+		t.Fatalf("packaging/config.example.json does not load: %v", err)
+	}
+	if c.DefaultDestination != "archive" || len(c.Domains) != 1 {
+		t.Errorf("%+v", c)
+	}
+}

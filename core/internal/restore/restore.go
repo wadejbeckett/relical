@@ -69,18 +69,42 @@ func pick(snaps []restic.Snapshot, want string) (restic.Snapshot, error) {
 }
 
 func doveadm(ctx context.Context, env job.Env, args ...string) ([]byte, error) {
+	out, _, err := doveadmRun(ctx, env, args...)
+	return out, err
+}
+
+// doveadmRun also returns stderr, for the callers that must read it.
+func doveadmRun(ctx context.Context, env job.Env, args ...string) (out, stderr []byte, err error) {
 	cmd := exec.CommandContext(ctx, env.Cfg.DoveadmBin, args...)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
 	for k, v := range env.ExtraEnv {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	var out, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &stderr
+	var o, e bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &o, &e
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("doveadm %s: %v: %s", args[0], err, strings.TrimSpace(stderr.String()))
+		return nil, e.Bytes(), fmt.Errorf("doveadm %s: %w: %s", args[0], err, strings.TrimSpace(e.String()))
 	}
-	return out.Bytes(), nil
+	return o.Bytes(), e.Bytes(), nil
 }
+
+// doveadmErrorRE matches doveadm's error lines, which look like
+// "doveadm(user@example.test)<pid><session>: Error: message" or "Error: message".
+var doveadmErrorRE = regexp.MustCompile(`(^|: )Error: `)
+
+// errorLinesMentioning returns the doveadm error lines in stderr that contain substr.
+func errorLinesMentioning(stderr []byte, substr string) []string {
+	var lines []string
+	for _, l := range strings.Split(string(stderr), "\n") {
+		if doveadmErrorRE.MatchString(l) && strings.Contains(l, substr) {
+			lines = append(lines, strings.TrimSpace(l))
+		}
+	}
+	return lines
+}
+
+// exitMailboxMissing is doveadm's exit code for a mailbox that does not exist.
+const exitMailboxMissing = 68
 
 func validFolder(f string) bool {
 	for _, r := range f {
@@ -155,12 +179,26 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 	} else {
 		args = append(args, "mailbox", req.Folder)
 	}
-	if _, err := doveadm(ctx, env, args...); err != nil {
+	_, impErr, err := doveadmRun(ctx, env, args...)
+	if err == nil {
+		// doveadm import exits 0 when it cannot read the source and only logs an
+		// error naming it. Other Error lines (for example Dovecot repairing a
+		// corrupt cache in the live mailbox) do not mean the import failed.
+		if lines := errorLinesMentioning(impErr, stage); len(lines) > 0 {
+			err = fmt.Errorf("doveadm import reported errors reading the restored copy despite exit 0: %s", strings.Join(lines, "; "))
+		}
+	}
+	if err != nil {
 		// The target did not exist before this run, so whatever is there now is ours to remove.
 		// The import may have failed because ctx was cancelled, so clean up on a fresh, bounded context.
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		if _, derr := doveadm(cctx, env, "mailbox", "delete", "-r", "-s", "-u", box.Login, target); derr != nil {
+		_, derr := doveadm(cctx, env, "mailbox", "delete", "-r", "-s", "-u", box.Login, target)
+		var ee *exec.ExitError
+		if errors.As(derr, &ee) && ee.ExitCode() == exitMailboxMissing {
+			derr = nil // the import failed before creating the folder: already clean
+		}
+		if derr != nil {
 			return res, fmt.Errorf("%v; removing the partial folder %s also failed: %v", err, target, derr)
 		}
 		return res, err
@@ -168,6 +206,16 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 	status, err := doveadm(ctx, env, "-f", "flow", "mailbox", "status", "-u", box.Login, "messages", target+"*")
 	if err != nil {
 		return res, err
+	}
+	named := false
+	sc = bufio.NewScanner(bytes.NewReader(status))
+	for sc.Scan() {
+		if strings.HasPrefix(sc.Text(), target) {
+			named = true
+		}
+	}
+	if !named {
+		return res, fmt.Errorf("doveadm import reported success but no %q folder exists for %s", target, box.Login)
 	}
 	for _, f := range strings.Fields(string(status)) {
 		if n, ok := strings.CutPrefix(f, "messages="); ok {

@@ -131,3 +131,64 @@ func TestRestoreRejectsBadInput(t *testing.T) {
 		}
 	}
 }
+
+func stagingEntries(e job.Env) []os.DirEntry {
+	entries, _ := os.ReadDir(filepath.Join(e.Cfg.StateDir, "restore"))
+	return entries
+}
+
+func TestRestoreFailsWhenDoveadmLogsErrorDespiteExitZero(t *testing.T) {
+	e, env, _ := setup(t)
+	env["FAKE_IMPORT_STDERR_ERROR"] = "1"
+	_, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest"})
+	if err == nil || !strings.Contains(err.Error(), "Permission denied") || !strings.Contains(err.Error(), "import") {
+		t.Fatalf("err = %v", err)
+	}
+	if n := stagingEntries(e); len(n) != 0 {
+		t.Errorf("staging left behind: %v", n)
+	}
+}
+
+func TestRestoreFailsWhenNoRestoredFolderExists(t *testing.T) {
+	e, env, _ := setup(t)
+	env["FAKE_STATUS_EMPTY"] = "1"
+	_, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest"})
+	if err == nil || !strings.Contains(err.Error(), "no \"Restored 2026-10-15 fedcba98\" folder exists") {
+		t.Fatalf("err = %v", err)
+	}
+	if n := stagingEntries(e); len(n) != 0 {
+		t.Errorf("staging left behind: %v", n)
+	}
+}
+
+func TestCleanupTreatsMissingMailboxAsClean(t *testing.T) {
+	e, env, _ := setup(t)
+	env["FAKE_IMPORT_EXIT"] = "75"
+	env["FAKE_DELETE_EXIT"] = "68"
+	_, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest"})
+	if err == nil || strings.Contains(err.Error(), "also failed") {
+		t.Fatalf("err = %v", err)
+	}
+	env["FAKE_DELETE_EXIT"] = "75"
+	_, err = Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest"})
+	if err == nil || !strings.Contains(err.Error(), "also failed") {
+		t.Fatalf("other delete failures must still be reported: %v", err)
+	}
+}
+
+func TestRestoreIgnoresUnrelatedDoveadmErrorLines(t *testing.T) {
+	e, env, _ := setup(t)
+	env["FAKE_IMPORT_STDERR_OTHER"] = "1"
+	res, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest"})
+	if err != nil || res.Messages != 2 {
+		t.Fatalf("%+v %v", res, err)
+	}
+}
+
+func TestErrorLinesMentioning(t *testing.T) {
+	stderr := []byte("doveadm(alice@example.test)<3380><abc>: Error: opendir(/srv/src) failed: Permission denied\nError: bare /srv/src\nInfo: Error: /srv/src mid-line\nError: other\nnoise /srv/src\n")
+	got := errorLinesMentioning(stderr, "/srv/src")
+	if len(got) != 3 || !strings.HasPrefix(got[0], "doveadm(") || got[1] != "Error: bare /srv/src" {
+		t.Errorf("%q", got)
+	}
+}

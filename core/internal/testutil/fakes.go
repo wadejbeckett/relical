@@ -40,9 +40,16 @@ case "$*" in
   "mailbox list"*) cat "$FAKE_LIST" 2>/dev/null; exit 0 ;;
   "import"*) for a in "$@"; do case "$a" in maildir:*) p="${a#maildir:}"; p="${p%%:*}"; ls -R "$p" >> "$FAKE_LOG";; esac; done
              [ -n "$FAKE_IMPORT_SLEEP" ] && sleep "$FAKE_IMPORT_SLEEP"
+             [ -n "$FAKE_IMPORT_STDERR_ERROR" ] && echo "doveadm(alice@example.test)<1><x>: Error: opendir($p) failed: Permission denied" >&2
+             [ -n "$FAKE_IMPORT_STDERR_OTHER" ] && echo "doveadm(alice@example.test)<1><x>: Error: Mailbox INBOX: Deleting corrupted cache: File too small" >&2
              exit "${FAKE_IMPORT_EXIT:-0}" ;;
-  "-f flow mailbox status"*) # real Dovecot 2.3 prints the mailbox name, then key=value pairs (no mailbox= key)
-                              echo "Restored 2026-10-15 fedcba98.INBOX messages=1"; echo "Restored 2026-10-15 fedcba98.Sent messages=1"; exit 0 ;;
+  "mailbox delete"*) [ -n "$FAKE_DELETE_EXIT" ] && echo "doveadm(alice@example.test): Error: Can't delete mailbox: Mailbox doesn't exist" >&2
+                     exit "${FAKE_DELETE_EXIT:-0}" ;;
+  "-f flow mailbox status"*)
+    # Real Dovecot 2.3 prints the mailbox name, then key=value pairs (no mailbox= key).
+    [ -n "$FAKE_STATUS_EMPTY" ] && exit 0
+    for a in "$@"; do t="${a%\*}"; done
+    echo "$t.INBOX messages=1"; echo "$t.Sent messages=1"; exit 0 ;;
 esac
 exit 0
 `
