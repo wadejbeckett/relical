@@ -1,6 +1,11 @@
 [Unit]
 Description=Relical weekly repository check
 After=network-online.target
+Wants=network-online.target
+
+# A check that starts while a backup is still running fails on relical's own
+# lock and is not retried until next week: Persistent=true only catches up a
+# run that was missed entirely, not one that ran and failed.
 
 [Service]
 Type=oneshot
