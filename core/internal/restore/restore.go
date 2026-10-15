@@ -157,6 +157,10 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 			return res, fmt.Errorf("folder %q already exists in %s (it may be from an earlier, possibly incomplete restore of this snapshot); delete or rename it to restore this snapshot again", target, box.Login)
 		}
 	}
+	if err := sc.Err(); err != nil {
+		// Fail closed: an unread line could name the target folder.
+		return res, fmt.Errorf("reading doveadm mailbox list for %s: %w", box.Login, err)
+	}
 
 	stage, err := os.MkdirTemp(filepath.Join(env.Cfg.StateDir, "restore"), "run-")
 	if err != nil {
@@ -223,6 +227,9 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 		if strings.HasPrefix(sc.Text(), target) {
 			named = true
 		}
+	}
+	if err := sc.Err(); err != nil {
+		return res, fmt.Errorf("reading doveadm mailbox status for %s: %w", box.Login, err)
 	}
 	if !named {
 		return res, fmt.Errorf("doveadm import reported success but no %q folder exists for %s", target, box.Login)

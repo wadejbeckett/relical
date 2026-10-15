@@ -207,3 +207,24 @@ func TestRestoreFailsWhenMailboxIsNotInSnapshot(t *testing.T) {
 		t.Errorf("ran doveadm import with nothing restored:\n%s", log())
 	}
 }
+
+func TestRestoreFailsClosedWhenFolderListUnreadable(t *testing.T) {
+	e, env, log := setup(t)
+	list := filepath.Join(t.TempDir(), "list")
+	os.WriteFile(list, []byte(strings.Repeat("x", 70000)+"\nRestored 2026-10-15 fedcba98\n"), 0o600)
+	env["FAKE_LIST"] = list
+	if _, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest"}); err == nil {
+		t.Fatal("an unreadable folder list was treated as \"target does not exist\"")
+	}
+	if strings.Contains(log(), "restore ") {
+		t.Error("ran restic restore although the folder list could not be read")
+	}
+}
+
+func TestRestoreFailsClosedWhenStatusUnreadable(t *testing.T) {
+	e, env, _ := setup(t)
+	env["FAKE_STATUS_LONG"] = "1"
+	if _, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest"}); err == nil {
+		t.Fatal("an unreadable mailbox status was accepted")
+	}
+}

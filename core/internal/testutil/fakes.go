@@ -63,6 +63,7 @@ case "$*" in
     [ -n "$FAKE_STATUS_EMPTY" ] && exit 0
     for a in "$@"; do t="${a%\*}"; done
     echo "$t.INBOX messages=1"; echo "$t.Sent messages=1"
+    [ -n "$FAKE_STATUS_LONG" ] && head -c 70000 /dev/zero | tr '\0' x && echo
     exit 0 ;;
 esac
 exit 0
