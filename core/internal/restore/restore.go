@@ -125,7 +125,7 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 	sc := bufio.NewScanner(bytes.NewReader(list))
 	for sc.Scan() {
 		if strings.HasPrefix(sc.Text(), target) {
-			return res, fmt.Errorf("folder %q already exists in %s; this snapshot was already restored", target, box.Login)
+			return res, fmt.Errorf("folder %q already exists in %s (an earlier restore of this snapshot, possibly incomplete); delete or rename it to restore this snapshot again", target, box.Login)
 		}
 	}
 
@@ -155,6 +155,10 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 		args = append(args, "mailbox", req.Folder)
 	}
 	if _, err := doveadm(ctx, env, args...); err != nil {
+		// The target did not exist before this run, so whatever is there now is ours to remove.
+		if _, derr := doveadm(ctx, env, "mailbox", "delete", "-r", "-s", "-u", box.Login, target); derr != nil {
+			return res, fmt.Errorf("%v; removing the partial folder %s also failed: %v", err, target, derr)
+		}
 		return res, err
 	}
 	status, err := doveadm(ctx, env, "-f", "flow", "mailbox", "status", "-u", box.Login, "messages", target+"*")

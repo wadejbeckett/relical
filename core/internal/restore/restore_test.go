@@ -90,10 +90,13 @@ func TestRestoreRefusesExistingTarget(t *testing.T) {
 }
 
 func TestRestoreCleansUpWhenImportFails(t *testing.T) {
-	e, env, _ := setup(t)
+	e, env, log := setup(t)
 	env["FAKE_IMPORT_EXIT"] = "75"
 	if _, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest"}); err == nil {
 		t.Fatal("import failure not reported")
+	}
+	if !strings.Contains(log(), "mailbox delete -r -s -u alice@example.test Restored 2026-10-15 fedcba98") {
+		t.Errorf("partial folder not removed:\n%s", log())
 	}
 	entries, _ := os.ReadDir(filepath.Join(e.Cfg.StateDir, "restore"))
 	if len(entries) != 0 {
