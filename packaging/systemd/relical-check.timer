@@ -1,8 +1,10 @@
 [Unit]
-Description=Relical weekly repository check (Sunday 05:00 SAST)
+Description=Relical weekly repository check (Sunday 05:00 server local time)
 
 [Timer]
-OnCalendar=Sun *-*-* 05:00:00 Africa/Johannesburg
+# Server local time. To use another time or time zone, override with a
+# drop-in: systemctl edit relical-check.timer
+OnCalendar=Sun *-*-* 05:00:00
 Persistent=true
 
 [Install]

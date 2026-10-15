@@ -1,8 +1,10 @@
 [Unit]
-Description=Relical nightly mail backup (01:00 SAST)
+Description=Relical nightly mail backup (01:00 server local time)
 
 [Timer]
-OnCalendar=*-*-* 01:00:00 Africa/Johannesburg
+# Server local time. To use another time or time zone, override with a
+# drop-in: systemctl edit relical-backup.timer
+OnCalendar=*-*-* 01:00:00
 RandomizedDelaySec=30min
 Persistent=true
 
