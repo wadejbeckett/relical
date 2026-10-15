@@ -1,0 +1,10 @@
+[Unit]
+Description=Relical nightly mail backup (01:00 SAST)
+
+[Timer]
+OnCalendar=*-*-* 01:00:00 Africa/Johannesburg
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

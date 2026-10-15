@@ -1,0 +1,7 @@
+[Unit]
+Description=Relical weekly repository check
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/relical check --all --read-data-subset 5%

@@ -1,0 +1,24 @@
+{
+  "server_id": "mail.example.test",
+  "restic_bin": "/usr/local/bin/restic",
+  "doveadm_bin": "/usr/bin/doveadm",
+  "state_dir": "/var/lib/relical",
+  "keys_dir": "/etc/relical/keys",
+  "mailbox_pattern": "/var/qmail/mailnames/{domain}/{mailbox}/Maildir",
+  "domains": ["example.test"],
+  "default_destination": "archive",
+  "destinations": {
+    "archive": {
+      "repository": "rest:https://backup.example.test:8000/mail-example/{domain}/",
+      "env": {
+        "RESTIC_REST_USERNAME": "mail-example",
+        "RESTIC_REST_PASSWORD": "change-me",
+        "RESTIC_CACERT": "/etc/relical/archive-ca.pem"
+      },
+      "prune": "remote"
+    }
+  },
+  "retention": {"daily": 14, "weekly": 8, "monthly": 12},
+  "limit_upload_kib": 20480,
+  "low_priority": true
+}
