@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/wadejbeckett/relical/core/internal/job"
@@ -125,7 +126,7 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 	sc := bufio.NewScanner(bytes.NewReader(list))
 	for sc.Scan() {
 		if strings.HasPrefix(sc.Text(), target) {
-			return res, fmt.Errorf("folder %q already exists in %s (an earlier restore of this snapshot, possibly incomplete); delete or rename it to restore this snapshot again", target, box.Login)
+			return res, fmt.Errorf("folder %q already exists in %s (it may be from an earlier, possibly incomplete restore of this snapshot); delete or rename it to restore this snapshot again", target, box.Login)
 		}
 	}
 
@@ -156,7 +157,10 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 	}
 	if _, err := doveadm(ctx, env, args...); err != nil {
 		// The target did not exist before this run, so whatever is there now is ours to remove.
-		if _, derr := doveadm(ctx, env, "mailbox", "delete", "-r", "-s", "-u", box.Login, target); derr != nil {
+		// The import may have failed because ctx was cancelled, so clean up on a fresh, bounded context.
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if _, derr := doveadm(cctx, env, "mailbox", "delete", "-r", "-s", "-u", box.Login, target); derr != nil {
 			return res, fmt.Errorf("%v; removing the partial folder %s also failed: %v", err, target, derr)
 		}
 		return res, err

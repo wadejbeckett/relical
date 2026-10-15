@@ -104,6 +104,19 @@ func TestRestoreCleansUpWhenImportFails(t *testing.T) {
 	}
 }
 
+func TestRestoreCleansUpWhenContextCancelledDuringImport(t *testing.T) {
+	e, env, log := setup(t)
+	env["FAKE_IMPORT_SLEEP"] = "2"
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := Run(ctx, e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest"}); err == nil {
+		t.Fatal("cancelled import not reported")
+	}
+	if !strings.Contains(log(), "mailbox delete -r -s -u alice@example.test") {
+		t.Errorf("partial folder not removed after cancellation:\n%s", log())
+	}
+}
+
 func TestRestoreRejectsBadInput(t *testing.T) {
 	e, _, _ := setup(t)
 	for _, r := range []Request{

@@ -39,6 +39,7 @@ echo "$*" >> "$FAKE_LOG"
 case "$*" in
   "mailbox list"*) cat "$FAKE_LIST" 2>/dev/null; exit 0 ;;
   "import"*) for a in "$@"; do case "$a" in maildir:*) p="${a#maildir:}"; p="${p%%:*}"; ls -R "$p" >> "$FAKE_LOG";; esac; done
+             [ -n "$FAKE_IMPORT_SLEEP" ] && sleep "$FAKE_IMPORT_SLEEP"
              exit "${FAKE_IMPORT_EXIT:-0}" ;;
   "-f flow mailbox status"*) echo "mailbox=X/INBOX messages=1"; echo "mailbox=X/Sent messages=1"; exit 0 ;;
 esac
