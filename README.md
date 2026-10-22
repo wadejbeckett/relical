@@ -151,3 +151,13 @@ Copy `packaging/config.example.json` to `/etc/relical/config.json` and set mode 
 `packaging/systemd` holds a nightly backup and a weekly check as systemd units and timers. Both timers use the server's local time (the backup starts between 01:00 and 01:30 daily, because of `RandomizedDelaySec=30min`; the check starts Sunday 05:00); override them with `systemctl edit relical-backup.timer`. The backup unit runs `relical forget --all` through `ExecStopPost=`, so retention runs after every backup run, even one where a backup failed. The weekly check fails on Relical's own lock if it starts while a backup is still running, and is then not retried until the next week.
 
 Licensed GPLv3.
+
+## Support this project
+
+Relical is free software from Noiz. If it is useful to you, the main way to support its development is a donation in Monero (XMR):
+
+```text
+44BtMn9izxH8mK2yFbSdY6Di7TNobkLbnHdZ6gZQjukCME5vsNhtPRtH4TcVkDHKHLhSpAJbsjv8gCdYuSZVMpXgMkUC1hV
+```
+
+You can also help by reporting bugs, sending fixes or starring the repository.
