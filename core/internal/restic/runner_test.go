@@ -109,6 +109,21 @@ func TestGlobalFlagsAndLowPriority(t *testing.T) {
 	}
 }
 
+func TestSftpArgsOption(t *testing.T) {
+	r, _, log := fake(t)
+	r.SftpArgs = "-p 23 -i /etc/relical/ssh/id_ed25519"
+	if err := r.Check(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.TrimSpace(log()), "-o sftp.args=-p 23 -i /etc/relical/ssh/id_ed25519 --retry-lock 30m check"; got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+	cmd := r.command(context.Background(), "snapshots")
+	if a := cmd.Args; len(a) < 3 || a[1] != "-o" || a[2] != "sftp.args=-p 23 -i /etc/relical/ssh/id_ed25519" {
+		t.Errorf("args = %q (the value must be one argument)", a)
+	}
+}
+
 func TestCheckArgsRetryLock(t *testing.T) {
 	r, _, log := fake(t)
 	if err := r.Check(context.Background(), "5%"); err != nil {

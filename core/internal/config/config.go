@@ -39,6 +39,9 @@ type Destination struct {
 	Repository string            `json:"repository"`
 	Env        map[string]string `json:"env"`
 	Prune      string            `json:"prune"` // "local" or "remote"
+	// SftpArgs, for sftp: repositories only, is passed to restic as
+	// -o sftp.args=<value> (for example the port, key and known_hosts).
+	SftpArgs string `json:"sftp_args"`
 }
 
 // Roots are the directories inventory paths must sit under.
@@ -219,6 +222,12 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Errorf("destination %s: repository uses {domain}; config version 2 keeps one repository per subscription, so replace {domain} with {subscription}", name))
 		} else if strings.Count(dst.Repository, "{subscription}") != 1 {
 			errs = append(errs, fmt.Errorf("destination %s: repository must contain {subscription} once", name))
+		}
+		if dst.SftpArgs != "" && !strings.HasPrefix(dst.Repository, "sftp:") {
+			errs = append(errs, fmt.Errorf("destination %s: sftp_args is only for sftp: repositories", name))
+		}
+		if strings.ContainsAny(dst.SftpArgs, "\r\n\x00") {
+			errs = append(errs, fmt.Errorf("destination %s: sftp_args must be one line", name))
 		}
 		if dst.Prune != "local" && dst.Prune != "remote" {
 			errs = append(errs, fmt.Errorf(`destination %s: prune must be "local" or "remote"`, name))

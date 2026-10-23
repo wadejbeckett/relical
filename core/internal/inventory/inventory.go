@@ -66,11 +66,50 @@ type Rename struct {
 	Note         string `json:"note"`
 }
 
+// Skip is a subscription the adapter left out, with its reason. It is
+// informational only.
+type Skip struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
+}
+
+// UnmarshalJSON accepts a bare string (the name), an object with name
+// and reason, or anything else (kept as its JSON text); it never fails.
+func (s *Skip) UnmarshalJSON(b []byte) error {
+	var name string
+	if json.Unmarshal(b, &name) == nil {
+		*s = Skip{Name: name}
+		return nil
+	}
+	var o struct {
+		Name   any `json:"name"`
+		Reason any `json:"reason"`
+	}
+	if json.Unmarshal(b, &o) == nil {
+		*s = Skip{Name: text(o.Name), Reason: text(o.Reason)}
+		return nil
+	}
+	*s = Skip{Name: string(b)}
+	return nil
+}
+
+func text(v any) string {
+	switch v := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
 type Inventory struct {
 	Version       int            `json:"version"`
 	Subscriptions []Subscription `json:"subscriptions"`
 	Server        *Server        `json:"server"`
 	Renamed       []Rename       `json:"renamed"`
+	Skipped       []Skip         `json:"skipped"`
 }
 
 // Find returns the subscription called name.
@@ -123,8 +162,9 @@ var (
 // output of its inventory_command.
 func Load(ctx context.Context, cfg *config.Config) (Inventory, error) {
 	var (
-		subs   []Subscription
-		server *Server
+		subs    []Subscription
+		server  *Server
+		skipped []Skip
 	)
 	if len(cfg.InventoryCommand) > 0 {
 		out, err := runCommand(ctx, cfg.InventoryCommand)
@@ -135,6 +175,7 @@ func Load(ctx context.Context, cfg *config.Config) (Inventory, error) {
 			Version       int             `json:"version"`
 			Subscriptions json.RawMessage `json:"subscriptions"`
 			Server        json.RawMessage `json:"server"`
+			Skipped       json.RawMessage `json:"skipped"`
 		}
 		if err := decodeStrict(out, &w); err != nil {
 			return Inventory{}, fmt.Errorf("inventory_command output: %w", err)
@@ -158,6 +199,7 @@ func Load(ctx context.Context, cfg *config.Config) (Inventory, error) {
 		if server, err = decodeServer(raw); err != nil {
 			return Inventory{}, err
 		}
+		skipped = decodeSkipped(w.Skipped)
 	} else {
 		if err := decodeStrict(cfg.Subscriptions, &subs); err != nil {
 			return Inventory{}, fmt.Errorf("subscriptions: %w", err)
@@ -167,7 +209,25 @@ func Load(ctx context.Context, cfg *config.Config) (Inventory, error) {
 			return Inventory{}, err
 		}
 	}
-	return validate(cfg, subs, server)
+	inv, err := validate(cfg, subs, server)
+	if err != nil {
+		return inv, err
+	}
+	inv.Skipped = append(inv.Skipped, skipped...)
+	return inv, nil
+}
+
+// decodeSkipped reads the informational skipped list; a list that is not
+// an array is kept as one entry rather than failing the inventory.
+func decodeSkipped(raw json.RawMessage) []Skip {
+	if !isSet(raw) {
+		return nil
+	}
+	var s []Skip
+	if json.Unmarshal(raw, &s) != nil {
+		return []Skip{{Name: string(raw), Reason: "skipped is not a JSON array"}}
+	}
+	return s
 }
 
 func isSet(raw json.RawMessage) bool {
@@ -318,17 +378,30 @@ func validateSubscription(cfg *config.Config, s *Subscription) []error {
 			add("renamed_from", errors.New("is the subscription's own name"))
 		}
 	}
-	if !sysUserRE.MatchString(s.SysUser) {
+	// A mail-only subscription needs no system user or webspace: mail
+	// restores run as the mailbox owner. files and db restores write into
+	// home as the system user, so they need all of them.
+	webspace := s.Has("files") || s.Has("db")
+	why := " (required when features include files or db)"
+	switch {
+	case s.SysUser == "" && webspace:
+		add("sys_user", errors.New("is empty"+why))
+	case s.SysUser != "" && !sysUserRE.MatchString(s.SysUser):
 		add("sys_user", fmt.Errorf("%q is not a valid system user name", s.SysUser))
 	}
-	if s.UID <= 0 {
-		add("uid", fmt.Errorf("%d must be greater than 0", s.UID))
+	if s.UID < 0 || (s.UID == 0 && webspace) {
+		add("uid", fmt.Errorf("%d must be greater than 0%s", s.UID, why))
 	}
-	if s.GID <= 0 {
-		add("gid", fmt.Errorf("%d must be greater than 0", s.GID))
+	if s.GID < 0 || (s.GID == 0 && webspace) {
+		add("gid", fmt.Errorf("%d must be greater than 0%s", s.GID, why))
 	}
-	if err := checkPath(s.Home, cfg.Roots.Files); err != nil {
-		add("home", err)
+	if s.Home != "" || webspace {
+		if err := checkPath(s.Home, cfg.Roots.Files); err != nil {
+			add("home", err)
+		}
+	}
+	if len(s.Files) == 0 && s.Has("files") {
+		add("files", errors.New("is empty (required when features include files)"))
 	}
 	if err := subset(s.Features, SubscriptionFeatures); err != nil {
 		add("features", err)
@@ -407,7 +480,7 @@ func orEmpty[T any](v []T) []T {
 }
 
 func validate(cfg *config.Config, subs []Subscription, server *Server) (Inventory, error) {
-	inv := Inventory{Version: config.Version, Subscriptions: []Subscription{}, Server: server, Renamed: []Rename{}}
+	inv := Inventory{Version: config.Version, Subscriptions: []Subscription{}, Server: server, Renamed: []Rename{}, Skipped: []Skip{}}
 	var errs []error
 	names, ids, mailOwner := map[string]bool{}, map[string]string{}, map[string]string{}
 	for i := range subs {

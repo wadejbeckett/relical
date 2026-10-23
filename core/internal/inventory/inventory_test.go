@@ -287,3 +287,63 @@ func TestExamplePackagingInventoryLoads(t *testing.T) {
 		t.Fatalf("%+v %v", inv, err)
 	}
 }
+
+func TestMailOnlySubscriptionNeedsNoWebspace(t *testing.T) {
+	mailOnly := map[string]any{"features": []string{"mail"}, "sys_user": "", "uid": 0, "gid": 0, "home": "", "files": []string{}, "databases": []map[string]string{}}
+	inv, err := Load(context.Background(), cfgWith(list(sub(mailOnly))))
+	if err != nil || inv.Subscriptions[0].Home != "" {
+		t.Fatalf("mail-only refused: %+v %v", inv, err)
+	}
+	// Values that are set are still validated.
+	for k, v := range map[string]any{"sys_user": "Bad User", "uid": -1, "home": "/etc", "files": []string{"/etc"}} {
+		over := map[string]any{}
+		for kk, vv := range mailOnly {
+			over[kk] = vv
+		}
+		over[k] = v
+		if _, err := Load(context.Background(), cfgWith(list(sub(over)))); err == nil {
+			t.Errorf("mail-only with %s=%v accepted", k, v)
+		}
+	}
+	// With files or db the webspace fields are required.
+	for _, features := range [][]string{{"mail", "files"}, {"db"}} {
+		for k, v := range map[string]any{"sys_user": "", "uid": 0, "gid": 0, "home": ""} {
+			over := map[string]any{"features": features, k: v}
+			_, err := Load(context.Background(), cfgWith(list(sub(over))))
+			if err == nil || !strings.Contains(err.Error(), k) {
+				t.Errorf("features %v with empty %s: %v", features, k, err)
+			}
+		}
+	}
+	if _, err := Load(context.Background(), cfgWith(list(sub(map[string]any{"features": []string{"files"}, "files": []string{}})))); err == nil {
+		t.Error("files feature without files accepted")
+	}
+	if _, err := Load(context.Background(), cfgWith(list(sub(map[string]any{"features": []string{"db"}, "files": []string{}})))); err != nil {
+		t.Errorf("db-only without files refused: %v", err)
+	}
+}
+
+func TestSkippedIsKeptAndNeverFails(t *testing.T) {
+	out := `{"version": 2, "subscriptions": [], "skipped": ["a.example.test", {"name": "b.example.test", "reason": "suspended", "extra": 1}, {"name": 7}, 42]}`
+	inv, err := Load(context.Background(), cmdCfg(testutil.FakeInventory(t, out)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Skip{{Name: "a.example.test"}, {Name: "b.example.test", Reason: "suspended"}, {Name: "7"}, {Name: "42"}}
+	if len(inv.Skipped) != len(want) {
+		t.Fatalf("%+v", inv.Skipped)
+	}
+	for i := range want {
+		if inv.Skipped[i] != want[i] {
+			t.Errorf("skipped[%d] = %+v, want %+v", i, inv.Skipped[i], want[i])
+		}
+	}
+	inv, err = Load(context.Background(), cmdCfg(testutil.FakeInventory(t, `{"version": 2, "subscriptions": [], "skipped": "oops"}`)))
+	if err != nil || len(inv.Skipped) != 1 {
+		t.Fatalf("%+v %v", inv.Skipped, err)
+	}
+	inv, err = Load(context.Background(), cmdCfg(testutil.FakeInventory(t, `{"version": 2, "subscriptions": []}`)))
+	if b, _ := json.Marshal(inv); err != nil || !strings.Contains(string(b), `"skipped":[]`) {
+		t.Fatalf("%s %v", b, err)
+	}
+}

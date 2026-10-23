@@ -165,6 +165,21 @@ func TestBackupMissingMailDomainDirIsSkipped(t *testing.T) {
 	}
 }
 
+func TestSftpArgsReachRestic(t *testing.T) {
+	e, _, log := setup(t, "local")
+	e.Cfg.Destinations["box"] = config.Destination{Repository: "sftp:u000000-sub1@u000000-sub1.your-storagebox.example:relical/{subscription}", Prune: "local", SftpArgs: "-p 23 -o StrictHostKeyChecking=yes"}
+	sub := mustSub(t, e, "example.test")
+	sub.Destination = "box"
+	if r := e.Backup(context.Background(), sub); !r.OK {
+		t.Fatalf("%+v", r)
+	}
+	for _, l := range strings.Split(strings.TrimSpace(log()), "\n") {
+		if !strings.HasPrefix(l, "-o sftp.args=-p 23 -o StrictHostKeyChecking=yes ") {
+			t.Errorf("restic call without sftp.args: %s", l)
+		}
+	}
+}
+
 func TestDestinationOverrideAndRetention(t *testing.T) {
 	e, env, log := setup(t, "local")
 	keysEnsure(t, e)
@@ -212,7 +227,7 @@ func logLines(log string) []string {
 	var out []string
 	for _, l := range strings.Split(strings.TrimSpace(log), "\n") {
 		f := strings.Fields(l)
-		for len(f) > 1 && strings.HasPrefix(f[0], "--") {
+		for len(f) > 1 && strings.HasPrefix(f[0], "-") {
 			f = f[2:]
 		}
 		out = append(out, strings.Join(f, " "))

@@ -14,7 +14,7 @@ const fakeRestic = `#!/bin/sh
 echo "$*" >> "$FAKE_LOG"
 env | grep -E '^RESTIC_' | sort >> "$FAKE_LOG.env"
 [ -n "$RESTIC_PASSWORD" ] && echo "LEAKED RESTIC_PASSWORD" >> "$FAKE_LOG"
-while [ "${1#--}" != "$1" ]; do shift 2; done
+while [ "${1#-}" != "$1" ]; do shift 2; done
 if [ -n "$FAKE_HANG" ]; then
   # Stand-in for a long restic run; restic removes its own lock on SIGTERM.
   trap 'kill $! 2>/dev/null; echo "got SIGTERM" >> "$FAKE_LOG"; exit 130' TERM

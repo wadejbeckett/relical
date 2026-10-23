@@ -146,6 +146,22 @@ func TestLoadRejectsBadRootsAndPattern(t *testing.T) {
 	}
 }
 
+func TestSftpArgs(t *testing.T) {
+	ok := strings.Replace(validJSON, `"prune": "local"}`, `"prune": "local", "sftp_args": "-p 23 -i /etc/relical/ssh/id_ed25519"}`, 1)
+	c, err := Load(write(t, ok, 0o600))
+	if err != nil || c.Destinations["sftp"].SftpArgs != "-p 23 -i /etc/relical/ssh/id_ed25519" {
+		t.Fatalf("%v", err)
+	}
+	notSftp := strings.Replace(validJSON, `"prune": "remote"}`, `"prune": "remote", "sftp_args": "-p 23"}`, 1)
+	if _, err := Load(write(t, notSftp, 0o600)); err == nil || !strings.Contains(err.Error(), "only for sftp:") {
+		t.Errorf("sftp_args on a rest: repository: %v", err)
+	}
+	newline := strings.Replace(validJSON, `"prune": "local"}`, `"prune": "local", "sftp_args": "-p 23\n-o ProxyCommand=x"}`, 1)
+	if _, err := Load(write(t, newline, 0o600)); err == nil || !strings.Contains(err.Error(), "one line") {
+		t.Errorf("newline: %v", err)
+	}
+}
+
 func TestLoadRejectsBadPrune(t *testing.T) {
 	body := strings.Replace(validJSON, `"prune": "local"`, `"prune": "sometimes"`, 1)
 	if _, err := Load(write(t, body, 0o600)); err == nil {

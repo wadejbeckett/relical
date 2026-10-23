@@ -114,7 +114,7 @@ func (e Env) runnerWithKey(sub inventory.Subscription, keyPath string) (restic.R
 	return restic.Runner{
 		Bin: e.Cfg.ResticBin, Repository: dst.Repository, PasswordFile: keyPath, Env: env,
 		Host: e.Cfg.ServerID, CacheDir: filepath.Join(e.Cfg.StateDir, "cache"),
-		LimitUploadKiB: e.Cfg.LimitUploadKiB, LowPriority: e.Cfg.LowPriority,
+		LimitUploadKiB: e.Cfg.LimitUploadKiB, LowPriority: e.Cfg.LowPriority, SftpArgs: dst.SftpArgs,
 	}, dst, nil
 }
 

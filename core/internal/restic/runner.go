@@ -62,6 +62,7 @@ type Runner struct {
 	Env            map[string]string
 	LimitUploadKiB int
 	LowPriority    bool
+	SftpArgs       string // passed as -o sftp.args=... when set
 }
 
 type BackupSummary struct {
@@ -105,6 +106,9 @@ var retriesLock = map[string]bool{"backup": true, "check": true, "forget": true}
 // only if it has not exited 60 seconds later.
 func (r Runner) command(ctx context.Context, args ...string) *exec.Cmd {
 	full := []string{}
+	if r.SftpArgs != "" {
+		full = append(full, "-o", "sftp.args="+r.SftpArgs)
+	}
 	if r.LimitUploadKiB > 0 {
 		full = append(full, "--limit-upload", strconv.Itoa(r.LimitUploadKiB))
 	}
