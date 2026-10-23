@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -31,6 +33,16 @@ func sub(over map[string]any) string {
 		"mail_domains": []string{"example.test", "shop.example.test"}, "files": []string{"/var/www/vhosts/example.test"},
 		"file_excludes": []string{}, "databases": []map[string]string{{"type": "mysql", "name": "example_wp"}},
 		"destination": "", "retention": nil,
+	}
+	// A subscription given another name gets its own webspace, unless the
+	// test sets one.
+	if n, ok := over["name"].(string); ok {
+		if _, ok := over["home"]; !ok {
+			s["home"] = "/var/www/vhosts/" + n
+		}
+		if _, ok := over["files"]; !ok {
+			s["files"] = []string{"/var/www/vhosts/" + n}
+		}
 	}
 	for k, v := range over {
 		if v == nil {
@@ -225,6 +237,9 @@ func TestLoadFromCommandRefusesBadOutput(t *testing.T) {
 		"no subscriptions": `{"version": 2}`,
 		"unknown field":    `{"version": 2, "subscriptions": [], "domains": []}`,
 		"trailing data":    `{"version": 2, "subscriptions": []} {}`,
+		"trailing ]":       `{"version": 2, "subscriptions": []}]`,
+		"trailing }":       `{"version": 2, "subscriptions": []}}`,
+		"no id":            `{"version": 2, "subscriptions": ` + list(sub(map[string]any{"id": ""})) + `}`,
 		"bad subscription": `{"version": 2, "subscriptions": ` + list(sub(map[string]any{"home": "/etc"})) + `}`,
 	} {
 		if _, err := Load(context.Background(), cmdCfg(testutil.FakeInventory(t, out))); err == nil {
@@ -345,5 +360,84 @@ func TestSkippedIsKeptAndNeverFails(t *testing.T) {
 	inv, err = Load(context.Background(), cmdCfg(testutil.FakeInventory(t, `{"version": 2, "subscriptions": []}`)))
 	if b, _ := json.Marshal(inv); err != nil || !strings.Contains(string(b), `"skipped":[]`) {
 		t.Fatalf("%s %v", b, err)
+	}
+}
+
+func TestStaticInventoryMayOmitID(t *testing.T) {
+	if _, err := Load(context.Background(), cfgWith(list(sub(map[string]any{"id": ""})))); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(context.Background(), cmdCfg(testutil.FakeInventory(t, `{"version": 2, "subscriptions": `+list(sub(map[string]any{"id": nil}))+`}`)))
+	if err == nil || !strings.Contains(err.Error(), "subscription example.test: id: is required") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestInventoryRejectsCrossSubscriptionPaths(t *testing.T) {
+	b := func(over map[string]any) string {
+		o := map[string]any{"id": "18", "name": "b.example.test", "mail_domains": []string{}}
+		for k, v := range over {
+			o[k] = v
+		}
+		return sub(o)
+	}
+	for name, c := range map[string]struct{ subs, why string }{
+		"files of another webspace": {list(sub(map[string]any{"files": []string{"/var/www/vhosts/b.example.test"}}), b(nil)), "must be the subscription's home or lie under it"},
+		"files outside home":        {list(sub(map[string]any{"files": []string{"/var/www/vhosts/example.test", "/var/www/vhosts/other"}})), "files[1]"},
+		"files without home":        {list(sub(map[string]any{"features": []string{"mail"}, "home": "", "files": []string{"/var/www/vhosts/example.test"}})), "files[0]"},
+		"home not named after it":   {list(sub(map[string]any{"home": "/var/www/vhosts/other.example.test", "files": []string{"/var/www/vhosts/other.example.test"}})), "must be <files root>/example.test"},
+		"plesk system tree":         {list(sub(map[string]any{"home": "/var/www/vhosts/system", "files": []string{"/var/www/vhosts/system"}})), "must be <files root>/example.test"},
+		"mail of another's name":    {list(sub(map[string]any{"mail_domains": []string{"example.test", "b.example.test"}}), b(nil)), "is another subscription's name"},
+		"same renamed_from":         {list(sub(map[string]any{"renamed_from": "old.example.test"}), b(map[string]any{"renamed_from": "old.example.test"})), "is also given by"},
+	} {
+		if _, err := Load(context.Background(), cfgWith(c.subs)); err == nil || !strings.Contains(err.Error(), c.why) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// With nested files roots, a home can lie inside another's.
+	cfg := cfgWith(list(sub(nil), b(map[string]any{"home": "/var/www/vhosts/example.test/b.example.test", "files": []string{"/var/www/vhosts/example.test/b.example.test"}})))
+	cfg.Roots.Files = append(cfg.Roots.Files, "/var/www/vhosts/example.test")
+	if _, err := Load(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "are equal or nested") {
+		t.Errorf("nested home: %v", err)
+	}
+	// Two separate webspaces with their own files, mail and subpaths are fine.
+	ok := list(sub(map[string]any{"files": []string{"/var/www/vhosts/example.test/httpdocs", "/var/www/vhosts/example.test/private"}}),
+		b(map[string]any{"mail_domains": []string{"b.example.test"}}))
+	if _, err := Load(context.Background(), cfgWith(ok)); err != nil {
+		t.Errorf("valid pair refused: %v", err)
+	}
+}
+
+func TestLoadFromCommandTimeoutKillsChildren(t *testing.T) {
+	old := CommandTimeout
+	CommandTimeout = 300 * time.Millisecond
+	defer func() { CommandTimeout = old }()
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	// The grandchild holds no pipe, so only the process-group kill ends it.
+	bin := testutil.FakeInventoryScript(t, `sleep 30 >/dev/null 2>&1 & echo $! > '`+pidFile+`'; wait`)
+	if _, err := Load(context.Background(), cmdCfg(bin)); err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("err = %v", err)
+	}
+	b, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	for i := 0; i < 50; i++ {
+		if syscall.Kill(pid, 0) != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	syscall.Kill(pid, syscall.SIGKILL)
+	t.Fatalf("grandchild %d survived the timeout", pid)
+}
+
+func TestLoadFromCommandInterrupted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	_, err := Load(ctx, cmdCfg(testutil.FakeInventoryScript(t, `exec sleep 30`)))
+	if err == nil || !strings.Contains(err.Error(), "interrupted") {
+		t.Fatalf("err = %v", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -209,7 +210,9 @@ func Load(ctx context.Context, cfg *config.Config) (Inventory, error) {
 			return Inventory{}, err
 		}
 	}
-	inv, err := validate(cfg, subs, server)
+	// A panel always has a stable id; it ties each repository to its owner
+	// (see keys.CheckOwner), so the adapter must give it.
+	inv, err := validate(cfg, subs, server, len(cfg.InventoryCommand) > 0)
 	if err != nil {
 		return inv, err
 	}
@@ -253,7 +256,8 @@ func decodeStrict(b []byte, v any) error {
 	if err := dec.Decode(v); err != nil {
 		return err
 	}
-	if dec.More() {
+	// dec.More would miss a stray ] or } after the value.
+	if _, err := dec.Token(); err != io.EOF {
 		return errors.New("unexpected data after the JSON value")
 	}
 	return nil
@@ -296,7 +300,10 @@ func runCommand(ctx context.Context, argv []string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, CommandTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGKILL) }
+	// The command runs in its own process group, so that a timeout or an
+	// interrupted run also kills its children (plesk runs PHP).
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = 5 * time.Second
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
 	stdout := &cappedWriter{max: MaxOutput}
@@ -309,6 +316,8 @@ func runCommand(ctx context.Context, argv []string) ([]byte, error) {
 		return nil, fmt.Errorf("inventory_command: output exceeds %d bytes", MaxOutput)
 	case ctx.Err() == context.DeadlineExceeded:
 		return nil, fmt.Errorf("inventory_command: timed out after %s: %s", CommandTimeout, msg)
+	case ctx.Err() != nil:
+		return nil, fmt.Errorf("inventory_command: interrupted (%v): %s", ctx.Err(), msg)
 	case err != nil:
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
@@ -365,9 +374,12 @@ func validExclude(x string) bool {
 	return true
 }
 
-func validateSubscription(cfg *config.Config, s *Subscription) []error {
+func validateSubscription(cfg *config.Config, s *Subscription, requireID bool) []error {
 	var errs []error
 	add := func(field string, err error) { errs = append(errs, fmt.Errorf("%s: %w", field, err)) }
+	if s.ID == "" && requireID {
+		add("id", errors.New("is required in inventory_command output"))
+	}
 	if s.ID != "" && !idRE.MatchString(s.ID) {
 		add("id", fmt.Errorf("%q must be 1-64 letters, digits, _ or -", s.ID))
 	}
@@ -398,6 +410,10 @@ func validateSubscription(cfg *config.Config, s *Subscription) []error {
 	if s.Home != "" || webspace {
 		if err := checkPath(s.Home, cfg.Roots.Files); err != nil {
 			add("home", err)
+		} else if !isWebspaceOf(s.Home, s.Name, cfg.Roots.Files) {
+			// Panels name the webspace directory after the subscription;
+			// this also keeps Plesk's own trees (system, chroot, ...) out.
+			add("home", fmt.Errorf("%q must be <files root>/%s", s.Home, s.Name))
 		}
 	}
 	if len(s.Files) == 0 && s.Has("files") {
@@ -414,6 +430,8 @@ func validateSubscription(cfg *config.Config, s *Subscription) []error {
 	for i, p := range s.Files {
 		if err := checkPath(p, cfg.Roots.Files); err != nil {
 			add(fmt.Sprintf("files[%d]", i), err)
+		} else if s.Home == "" || !within(p, s.Home) {
+			add(fmt.Sprintf("files[%d]", i), fmt.Errorf("%q must be the subscription's home or lie under it", p))
 		}
 	}
 	for i, x := range s.FileExcludes {
@@ -472,6 +490,18 @@ func validateServer(s *Server) []error {
 	return errs
 }
 
+// within reports whether p is dir or lies under it.
+func within(p, dir string) bool { return p == dir || strings.HasPrefix(p, dir+"/") }
+
+func isWebspaceOf(home, name string, roots []string) bool {
+	for _, r := range roots {
+		if home == r+"/"+name {
+			return true
+		}
+	}
+	return false
+}
+
 func orEmpty[T any](v []T) []T {
 	if v == nil {
 		return []T{}
@@ -479,7 +509,7 @@ func orEmpty[T any](v []T) []T {
 	return v
 }
 
-func validate(cfg *config.Config, subs []Subscription, server *Server) (Inventory, error) {
+func validate(cfg *config.Config, subs []Subscription, server *Server, requireID bool) (Inventory, error) {
 	inv := Inventory{Version: config.Version, Subscriptions: []Subscription{}, Server: server, Renamed: []Rename{}, Skipped: []Skip{}}
 	var errs []error
 	names, ids, mailOwner := map[string]bool{}, map[string]string{}, map[string]string{}
@@ -498,7 +528,7 @@ func validate(cfg *config.Config, subs []Subscription, server *Server) (Inventor
 			continue
 		}
 		names[s.Name] = true
-		for _, err := range validateSubscription(cfg, &s) {
+		for _, err := range validateSubscription(cfg, &s, requireID) {
 			errs = append(errs, fmt.Errorf("%s: %w", label, err))
 		}
 		if s.ID != "" {
@@ -521,6 +551,28 @@ func validate(cfg *config.Config, subs []Subscription, server *Server) (Inventor
 			s.FileExcludes = append([]string{}, DefaultFileExcludes...)
 		}
 		inv.Subscriptions = append(inv.Subscriptions, s)
+	}
+	// Cross-subscription checks: no subscription may cover another's
+	// webspace or mail.
+	renamedFrom := map[string]string{}
+	for i, s := range inv.Subscriptions {
+		label := fmt.Sprintf("subscription %s", s.Name)
+		for _, o := range inv.Subscriptions[i+1:] {
+			if s.Home != "" && o.Home != "" && (within(s.Home, o.Home) || within(o.Home, s.Home)) {
+				errs = append(errs, fmt.Errorf("%s: home %s and the home %s of %s are equal or nested", label, s.Home, o.Home, o.Name))
+			}
+		}
+		for _, d := range s.MailDomains {
+			if d != s.Name && names[d] {
+				errs = append(errs, fmt.Errorf("%s: mail domain %s is another subscription's name", label, d))
+			}
+		}
+		if s.RenamedFrom != "" {
+			if other, ok := renamedFrom[s.RenamedFrom]; ok {
+				errs = append(errs, fmt.Errorf("%s: renamed_from %s is also given by %s", label, s.RenamedFrom, other))
+			}
+			renamedFrom[s.RenamedFrom] = s.Name
+		}
 	}
 	for _, s := range inv.Subscriptions {
 		if s.RenamedFrom == "" {
