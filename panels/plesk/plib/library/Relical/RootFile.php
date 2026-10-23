@@ -10,7 +10,9 @@ use RuntimeException;
  * Writes root-only files atomically: a temporary file in the same
  * directory, created 0600 before any content is written, then renamed over
  * the target. A reader never sees a half-written file, and the content is
- * never readable by others, not even for a moment.
+ * never readable by others, not even for a moment. The data is synced to
+ * disk before the rename, so a crash leaves the old file or the new one,
+ * never an empty one.
  */
 final class RootFile
 {
@@ -43,7 +45,8 @@ final class RootFile
             }
             $ok = @chmod($tmp, $mode)
                 && fwrite($handle, $content) === strlen($content)
-                && fflush($handle);
+                && fflush($handle)
+                && fsync($handle); // on disk before the rename makes it live
             fclose($handle);
             if (!$ok || !@rename($tmp, $path)) {
                 @unlink($tmp);
