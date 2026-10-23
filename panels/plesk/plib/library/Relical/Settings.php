@@ -77,7 +77,7 @@ final class Settings
     /** Local time of the nightly backup, HH:MM (used for the timer). */
     public function backupTime(): string
     {
-        return $this->string(self::BACKUP_TIME, '02:30');
+        return $this->string(self::BACKUP_TIME, '01:00');
     }
 
     /** Upload limit in KiB/s; 0 means no limit. */

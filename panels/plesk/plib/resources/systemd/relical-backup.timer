@@ -1,0 +1,13 @@
+# Installed by the Relical Backup extension for Plesk. The time comes from
+# the extension's settings; this file is rewritten on install, upgrade and
+# whenever the backup time is saved.
+[Unit]
+Description=Relical nightly backup ({backup_time} server local time)
+
+[Timer]
+OnCalendar=*-*-* {backup_time}:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

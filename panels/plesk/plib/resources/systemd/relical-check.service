@@ -1,0 +1,17 @@
+# Installed by the Relical Backup extension for Plesk; rewritten on every
+# install and upgrade, so local changes belong in a drop-in
+# (systemctl edit relical-check.service).
+[Unit]
+Description=Relical weekly repository check
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/relical/config.json
+
+# A check that starts while a backup is still running fails on relical's own
+# lock and is not retried until next week, so the timer runs it twelve hours
+# after the nightly backup time.
+
+[Service]
+Type=oneshot
+# "%%" is a literal "%" in a unit file.
+ExecStart=/usr/local/lib/relical/relical -config /etc/relical/config.json check --all --read-data-subset 5%%

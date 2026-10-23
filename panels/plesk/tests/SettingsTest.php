@@ -17,7 +17,7 @@ final class SettingsTest extends TestCase
         self::assertSame(23, $settings->sftpPort());
         self::assertSame('relical', $settings->sftpPath());
         self::assertSame(['daily' => 14, 'weekly' => 8, 'monthly' => 12], $settings->retention());
-        self::assertSame('02:30', $settings->backupTime());
+        self::assertSame('01:00', $settings->backupTime());
         self::assertSame(0, $settings->limitUploadKib());
     }
 
