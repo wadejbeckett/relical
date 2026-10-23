@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/wadejbeckett/relical/core/internal/config"
 )
@@ -91,4 +92,77 @@ func Ensure(dir, name string) (string, bool, error) {
 		return "", false, err
 	}
 	return p, true, f.Close()
+}
+
+// The owner file <dir>/<name>.id records the panel id of the subscription
+// a repository was first backed up for. A subscription name can be reused
+// (a deleted subscription's name taken by a new customer, or a rename onto
+// an old name); the owner check stops the new subscription from using, and
+// restoring from, the old owner's repository.
+
+func ownerPath(dir, name string) (string, error) {
+	p, err := keyPath(dir, name)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(p, ".key") + ".id", nil
+}
+
+// CheckOwner refuses when the repository's recorded owner id differs from
+// id. A repository without an owner file passes.
+func CheckOwner(dir, name, id string) error {
+	p, err := ownerPath(dir, name)
+	if err != nil {
+		return err
+	}
+	b, err := os.ReadFile(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	rec := strings.TrimSpace(string(b))
+	if rec == id {
+		return nil
+	}
+	given := fmt.Sprintf("id %q", id)
+	if id == "" {
+		given = "no id"
+	}
+	kp := strings.TrimSuffix(p, ".id") + ".key"
+	return fmt.Errorf("the repository for %s belongs to subscription id %q (recorded in %s), but the inventory gives %s: "+
+		"the name was reused or another subscription was renamed onto it. To start a new repository for this subscription, "+
+		"move %s, %s and the repository itself aside; relical never deletes them", name, rec, p, given, kp, p)
+}
+
+// RecordOwner records id as the repository's owner if no owner is recorded
+// yet, and otherwise checks it. An empty id (a static inventory without
+// ids, or the panel configuration) records nothing.
+func RecordOwner(dir, name, id string) error {
+	if err := CheckOwner(dir, name, id); err != nil || id == "" {
+		return err
+	}
+	p, err := ownerPath(dir, name)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, fs.ErrExist) {
+		return CheckOwner(dir, name, id)
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(id + "\n"); err != nil {
+		f.Close()
+		os.Remove(p)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(p)
+		return err
+	}
+	return f.Close()
 }

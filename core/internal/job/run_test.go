@@ -86,7 +86,7 @@ func TestSftpArgsReachRestic(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 	for _, l := range strings.Split(strings.TrimSpace(log()), "\n") {
-		if !strings.HasPrefix(l, "-o sftp.args=-p 23 -o StrictHostKeyChecking=yes ") {
+		if !strings.HasPrefix(l, `-o "sftp.args=-p 23 -o StrictHostKeyChecking=yes" `) {
 			t.Errorf("restic call without sftp.args: %s", l)
 		}
 	}
@@ -375,5 +375,85 @@ func TestStatsOnlyForRepositoriesWithASnapshot(t *testing.T) {
 	}
 	if strings.Contains(log(), "stats") {
 		t.Fatal(log())
+	}
+}
+
+func TestRepositoryOfAnotherIdIsRefused(t *testing.T) {
+	e, _, log := setup(t, "local")
+	allFeatures(e)
+	e.Inv.Subscriptions[0].ID = "17"
+	sub := mustSub(t, e, "example.test")
+	if r := e.BackupMail(context.Background(), sub); !r.OK {
+		t.Fatalf("%+v", r)
+	}
+	idFile := filepath.Join(e.Cfg.KeysDir, "example.test.id")
+	if b, err := os.ReadFile(idFile); err != nil || string(b) != "17\n" {
+		t.Fatalf("owner file: %q %v", b, err)
+	}
+	if fi, _ := os.Stat(idFile); fi.Mode().Perm() != 0o600 {
+		t.Errorf("owner file mode %v", fi.Mode().Perm())
+	}
+	// The same id passes again.
+	if r := e.BackupFiles(context.Background(), sub); !r.OK {
+		t.Fatalf("%+v", r)
+	}
+	// The name now belongs to a different subscription.
+	before := log()
+	sub.ID = "42"
+	rs := e.BackupSubscription(context.Background(), sub, "")
+	rs = append(rs, e.Forget(context.Background(), sub), e.Check(context.Background(), sub, ""))
+	for _, r := range rs {
+		if r.OK || !strings.Contains(r.Error, `id "17"`) || !strings.Contains(r.Error, `id "42"`) || !strings.Contains(r.Error, "never deletes") {
+			t.Errorf("%+v", r)
+		}
+	}
+	if _, _, err := e.Runner(sub); err == nil {
+		t.Error("Runner accepted another id's repository")
+	}
+	sub.ID = ""
+	if r := e.BackupMail(context.Background(), sub); r.OK || !strings.Contains(r.Error, "gives no id") {
+		t.Errorf("%+v", r)
+	}
+	if log() != before {
+		t.Errorf("restic ran for another id's repository:\n%s", strings.TrimPrefix(log(), before))
+	}
+	if b, _ := os.ReadFile(idFile); string(b) != "17\n" {
+		t.Errorf("owner file changed: %q", b)
+	}
+}
+
+func TestNoIDRecordsNoOwner(t *testing.T) {
+	e, _, _ := setup(t, "local")
+	if r := e.BackupMail(context.Background(), mustSub(t, e, "example.test")); !r.OK {
+		t.Fatalf("%+v", r)
+	}
+	if _, err := os.Stat(filepath.Join(e.Cfg.KeysDir, "example.test.id")); err == nil {
+		t.Error("owner file written without an id")
+	}
+}
+
+func TestRecordKeepsUnitsApart(t *testing.T) {
+	e, _, _ := setup(t, "local")
+	allFeatures(e)
+	e.Inv.Subscriptions[0].Databases = []inventory.Database{{Type: "mysql", Name: "a"}, {Type: "mysql", Name: "b"}}
+	rs := e.BackupAll(context.Background(), "")
+	if err := e.Record(rs); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Record([]Result{e.Forget(context.Background(), mustSub(t, e, "example.test"))}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := ReadState(e.Cfg.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := st["example.test"]
+	for _, k := range []string{"mail", "files", "db:a", "db:b"} {
+		if r := s[k]["backup"]; !r.OK || r.Snapshot == "" || r.StateKey() != k {
+			t.Errorf("%s: %+v", k, r)
+		}
+	}
+	if !s["repository"]["stats"].OK || !s["repository"]["forget"].OK || len(s) != 5 {
+		t.Errorf("%+v", s)
 	}
 }

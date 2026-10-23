@@ -146,19 +146,27 @@ func (e Env) runnerWithKey(sub inventory.Subscription, keyPath string) (restic.R
 	}, dst, nil
 }
 
-// Runner returns a runner for a subscription that already has a key.
+// Runner returns a runner for a subscription that already has a key, and
+// refuses a repository recorded as another subscription id's.
 func (e Env) Runner(sub inventory.Subscription) (restic.Runner, config.Destination, error) {
 	kp, err := keys.Path(e.Cfg.KeysDir, sub.Name)
 	if err != nil {
+		return restic.Runner{}, config.Destination{}, err
+	}
+	if err := keys.CheckOwner(e.Cfg.KeysDir, sub.Name, sub.ID); err != nil {
 		return restic.Runner{}, config.Destination{}, err
 	}
 	return e.runnerWithKey(sub, kp)
 }
 
 // openRepo returns a runner for the subscription's repository, creating
-// the key and the repository on first use. A wrong password is an error,
-// never a reason to init.
+// the key and the repository on first use and recording the subscription's
+// id as the repository's owner. A repository recorded as another id's is
+// refused. A wrong password is an error, never a reason to init.
 func (e Env) openRepo(ctx context.Context, sub inventory.Subscription) (restic.Runner, error) {
+	if err := keys.CheckOwner(e.Cfg.KeysDir, sub.Name, sub.ID); err != nil {
+		return restic.Runner{}, err
+	}
 	kp, _, err := keys.Ensure(e.Cfg.KeysDir, sub.Name)
 	if err != nil {
 		return restic.Runner{}, err
@@ -175,6 +183,9 @@ func (e Env) openRepo(ctx context.Context, sub inventory.Subscription) (restic.R
 		if err := r.Init(ctx); err != nil {
 			return restic.Runner{}, err
 		}
+	}
+	if err := keys.RecordOwner(e.Cfg.KeysDir, sub.Name, sub.ID); err != nil {
+		return restic.Runner{}, err
 	}
 	return r, nil
 }

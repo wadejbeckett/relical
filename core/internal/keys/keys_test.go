@@ -3,6 +3,7 @@ package keys
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -73,5 +74,33 @@ func TestPathRefusesReadableKey(t *testing.T) {
 	os.Chmod(p, 0o644)
 	if _, err := Path(d, "example.test"); err == nil {
 		t.Fatal("0644 key accepted")
+	}
+}
+
+func TestOwnerRecordAndCheck(t *testing.T) {
+	dir := t.TempDir()
+	os.Chmod(dir, 0o700)
+	if err := CheckOwner(dir, "example.test", "17"); err != nil {
+		t.Fatalf("no owner file: %v", err)
+	}
+	if err := RecordOwner(dir, "example.test", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "example.test.id")); err == nil {
+		t.Fatal("empty id recorded")
+	}
+	if err := RecordOwner(dir, "example.test", "17"); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordOwner(dir, "example.test", "17"); err != nil {
+		t.Fatalf("same id again: %v", err)
+	}
+	for _, id := range []string{"42", ""} {
+		if err := RecordOwner(dir, "example.test", id); err == nil || !strings.Contains(err.Error(), `"17"`) {
+			t.Errorf("id %q: %v", id, err)
+		}
+	}
+	if err := CheckOwner(dir, "../x", "17"); err == nil {
+		t.Error("bad name accepted")
 	}
 }

@@ -274,3 +274,16 @@ func TestRestoreRefusesDomainOfAnotherSubscription(t *testing.T) {
 		t.Errorf("restic or doveadm ran:\n%s", log())
 	}
 }
+
+func TestRestoreFromAnotherIdsRepositoryIsRefused(t *testing.T) {
+	e, _, log := setup(t)
+	os.WriteFile(filepath.Join(e.Cfg.KeysDir, "example.test.id"), []byte("17\n"), 0o600)
+	e.Inv.Subscriptions[0].ID = "42"
+	_, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest"})
+	if err == nil || !strings.Contains(err.Error(), `id "17"`) || !strings.Contains(err.Error(), `id "42"`) {
+		t.Fatalf("err = %v", err)
+	}
+	if log() != "" {
+		t.Errorf("restic or doveadm ran:\n%s", log())
+	}
+}
