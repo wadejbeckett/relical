@@ -74,6 +74,9 @@ final class CommandTest extends TestCase
         yield 'duplicate flag' => [['snapshots', '--subscription', 'example.test', '--subscription', 'other.example.test']];
         yield 'missing value' => [['snapshots', '--subscription']];
         yield 'flag as value' => [['snapshots', '--subscription', '--unit']];
+        yield 'dash value for path' => [['ls', '--subscription', 'example.test', '--snapshot', 'latest', '--path', '-osftp.command=id']];
+        yield 'dash value for folder' => [['restore', '--subscription', 'example.test', '--unit', 'mail', '--domain', 'example.test', '--mailbox', 'info', '--folder', '-x']];
+        yield 'dash value for subscription' => [['backup', '--subscription', '-x']];
         yield 'stray positional' => [['status', 'extra']];
         yield 'status takes no flags' => [['status', '--all']];
         yield 'unit on forget' => [['forget', '--all', '--unit', 'mail']];
@@ -117,6 +120,11 @@ final class CommandTest extends TestCase
         yield ['subscription', '', false];
         yield ['subscription', str_repeat('a', 254), false];
         yield ['subscription', '_other', false];
+        yield ['subscription', 'a.', false];
+        yield ['subscription', 'a-', false];
+        yield ['subscription', 'localhost', false];
+        yield ['subscription', 'example-.test', false];
+        yield ['subscription', 'Bücher.example.test', false];
         // domain
         yield ['domain', 'shop.example.test', true];
         yield ['domain', '_server', false];
@@ -140,6 +148,10 @@ final class CommandTest extends TestCase
         yield ['mailbox', 'Info', false];
         yield ['mailbox', '../info', false];
         yield ['mailbox', str_repeat('a', 65), false];
+        yield ['mailbox', '-x', false];
+        yield ['mailbox', '.', false];
+        yield ['mailbox', '..', false];
+        yield ['mailbox', '.hidden', false];
         // folder
         yield ['folder', 'Restored 2026-10-23', true];
         yield ['folder', 'Archief/Ontvangen', true];
@@ -149,6 +161,10 @@ final class CommandTest extends TestCase
         yield ['folder', "tab\there", false];
         yield ['folder', "\xff\xfe", false];
         yield ['folder', '', false];
+        yield ['folder', '-x', false];
+        yield ['folder', '.', false];
+        yield ['folder', '..', false];
+        yield ['folder', 'a-b', true];
         // path
         yield ['path', 'httpdocs/wp-content', true];
         yield ['path', '/httpdocs/index.php', true];
@@ -158,12 +174,21 @@ final class CommandTest extends TestCase
         yield ['path', 'httpdocs/..', false];
         yield ['path', "httpdocs\n", false];
         yield ['path', '', false];
+        yield ['path', '-osftp.command=id', false];
+        yield ['path', '.', false];
+        yield ['path', '..', false];
+        yield ['path', 'httpdocs/./x', false];
+        yield ['path', 'httpdocs/-x', true];
         // database
         yield ['database', 'example_wp', true];
         yield ['database', 'wp$db-1', true];
         yield ['database', 'x`; DROP', false];
         yield ['database', 'a.b', false];
         yield ['database', str_repeat('a', 65), false];
+        yield ['database', '-x', false];
+        yield ['database', '.', false];
+        yield ['database', '..', false];
+        yield ['database', 'a-b', true];
         // read-data-subset
         yield ['subset', '5%', true];
         yield ['subset', '100%', true];

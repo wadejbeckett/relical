@@ -21,10 +21,9 @@ final class Command
 {
     public const UNITS = ['mail', 'files', 'db', 'panel-config'];
 
-    private const SUBSCRIPTION = '/^[a-z0-9][a-z0-9.-]{0,252}$/D';
     private const SNAPSHOT = '/^(latest|[0-9a-f]{8,64})$/D';
-    private const MAILBOX = '/^[a-z0-9._+-]{1,64}$/D';
-    private const DATABASE = '/^[A-Za-z0-9_$-]{1,64}$/D';
+    private const MAILBOX = '/^[a-z0-9][a-z0-9._+-]{0,63}$/D';
+    private const DATABASE = '/^[A-Za-z0-9_$][A-Za-z0-9_$-]{0,63}$/D';
     private const SUBSET = '/^(100|[1-9][0-9]?)%$/D';
 
     /** @var list<string> */
@@ -120,7 +119,7 @@ final class Command
         if ($value === Paths::SERVER_REPO) {
             return $value;
         }
-        if (preg_match(self::SUBSCRIPTION, $value) !== 1 || str_contains($value, '..')) {
+        if (!CoreRules::validDomain($value)) {
             throw new InvalidArgumentException('subscription must be a lower-case domain name or _server');
         }
 
@@ -157,17 +156,23 @@ final class Command
     public static function mailbox(string $value): string
     {
         if (preg_match(self::MAILBOX, $value) !== 1) {
-            throw new InvalidArgumentException('mailbox must be the local part of an address (a-z, 0-9, ".", "_", "+", "-")');
+            throw new InvalidArgumentException('mailbox must be the local part of an address, starting with a-z or 0-9 (then a-z, 0-9, ".", "_", "+", "-")');
         }
 
         return $value;
     }
 
-    /** An IMAP folder name: valid UTF-8, no control characters. */
+    /**
+     * An IMAP folder name: valid UTF-8, no control characters, not "." or
+     * "..", and no leading "-" (it could read as an option further down).
+     */
     public static function folder(string $value): string
     {
         if ($value === '' || strlen($value) > 255 || preg_match('/^[^\p{Cc}]+$/uD', $value) !== 1) {
             throw new InvalidArgumentException('folder must be printable text of at most 255 bytes');
+        }
+        if ($value[0] === '-' || $value === '.' || $value === '..') {
+            throw new InvalidArgumentException('folder must not start with "-" or be "." or ".."');
         }
 
         return $value;
@@ -175,16 +180,20 @@ final class Command
 
     /**
      * A path inside the webspace or snapshot, written with or without a
-     * leading "/": no "..", no empty or control characters.
+     * leading "/": no "." or ".." segments, no control characters, and no
+     * leading "-" (it could read as an option further down).
      */
     public static function path(string $value): string
     {
         if ($value === '' || strlen($value) > 4096 || preg_match('/^[^\p{Cc}]+$/uD', $value) !== 1) {
             throw new InvalidArgumentException('path must be printable text');
         }
+        if ($value[0] === '-') {
+            throw new InvalidArgumentException('path must not start with "-"');
+        }
         foreach (explode('/', $value) as $part) {
-            if ($part === '..') {
-                throw new InvalidArgumentException('path must not contain ".."');
+            if ($part === '..' || $part === '.') {
+                throw new InvalidArgumentException('path must not contain "." or ".." segments');
             }
         }
 
@@ -194,7 +203,7 @@ final class Command
     public static function database(string $value): string
     {
         if (preg_match(self::DATABASE, $value) !== 1) {
-            throw new InvalidArgumentException('database name may hold only letters, digits, "_", "$" and "-"');
+            throw new InvalidArgumentException('database name may hold only letters, digits, "_", "$" and "-", and must not start with "-"');
         }
 
         return $value;
@@ -231,8 +240,13 @@ final class Command
                 $flags[$name] = true;
                 continue;
             }
-            if ($i + 1 >= $n || str_starts_with($args[$i + 1], '--')) {
+            if ($i + 1 >= $n) {
                 throw new InvalidArgumentException(sprintf('--%s needs a value', $name));
+            }
+            if (str_starts_with($args[$i + 1], '-')) {
+                // Refused for every flag, so no value can turn into an
+                // option of the core or of anything it runs.
+                throw new InvalidArgumentException(sprintf('the value of --%s must not start with "-"', $name));
             }
             $flags[$name] = $args[++$i];
         }
