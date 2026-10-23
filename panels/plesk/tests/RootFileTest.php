@@ -132,4 +132,64 @@ final class RootFileTest extends TestCase
             self::assertSame(0755, self::mode($this->dir . '/real'), 'the link target was not touched');
         }
     }
+
+    public function testInstallCopiesWithTheModeAfterCheckingTheChecksum(): void
+    {
+        $from = $this->dir . '/source';
+        file_put_contents($from, 'binary');
+        $to = $this->dir . '/installed';
+        file_put_contents($to, 'old');
+        $inodeBefore = fileinode($to);
+
+        RootFile::install($from, $to, 0755, hash('sha256', 'binary'));
+
+        clearstatcache();
+        self::assertSame('binary', file_get_contents($to));
+        self::assertSame(0755, self::mode($to));
+        self::assertNotSame($inodeBefore, fileinode($to), 'renamed into place');
+        self::assertSame([], $this->leftovers());
+    }
+
+    public function testInstallRefusesAMismatchAndKeepsTheOldFile(): void
+    {
+        $from = $this->dir . '/source';
+        file_put_contents($from, 'tampered');
+        $to = $this->dir . '/installed';
+        file_put_contents($to, 'old');
+
+        try {
+            RootFile::install($from, $to, 0755, hash('sha256', 'binary'));
+            self::fail('a mismatched copy was installed');
+        } catch (RuntimeException $e) {
+            self::assertStringContainsString('checksum', $e->getMessage());
+        }
+        self::assertSame('old', file_get_contents($to));
+        self::assertSame([], $this->leftovers());
+    }
+
+    public function testInstallRefusesASymlinkTarget(): void
+    {
+        file_put_contents($this->dir . '/source', 'binary');
+        file_put_contents($this->dir . '/elsewhere', 'keep');
+        symlink($this->dir . '/elsewhere', $this->dir . '/installed');
+
+        $this->expectException(RuntimeException::class);
+        try {
+            RootFile::install($this->dir . '/source', $this->dir . '/installed', 0755, hash('sha256', 'binary'));
+        } finally {
+            self::assertSame('keep', file_get_contents($this->dir . '/elsewhere'));
+        }
+    }
+
+    public function testInstallOfAMissingSourceLeavesNothing(): void
+    {
+        try {
+            RootFile::install($this->dir . '/nope', $this->dir . '/installed', 0755, hash('sha256', ''));
+            self::fail('installed from a missing file');
+        } catch (RuntimeException $e) {
+            self::assertStringContainsString('could not read', $e->getMessage());
+        }
+        self::assertFileDoesNotExist($this->dir . '/installed');
+        self::assertSame([], $this->leftovers());
+    }
 }

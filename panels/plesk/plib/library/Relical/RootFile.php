@@ -56,4 +56,54 @@ final class RootFile
             umask($previousUmask);
         }
     }
+
+    /**
+     * Copies a file into place atomically (a temporary copy in the target's
+     * directory, renamed over the target), refusing it unless the copy's
+     * sha256 is $sha256. A failed or mismatched copy leaves the old target
+     * untouched and no temporary file behind, so a binary is either the old
+     * one or the new one, never half of either.
+     */
+    public static function install(string $from, string $to, int $mode, string $sha256): void
+    {
+        if (is_link($to)) {
+            throw new RuntimeException(sprintf('%s is a symbolic link', $to));
+        }
+        $tmp = dirname($to) . '/.' . basename($to) . '.' . bin2hex(random_bytes(6)) . '.tmp';
+
+        $previousUmask = umask(0077);
+        try {
+            $in = @fopen($from, 'rb');
+            if ($in === false) {
+                throw new RuntimeException(sprintf('could not read %s', $from));
+            }
+            $out = @fopen($tmp, 'x');
+            if ($out === false) {
+                fclose($in);
+                throw new RuntimeException(sprintf('could not create %s', $tmp));
+            }
+            $ok = stream_copy_to_stream($in, $out) !== false && fflush($out) && fsync($out);
+            fclose($in);
+            fclose($out);
+            if (!$ok) {
+                @unlink($tmp);
+                throw new RuntimeException(sprintf('could not copy %s to %s', $from, $tmp));
+            }
+            $actual = hash_file('sha256', $tmp);
+            if ($actual === false || !hash_equals(strtolower($sha256), $actual)) {
+                @unlink($tmp);
+                throw new RuntimeException(sprintf('the copy of %s does not match its checksum', $from));
+            }
+            if (function_exists('posix_geteuid') && posix_geteuid() === 0 && !(@chown($tmp, 0) && @chgrp($tmp, 0))) {
+                @unlink($tmp);
+                throw new RuntimeException(sprintf('could not give %s to root', $tmp));
+            }
+            if (!@chmod($tmp, $mode) || !@rename($tmp, $to)) {
+                @unlink($tmp);
+                throw new RuntimeException(sprintf('could not install %s', $to));
+            }
+        } finally {
+            umask($previousUmask);
+        }
+    }
 }
