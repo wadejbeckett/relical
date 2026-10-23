@@ -110,8 +110,8 @@ final class InstallerTest extends TestCase
             'write_file /etc/systemd/system/relical-check.timer',
             'run /usr/bin/systemctl daemon-reload',
             'run /usr/bin/systemctl enable --now relical-backup.timer relical-check.timer',
-            'run /usr/bin/systemctl restart relical-backup.timer relical-check.timer',
         ], self::summary($plan));
+        self::assertSame("run /usr/bin/ssh-keygen -q -t ed25519 -N '' -C relical@host.example.test -f /etc/relical/ssh/id_ed25519", $plan[8]->description);
 
         $keygen = $plan[8]->params['argv'];
         self::assertSame(['/usr/bin/ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-C', 'relical@host.example.test', '-f', '/etc/relical/ssh/id_ed25519'], $keygen);

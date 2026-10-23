@@ -80,7 +80,9 @@ final class Action
     /** @param list<string> $argv */
     public static function run(array $argv, bool $optional = false): self
     {
-        return new self(self::RUN, 'run ' . implode(' ', $argv), ['argv' => $argv], $optional);
+        $shown = array_map(static fn (string $arg): string => $arg === '' ? "''" : $arg, $argv);
+
+        return new self(self::RUN, 'run ' . implode(' ', $shown), ['argv' => $argv], $optional);
     }
 
     public static function removeFile(string $path, bool $optional = false): self

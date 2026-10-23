@@ -81,8 +81,8 @@ final class Installer
 
     /**
      * Writes the units that differ from what is installed, reloads systemd,
-     * enables and starts both timers, and restarts a timer whose schedule
-     * changed. Also what a settings save needs when the backup time changes.
+     * enables and starts both timers, and restarts an installed timer whose
+     * schedule changed. Also what a settings save needs when the backup time changes.
      *
      * @param array<string, string> $units Units::renderAll()
      * @return list<Action>
@@ -96,19 +96,20 @@ final class Installer
                 throw new RuntimeException(sprintf('the unit %s was not rendered', $name));
             }
             $path = Units::SYSTEMD_DIR . '/' . $name;
-            if ($this->probe->read($path) === $units[$name]) {
+            $current = $this->probe->read($path);
+            if ($current === $units[$name]) {
                 $plan[] = Action::note(sprintf('%s is unchanged', $path));
                 continue;
             }
             $plan[] = Action::writeFile($path, $units[$name], 0644);
-            if (in_array($name, Units::TIMERS, true)) {
+            if ($current !== null && in_array($name, Units::TIMERS, true)) {
                 $changedTimers[] = $name;
             }
         }
         $plan[] = Action::run([$this->systemctl, 'daemon-reload']);
         $plan[] = Action::run([$this->systemctl, 'enable', '--now', ...Units::TIMERS]);
         if ($changedTimers !== []) {
-            // A running timer keeps its old schedule until it is restarted.
+            // Restart a changed timer so its new schedule is in force.
             $plan[] = Action::run([$this->systemctl, 'restart', ...$changedTimers]);
         }
 
