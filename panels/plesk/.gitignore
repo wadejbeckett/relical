@@ -1,0 +1,8 @@
+# Composer (dev only; the package ships no runtime dependencies)
+/vendor/
+composer.phar
+composer.lock
+
+# PHPUnit
+/.phpunit.cache/
+.phpunit.result.cache
