@@ -2,7 +2,7 @@
 
 Mail backup and archiving for hosting servers, built on restic. A panel-neutral core (`core/`) with thin control-panel adapters (`panels/`, starting with Plesk). Part of the Noiz Déjà Vu backup range.
 
-Status: phase 2 in development (mail backup and restore per subscription; files, databases and the panel configuration are being added). Not ready for production.
+Status: phase 2 in development (mail, website files and databases are backed up per subscription; mail can be restored; file and database restores and the panel configuration are being added). Not ready for production.
 
 ## Build and test
 
@@ -27,16 +27,24 @@ Relical backs up **subscriptions** (a hosting account, named by its main domain)
 | `version` | Prints the version. |
 | `inventory` | Prints the inventory after `inventory_command` has run and every entry has been validated. |
 | `mailboxes --subscription S` | Lists the mailboxes of every mail domain of the subscription found on disk, with login, path, and owner uid and gid. |
-| `backup --subscription S` or `--all` [`--unit mail`] | Backs up the mailboxes of every mail domain of a subscription (or of every subscription in the inventory) into that subscription's restic repository. Creates the repository and its key on first use. |
-| `forget --subscription S` or `--all` | Applies the retention policy and prunes. |
+| `backup --subscription S` or `--all` [`--unit mail\|files\|db`] | Backs up a subscription's units (or those of every subscription in the inventory) into that subscription's restic repository: mail, then files, then each database, each only when it is among the subscription's `features`. `--unit` restricts the run to one unit. Creates the repository and its key on first use. |
+| `forget --subscription S` or `--all` | Applies the retention policy to each unit's snapshots separately and prunes. |
 | `check --subscription S` or `--all` [`--read-data-subset 5%`] | Checks repository integrity, optionally reading a share of the stored data. |
 | `snapshots --subscription S` [`--unit U`] | Lists the subscription's snapshots, or only those of one unit. `--subscription _server` names the panel configuration's repository. |
 | `restore` [`--subscription S`] [`--unit mail`] `--domain D --mailbox M` [`--snapshot ID`] [`--folder F`] | Restores a mailbox, or one IMAP folder, into a new folder (see Restores). Without `--subscription`, the subscription is the one whose mail domains include `D`; with it, `D` must be one of that subscription's mail domains. `--snapshot` takes `latest` (the default) or an id of 8 to 64 hex characters. |
-| `status` | Prints the last recorded `backup`, `forget` and `check` result per subscription. |
+| `status` | Prints the last recorded result per subscription, unit and action, and each repository's stored size from the last `backup --all` (see State). |
 
-Units are `mail`, `files`, `db` and `panel-config`. This version backs up and restores `mail` only; `--unit files`, `db` or `panel-config` on `backup` or `restore` is reported as not supported.
+Units are `mail`, `files`, `db` and `panel-config`. This version backs up `mail`, `files` and `db`, and restores `mail` only; `--unit panel-config` on `backup`, and any unit other than `mail` on `restore`, is reported as not supported.
 
-`backup`, `forget` and `check` need exactly one of `--subscription` or `--all`, and take an exclusive lock so two runs never overlap; a second run fails at once with "another relical run holds the lock". `--all` runs the subscriptions one at a time. Mail snapshots are tagged `mail`; there is one per subscription per run, covering the mailboxes of all its mail domains. A subscription whose features do not include `mail` is reported as OK with a note, and nothing is run for it. Each run is recorded in `state.json` in the state directory, which `status` reads. `backup`, `forget` and `check` wait up to 30 minutes for a repository lock held by another restic process, and `forget` and `check` first remove stale locks left by a restic that was killed.
+`backup`, `forget` and `check` need exactly one of `--subscription` or `--all`, and take an exclusive lock so two runs never overlap; a second run fails at once with "another relical run holds the lock". `--all` runs the subscriptions one at a time, in inventory order. Each unit gives its own result and snapshot:
+
+- `mail`: one snapshot tagged `mail` per subscription per run, covering the mailboxes of all its mail domains. Dovecot's index and cache files and each Maildir's `tmp/` are left out.
+- `files`: one snapshot tagged `files` of the subscription's `files` paths. restic stays on each path's file system (`--one-file-system`) and skips directories marked with a `CACHEDIR.TAG` (`--exclude-caches`); each `file_excludes` pattern is applied relative to each path.
+- `db`: one snapshot per database, tagged `db` and `db:<name>`, holding the single file `/<name>.sql`. `mysqldump --defaults-file=<mysql.defaults_file> --single-transaction --quick --routines --triggers --events --no-tablespaces <name>` is streamed into restic (`backup --stdin-from-command`), so the dump is never written to disk. A failing dump fails that database only, and restic saves no snapshot for it. Before any dump, `mysql.defaults_file` must exist and be a regular file with no access for group or others (mode 0600); otherwise every database of the subscription fails with that error. Databases of a type other than `mysql` are reported as OK with the note "skipped: type X not supported".
+
+A unit that is not among the subscription's `features` is not run, even if mail domains, files or databases are listed; with `--unit`, it is reported as OK with a note. A subscription with none of the features is reported as OK with a note, and nothing is run for it. If restic saved a snapshot but could not read some files (exit code 3), `mail` and `files` are still OK, with a note. After a `backup --all`, Relical runs `restic stats --mode raw-data` on each repository that received a snapshot and records its stored size; a failed `stats` is a note on that result, never a failure, and the previous size is kept.
+
+Each run is recorded in `state.json` in the state directory, which `status` reads. `forget` makes one call per repository with `--group-by tags`, so the mail, files and each database's snapshots are kept by the retention policy independently of each other. `backup`, `forget` and `check` wait up to 30 minutes for a repository lock held by another restic process, and `forget` and `check` first remove stale locks left by a restic that was killed.
 
 Exit codes: `0` success; `1` an error, or at least one subscription's job failed (the JSON still lists every subscription's result); `2` a usage error: an unknown command, an unexpected argument, a flag the command does not take, an unknown `--unit`, neither or both of `--subscription` and `--all` on `backup`, `forget` or `check`, a missing `--subscription` on `mailboxes` or `snapshots`, or a missing `--domain` or `--mailbox` on `restore`. A subscription that is not in the inventory, or an inventory that fails validation, prints `{"error": ...}` and exits `1`.
 
@@ -60,6 +68,17 @@ Exit codes: `0` success; `1` an error, or at least one subscription's job failed
     ]
 
 If restic saved a snapshot but could not read some files, `ok` is still `true` and a `note` field explains. A failed job has `"ok": false` and an `error` field instead.
+
+Result fields: `subscription`; `unit` (`mail`, `files`, `db`, `panel-config`; absent for `forget`, `check` and `stats`, which concern the whole repository); `database` (for `db`); `action` (`backup`, `forget`, `check`, `stats`); `time`; `ok`; and when they apply `snapshot`, `mailboxes`, `files_new`, `data_added` (bytes added to the repository after compression), `stored_bytes` (`stats`: the repository's size), `seconds`, `note` and `error`.
+
+`relical backup --all` for a subscription with all three units ends with a `stats` result per repository (shortened):
+
+    [
+      {"subscription": "example.test", "unit": "mail", "action": "backup", "ok": true, "snapshot": "b9e9...", "mailboxes": 2},
+      {"subscription": "example.test", "unit": "files", "action": "backup", "ok": true, "snapshot": "4f1c..."},
+      {"subscription": "example.test", "unit": "db", "database": "example_wp", "action": "backup", "ok": true, "snapshot": "7a02..."},
+      {"subscription": "example.test", "action": "stats", "ok": true, "stored_bytes": 52428800}
+    ]
 
 `relical snapshots --subscription example.test`:
 
@@ -102,27 +121,22 @@ If restic saved a snapshot but could not read some files, `ok` is still `true` a
       }
     ]
 
-`relical status`:
+`relical status` prints `state.json`: subscription, then unit (`mail`, `files`, `db:<name>` per database, or `repository` for `forget`, `check` and `stats`), then action, then the last result (shortened):
 
     {
       "example.test": {
-        "backup": {
-          "subscription": "example.test",
-          "unit": "mail",
-          "action": "backup",
-          "time": "2026-10-15T01:00:41.220517304Z",
-          "ok": true,
-          "snapshot": "b9e9540af49ca5d668c11272f8542eba4fc2faf5bc0f8b4a4f3dd0aece0111c0",
-          "mailboxes": 2,
-          "files_new": 3,
-          "data_added": 3746,
-          "seconds": 0.666874786
+        "mail": {
+          "backup": {"subscription": "example.test", "unit": "mail", "action": "backup", "time": "2026-10-15T01:00:41Z", "ok": true, "snapshot": "b9e9...", "mailboxes": 2}
         },
-        "check": {
-          "subscription": "example.test",
-          "action": "check",
-          "time": "2026-10-15T05:00:12.903471882Z",
-          "ok": true
+        "files": {
+          "backup": {"subscription": "example.test", "unit": "files", "action": "backup", "time": "2026-10-15T01:02:10Z", "ok": true, "snapshot": "4f1c..."}
+        },
+        "db:example_wp": {
+          "backup": {"subscription": "example.test", "unit": "db", "database": "example_wp", "action": "backup", "time": "2026-10-15T01:02:14Z", "ok": true, "snapshot": "7a02..."}
+        },
+        "repository": {
+          "stats": {"subscription": "example.test", "action": "stats", "time": "2026-10-15T01:02:20Z", "ok": true, "stored_bytes": 52428800},
+          "check": {"subscription": "example.test", "action": "check", "time": "2026-10-15T05:00:12Z", "ok": true}
         }
       }
     }
@@ -185,7 +199,7 @@ Copy `packaging/config.example.json` to `/etc/relical/config.json` and set mode 
 - `prune` (required in each destination, `"local"` or `"remote"`): `local` runs `forget --prune` from this server. `remote` is for append-only destinations (for example rest-server with `--append-only`): the server cannot delete there, so `relical forget` does nothing but report that pruning runs on the destination host.
 - `retention`: snapshots to keep (daily, weekly, monthly; default 14, 8, 12). A subscription's own `retention` overrides it.
 - `limit_upload_kib` and `low_priority`: limit upload bandwidth and run restic under `nice` and `ionice`.
-- `mysql.defaults_file`: the MySQL client options file (mode 0600) used for database dumps.
+- `mysql.defaults_file`: the MySQL client options file (mode 0600) used for database dumps. `mysqldump_bin` names the `mysqldump` binary (default `mysqldump`, found on `PATH`).
 - `keys_dir`: a random restic password per subscription is created here on the first backup (`<subscription>.key`, mode 0600). Create the directory beforehand with mode 0700; `state_dir` is created automatically. Losing a key loses that subscription's backups, so keep a copy somewhere safe.
 
 ### The inventory
