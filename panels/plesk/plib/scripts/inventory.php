@@ -8,8 +8,8 @@ declare(strict_types=1);
  * The core runs this as root through
  * `/usr/sbin/plesk bin extension --exec relical inventory.php` and parses
  * stdout. On success stdout is the inventory JSON and the exit code is 0; on
- * any failure stdout is `{"error": "..."}` and the exit code is 1, so the
- * core never backs up from a partial list.
+ * any failure stdout is `{"error": "..."}`, the same message goes to stderr
+ * and the exit code is 1, so the core never backs up from a partial list.
  */
 
 use Noiz\Relical\Coverage;
@@ -33,28 +33,34 @@ try {
     $source = new PleskSource();
     $webspaces = $source->webspaces();
 
+    // The rename hints are a convenience: a missing, unreadable or corrupt
+    // hints file means no hints this run, never a failed inventory.
     $known = [];
-    if (is_file(Paths::KNOWN_NAMES)) {
-        $decoded = json_decode((string) file_get_contents(Paths::KNOWN_NAMES), true);
-        $known = is_array($decoded) ? $decoded : [];
+    try {
+        $raw = is_file(Paths::KNOWN_NAMES) ? @file_get_contents(Paths::KNOWN_NAMES) : false;
+        $known = is_string($raw) ? json_decode($raw, true) : [];
+    } catch (Throwable $e) {
+        $known = [];
     }
     [$webspaces, $nextKnown] = Inventory::trackRenames($known, $webspaces);
 
     $inventory = Inventory::build($webspaces, $scope);
     $inventory['skipped'] = array_merge($inventory['skipped'], $source->notes());
 
-    // The rename hints are a convenience: failing to store them is reported,
-    // it does not stop tonight's backup.
     try {
         RootFile::ensureDir(Paths::STATE_DIR);
         RootFile::write(Paths::KNOWN_NAMES, json_encode($nextKnown, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n");
     } catch (Throwable $e) {
-        $inventory['skipped'][] = ['subscription' => '', 'item' => 'rename tracking', 'reason' => $e->getMessage()];
+        $inventory['skipped'][] = Inventory::skip('', 'rename tracking: ' . $e->getMessage());
     }
 
     echo json_encode($inventory, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR), "\n";
     exit(0);
 } catch (Throwable $e) {
-    echo json_encode(['error' => 'inventory: ' . $e->getMessage()], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE), "\n";
+    // The core reports a failed inventory_command's stderr; stdout carries
+    // the same message as JSON for anything that reads it.
+    $message = 'inventory: ' . $e->getMessage();
+    fwrite(STDERR, $message . "\n");
+    echo json_encode(['error' => $message], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE), "\n";
     exit(1);
 }
