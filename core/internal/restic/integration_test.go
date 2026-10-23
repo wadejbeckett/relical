@@ -125,7 +125,7 @@ func TestAppendOnlyRefusesForget(t *testing.T) {
 		}
 		os.WriteFile(filepath.Join(m, "cur", fmt.Sprintf("x%d.h:2,S", i)), []byte("new"), 0o600)
 	}
-	err := r.Forget(ctx, "backup", config.Retention{Daily: 1}, true)
+	err := r.Forget(ctx, "tags", config.Retention{Daily: 1}, true)
 	if err == nil {
 		t.Fatal("append-only server allowed forget --prune")
 	}
@@ -199,5 +199,114 @@ func TestStaleLockIsRemovedByUnlock(t *testing.T) {
 	}
 	if err := r.Check(ctx, ""); err != nil {
 		t.Fatalf("check after unlock: %v", err)
+	}
+}
+
+// TestForgetGroupsByTags shows that --group-by tags keeps each tag set
+// apart: with keep-daily 1, the newest snapshot of each group survives.
+func TestForgetGroupsByTags(t *testing.T) {
+	ctx := context.Background()
+	r := realRunner(t, filepath.Join(t.TempDir(), "repo"))
+	if err := r.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	src := t.TempDir()
+	newest := map[string]string{}
+	for i := 0; i < 2; i++ {
+		os.WriteFile(filepath.Join(src, "f"), []byte(fmt.Sprint(i)), 0o600)
+		sum, err := r.Backup(ctx, []string{src}, []string{"files"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		newest["files"] = sum.SnapshotID
+		sum, err = r.BackupStdin(ctx, []string{"echo", fmt.Sprint("dump ", i)}, "db1.sql", []string{"db", "db:db1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		newest["db,db:db1"] = sum.SnapshotID
+	}
+	if err := r.Forget(ctx, "tags", config.Retention{Daily: 1}, true); err != nil {
+		t.Fatal(err)
+	}
+	snaps, err := r.Snapshots(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, s := range snaps {
+		got[strings.Join(s.Tags, ",")] = s.ID
+	}
+	if len(snaps) != 2 || got["files"] != newest["files"] || got["db,db:db1"] != newest["db,db:db1"] {
+		t.Fatalf("kept %+v, want the newest of each group %v", snaps, newest)
+	}
+}
+
+// TestBackupStdinFailingCommandSavesNothing shows restic 0.19 fails, and
+// saves no snapshot, when the --stdin-from-command command exits non-zero
+// after writing part of its output.
+func TestBackupStdinFailingCommandSavesNothing(t *testing.T) {
+	ctx := context.Background()
+	r := realRunner(t, filepath.Join(t.TempDir(), "repo"))
+	if err := r.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, err := r.BackupStdin(ctx, []string{"sh", "-c", "echo 'CREATE TABLE t;'; echo 'mysqldump: Got error: 2013' >&2; exit 2"}, "db1.sql", []string{"db", "db:db1"})
+	if err == nil {
+		t.Fatal("failing command accepted")
+	}
+	if !strings.Contains(err.Error(), "exit status 2") || !strings.Contains(err.Error(), "Got error: 2013") {
+		t.Errorf("error does not carry the command's failure: %v", err)
+	}
+	if s, err := r.Snapshots(ctx, ""); err != nil || len(s) != 0 {
+		t.Fatalf("snapshots after a failed dump: %+v %v", s, err)
+	}
+	sum, err := r.BackupStdin(ctx, []string{"echo", "CREATE TABLE t;"}, "db1.sql", []string{"db", "db:db1"})
+	if err != nil || sum.SnapshotID == "" {
+		t.Fatalf("%+v %v", sum, err)
+	}
+	s, _ := r.Snapshots(ctx, "db:db1")
+	if len(s) != 1 || len(s[0].Paths) != 1 || s[0].Paths[0] != "/db1.sql" {
+		t.Fatalf("%+v", s)
+	}
+	n, err := r.Stats(ctx)
+	if err != nil || n == 0 {
+		t.Fatalf("stats: %d %v", n, err)
+	}
+}
+
+// TestFilesExcludesAndCaches backs up a webspace with anchored excludes
+// and a CACHEDIR.TAG directory, as the files unit does.
+func TestFilesExcludesAndCaches(t *testing.T) {
+	ctx := context.Background()
+	r := realRunner(t, filepath.Join(t.TempDir(), "repo"))
+	if err := r.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(t.TempDir(), "odd[1]")
+	for _, d := range []string{"httpdocs/logs", "logs", "tmp", "cache"} {
+		os.MkdirAll(filepath.Join(home, d), 0o700)
+	}
+	for _, f := range []string{"httpdocs/index.php", "httpdocs/logs/keep.txt", "logs/access_log", "tmp/sess", "cache/blob"} {
+		os.WriteFile(filepath.Join(home, f), []byte("x"), 0o600)
+	}
+	os.WriteFile(filepath.Join(home, "cache", "CACHEDIR.TAG"), []byte("Signature: 8a477f597d28d172789f06886806bc55\n"), 0o600)
+	esc := strings.NewReplacer("[", `\[`).Replace(home)
+	sum, err := r.Backup(ctx, []string{home}, []string{"files"}, []string{esc + "/logs/**", esc + "/tmp/**"}, "--exclude-caches")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	if err := r.Restore(ctx, sum.SnapshotID, esc, target); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"httpdocs/index.php", "httpdocs/logs/keep.txt", "cache/CACHEDIR.TAG"} {
+		if _, err := os.Stat(filepath.Join(target, home, want)); err != nil {
+			t.Errorf("missing %s", want)
+		}
+	}
+	for _, gone := range []string{"logs/access_log", "tmp/sess", "cache/blob"} {
+		if _, err := os.Stat(filepath.Join(target, home, gone)); err == nil {
+			t.Errorf("excluded %s was backed up", gone)
+		}
 	}
 }

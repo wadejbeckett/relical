@@ -1,4 +1,5 @@
-// Package testutil provides fake restic, doveadm and inventory commands for tests.
+// Package testutil provides fake restic, doveadm, mysqldump and inventory
+// commands for tests.
 // They log their arguments and behave according to FAKE_* variables,
 // which tests pass through the runner's own Env (the runner does not
 // inherit the parent environment).
@@ -24,7 +25,32 @@ if [ -n "$FAKE_HANG" ]; then
 fi
 case "$1" in
   cat) exit "${FAKE_CAT_EXIT:-0}" ;;
-  backup) cat "$FAKE_BACKUP_OUT"; exit "${FAKE_BACKUP_EXIT:-0}" ;;
+  backup)
+    case " $* " in
+      *" --stdin-from-command "*)
+        # Like restic 0.19: run the command after --, store its stdout, and
+        # fail without a snapshot when it exits non-zero.
+        while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done
+        shift
+        "$@" >> "$FAKE_LOG.stdin"
+        rc=$?
+        # Mid-run: no dump of this test may exist as a file. FAKE_NO_SQL_UNDER
+        # lists the directories to search; the fake mysqldump writes the
+        # test's FAKE_TOKEN into every dump.
+        for d in $FAKE_NO_SQL_UNDER; do
+          find "$d" -xdev -name '*.sql' -type f -exec grep -lF "$FAKE_TOKEN" {} + 2>/dev/null | sed 's/^/SQL FILE ON DISK: /' >> "$FAKE_LOG"
+        done
+        if [ "$rc" -ne 0 ]; then
+          echo "Fatal: unable to save snapshot: command failed: exit status $rc" >&2
+          exit 1
+        fi
+        cat "$FAKE_BACKUP_OUT"; exit 0 ;;
+    esac
+    cat "$FAKE_BACKUP_OUT"; exit "${FAKE_BACKUP_EXIT:-0}" ;;
+  stats)
+    if [ -n "$FAKE_STATS_EXIT" ]; then echo "stats failed" >&2; exit "$FAKE_STATS_EXIT"; fi
+    echo "{\"total_size\":${FAKE_STATS_SIZE:-4096},\"total_uncompressed_size\":8192,\"snapshots_count\":2}"
+    exit 0 ;;
   snapshots) cat "$FAKE_SNAPSHOTS_OUT"; exit 0 ;;
   restore)
     shift
@@ -41,6 +67,18 @@ case "$1" in
   forget|check|init) exit "${FAKE_OTHER_EXIT:-0}" ;;
 esac
 exit 0
+`
+
+// fakeMysqldump logs its arguments to $FAKE_LOG.mysqldump, prints a small
+// dump of the database named last (with FAKE_TOKEN in it), and exits 2 when that database is
+// listed in FAKE_MYSQLDUMP_FAIL (space-separated).
+const fakeMysqldump = `#!/bin/sh
+echo "$*" >> "$FAKE_LOG.mysqldump"
+for a in "$@"; do db="$a"; done
+case " $FAKE_MYSQLDUMP_FAIL " in
+  *" $db "*) echo "mysqldump: Got error: 1049: \"Unknown database '$db'\" when selecting the database" >&2; exit 2 ;;
+esac
+printf -- '-- fake dump of %s (%s)\nCREATE TABLE t (id int);\nINSERT INTO t VALUES (1);\n' "$db" "$FAKE_TOKEN"
 `
 
 const fakeDoveadm = `#!/bin/sh
@@ -85,6 +123,7 @@ func FakeRestic(t *testing.T) (string, map[string]string, func() string) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "log")
 	env := map[string]string{
+		"FAKE_TOKEN":         "relical-test-" + dir, // unique per test
 		"FAKE_LOG":           log,
 		"FAKE_BACKUP_OUT":    filepath.Join(dir, "backup.out"),
 		"FAKE_SNAPSHOTS_OUT": filepath.Join(dir, "snapshots.out"),
@@ -97,6 +136,14 @@ func FakeRestic(t *testing.T) (string, map[string]string, func() string) {
 			`{"id":"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210","time":"2026-10-15T02:00:00Z","paths":["/m"],"hostname":"h","tags":["mail"]}]`), 0o600)
 	read := func() string { b, _ := os.ReadFile(log); return string(b) }
 	return write(t, "restic", fakeRestic), env, read
+}
+
+// FakeMysqldump returns a fake mysqldump; see fakeMysqldump. Its argument
+// log is env["FAKE_LOG"]+".mysqldump", and what restic stored from its
+// stdout is env["FAKE_LOG"]+".stdin".
+func FakeMysqldump(t *testing.T) string {
+	t.Helper()
+	return write(t, "mysqldump", fakeMysqldump)
 }
 
 // FakeDoveadm returns a fake doveadm that logs to env["FAKE_LOG"].

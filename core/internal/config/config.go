@@ -59,6 +59,7 @@ type Config struct {
 	ServerID           string                 `json:"server_id"`
 	ResticBin          string                 `json:"restic_bin"`
 	DoveadmBin         string                 `json:"doveadm_bin"`
+	MysqldumpBin       string                 `json:"mysqldump_bin"`
 	StateDir           string                 `json:"state_dir"`
 	KeysDir            string                 `json:"keys_dir"`
 	MailboxPattern     string                 `json:"mailbox_pattern"`
@@ -137,6 +138,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.DoveadmBin == "" {
 		c.DoveadmBin = "doveadm"
+	}
+	if c.MysqldumpBin == "" {
+		c.MysqldumpBin = "mysqldump"
 	}
 	if c.Retention == (Retention{}) {
 		c.Retention = Retention{Daily: 14, Weekly: 8, Monthly: 12}

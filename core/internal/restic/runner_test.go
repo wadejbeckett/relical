@@ -88,12 +88,60 @@ func TestSnapshotsAndShortID(t *testing.T) {
 
 func TestForgetArgs(t *testing.T) {
 	r, _, log := fake(t)
-	if err := r.Forget(context.Background(), "backup", config.Retention{Daily: 14, Weekly: 8, Monthly: 12}, true); err != nil {
+	if err := r.Forget(context.Background(), "tags", config.Retention{Daily: 14, Weekly: 8, Monthly: 12}, true); err != nil {
 		t.Fatal(err)
 	}
-	want := "--retry-lock 30m forget --tag backup --group-by host,tags --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune"
+	want := "--retry-lock 30m forget --group-by tags --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune"
 	if !strings.Contains(log(), want) {
 		t.Errorf("%s\nwant %s", log(), want)
+	}
+}
+
+func TestBackupExtraFlags(t *testing.T) {
+	r, _, log := fake(t)
+	if _, err := r.Backup(context.Background(), []string{"/w"}, []string{"files"}, []string{"/w/tmp/**"}, "--exclude-caches"); err != nil {
+		t.Fatal(err)
+	}
+	want := "--retry-lock 30m backup --json --one-file-system --exclude-caches --tag files --exclude /w/tmp/** /w"
+	if got := strings.TrimSpace(log()); got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}
+
+func TestBackupStdinArgsAndFailure(t *testing.T) {
+	r, env, log := fake(t)
+	sum, err := r.BackupStdin(context.Background(), []string{"/bin/echo", "-- dump"}, "db1.sql", []string{"db", "db:db1"})
+	if err != nil || sum.SnapshotID == "" {
+		t.Fatalf("%+v %v", sum, err)
+	}
+	want := "--retry-lock 30m backup --json --stdin-from-command --stdin-filename db1.sql --tag db --tag db:db1 -- /bin/echo -- dump"
+	if got := strings.TrimSpace(log()); got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+	if b, _ := os.ReadFile(env["FAKE_LOG"] + ".stdin"); string(b) != "-- dump\n" {
+		t.Errorf("stdin = %q", b)
+	}
+	if _, err := r.BackupStdin(context.Background(), []string{"/bin/false"}, "db1.sql", nil); ExitCode(err) != 1 || !strings.Contains(err.Error(), "command failed") {
+		t.Errorf("failing command: %v", err)
+	}
+	if _, err := r.BackupStdin(context.Background(), nil, "db1.sql", nil); err == nil {
+		t.Error("empty command accepted")
+	}
+}
+
+func TestStats(t *testing.T) {
+	r, env, log := fake(t)
+	env["FAKE_STATS_SIZE"] = "123456"
+	n, err := r.Stats(context.Background())
+	if err != nil || n != 123456 {
+		t.Fatalf("%d %v", n, err)
+	}
+	if got := strings.TrimSpace(log()); got != "stats --mode raw-data --json" {
+		t.Errorf("args = %q", got)
+	}
+	env["FAKE_STATS_EXIT"] = "1"
+	if _, err := r.Stats(context.Background()); ExitCode(err) != 1 {
+		t.Errorf("failure: %v", err)
 	}
 }
 

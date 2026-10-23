@@ -3,6 +3,7 @@
   "server_id": "host.example.test",
   "restic_bin": "/usr/local/bin/restic",
   "doveadm_bin": "/usr/bin/doveadm",
+  "mysqldump_bin": "/usr/bin/mysqldump",
   "state_dir": "/var/lib/relical",
   "keys_dir": "/etc/relical/keys",
   "roots": {

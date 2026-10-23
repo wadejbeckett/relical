@@ -1,5 +1,7 @@
 // Package job runs backup, forget and check for one subscription at a time
-// and records the outcome in state.json.
+// and records the outcome in state.json. A subscription's units (mail,
+// files, db) each have their own file; this one holds what they share:
+// the environment, results, ordering, the run lock and the state file.
 package job
 
 import (
@@ -21,11 +23,23 @@ import (
 	"github.com/wadejbeckett/relical/core/internal/restic"
 )
 
-// CommonExcludes are Dovecot's rebuildable index and cache files.
-var CommonExcludes = []string{"**/dovecot.index*", "**/dovecot.list.index*"}
+// Units, which are also the snapshot tags. A database snapshot is tagged
+// both DBTag and DBTag:<name>.
+const (
+	MailTag        = "mail"
+	FilesTag       = "files"
+	DBTag          = "db"
+	PanelConfigTag = "panel-config"
+)
 
-// MailTag tags mail snapshots.
-const MailTag = "mail"
+// RepositoryKey is the state file's unit key for results that concern a
+// whole repository rather than one unit: forget, check and stats.
+const RepositoryKey = "repository"
+
+// GroupBy groups snapshots for retention: each tag set (mail, files, and
+// db,db:<name> per database) keeps its own daily, weekly and monthly
+// snapshots.
+const GroupBy = "tags"
 
 type Env struct {
 	Cfg      *config.Config
@@ -38,6 +52,7 @@ type Env struct {
 type Result struct {
 	Subscription string    `json:"subscription"`
 	Unit         string    `json:"unit,omitempty"`
+	Database     string    `json:"database,omitempty"`
 	Action       string    `json:"action"`
 	Time         time.Time `json:"time"`
 	OK           bool      `json:"ok"`
@@ -45,9 +60,22 @@ type Result struct {
 	Mailboxes    int       `json:"mailboxes,omitempty"`
 	FilesNew     uint64    `json:"files_new,omitempty"`
 	DataAdded    uint64    `json:"data_added,omitempty"`
+	StoredBytes  uint64    `json:"stored_bytes,omitempty"`
 	Seconds      float64   `json:"seconds,omitempty"`
 	Note         string    `json:"note,omitempty"`
 	Error        string    `json:"error,omitempty"`
+}
+
+// StateKey is the result's unit key in state.json: the unit, db:<name>
+// for a database, or RepositoryKey for forget, check and stats.
+func (r Result) StateKey() string {
+	switch {
+	case r.Unit == "":
+		return RepositoryKey
+	case r.Unit == DBTag && r.Database != "":
+		return DBTag + ":" + r.Database
+	}
+	return r.Unit
 }
 
 // Prepare creates the state directories. state_dir and restore/ are 0711
@@ -127,6 +155,30 @@ func (e Env) Runner(sub inventory.Subscription) (restic.Runner, config.Destinati
 	return e.runnerWithKey(sub, kp)
 }
 
+// openRepo returns a runner for the subscription's repository, creating
+// the key and the repository on first use. A wrong password is an error,
+// never a reason to init.
+func (e Env) openRepo(ctx context.Context, sub inventory.Subscription) (restic.Runner, error) {
+	kp, _, err := keys.Ensure(e.Cfg.KeysDir, sub.Name)
+	if err != nil {
+		return restic.Runner{}, err
+	}
+	r, _, err := e.runnerWithKey(sub, kp)
+	if err != nil {
+		return restic.Runner{}, err
+	}
+	exists, err := r.Exists(ctx)
+	if err != nil {
+		return restic.Runner{}, err
+	}
+	if !exists {
+		if err := r.Init(ctx); err != nil {
+			return restic.Runner{}, err
+		}
+	}
+	return r, nil
+}
+
 func (e Env) result(sub, unit, action string) Result {
 	return Result{Subscription: sub, Unit: unit, Action: action, Time: e.Now().UTC()}
 }
@@ -136,76 +188,18 @@ func failed(r Result, err error) Result {
 	return r
 }
 
-// Mailboxes lists the mailboxes of every mail domain of the subscription.
-// A mail domain with no mail directory has no mailboxes.
-func (e Env) Mailboxes(sub inventory.Subscription) ([]locator.Mailbox, error) {
-	all := []locator.Mailbox{}
-	for _, d := range sub.MailDomains {
-		boxes, err := e.Locator.Mailboxes(d)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, boxes...)
-	}
-	return all, nil
-}
-
-// Backup backs up the subscription's mail, across all its mail domains,
-// into one snapshot tagged mail in the subscription's repository.
-func (e Env) Backup(ctx context.Context, sub inventory.Subscription) Result {
-	res := e.result(sub.Name, MailTag, "backup")
-	if !sub.Has("mail") {
-		res.OK = true
-		res.Note = "mail is not among the subscription's features; nothing to back up"
-		return res
-	}
-	boxes, err := e.Mailboxes(sub)
-	if err != nil {
-		return failed(res, err)
-	}
-	if len(boxes) == 0 {
-		return failed(res, errors.New("no mailboxes found"))
-	}
-	kp, _, err := keys.Ensure(e.Cfg.KeysDir, sub.Name)
-	if err != nil {
-		return failed(res, err)
-	}
-	r, _, err := e.runnerWithKey(sub, kp)
-	if err != nil {
-		return failed(res, err)
-	}
-	exists, err := r.Exists(ctx)
-	if err != nil {
-		return failed(res, err)
-	}
-	if !exists {
-		if err := r.Init(ctx); err != nil {
-			return failed(res, err)
-		}
-	}
-	paths := []string{}
-	excludes := append([]string{}, CommonExcludes...)
-	for _, b := range boxes {
-		paths = append(paths, b.Path)
-		p := globEscape(b.Path)
-		excludes = append(excludes, p+"/tmp/*", p+"/.*/tmp/*")
-	}
-	sum, err := r.Backup(ctx, paths, []string{MailTag}, excludes)
-	if err != nil && restic.ExitCode(err) != restic.ExitPartial {
+// saved fills res from a path backup's outcome. A partial backup (restic
+// exit 3: some files could not be read, but the snapshot was saved) is
+// OK with a note.
+func saved(res Result, sum restic.BackupSummary, err error) Result {
+	if err != nil && (restic.ExitCode(err) != restic.ExitPartial || sum.SnapshotID == "") {
 		return failed(res, err)
 	}
 	if err != nil {
-		if sum.SnapshotID == "" {
-			return failed(res, err)
-		}
 		res.Note = "restic could not read some files (they may have changed, vanished or be unreadable); the snapshot was saved: " + err.Error()
 	}
 	res.OK = true
 	res.Snapshot = sum.SnapshotID
-	res.Mailboxes = len(boxes)
 	res.FilesNew = sum.FilesNew
 	res.DataAdded = sum.DataAddedPacked
 	res.Seconds = sum.TotalDuration
@@ -217,12 +211,127 @@ func globEscape(s string) string {
 	return r.Replace(s)
 }
 
-// hasUnits reports whether this build backs up anything for sub; until
-// files and databases are implemented, only mail is.
-func hasUnits(sub inventory.Subscription) bool { return sub.Has("mail") }
+// unitOrder is the order in which a subscription's units run.
+var unitOrder = []string{MailTag, FilesTag, DBTag}
 
-const noUnits = "the subscription has no feature this version backs up; nothing to do"
+// hasUnits reports whether the subscription has any unit to back up.
+func hasUnits(sub inventory.Subscription) bool {
+	for _, u := range unitOrder {
+		if sub.Has(u) {
+			return true
+		}
+	}
+	return false
+}
 
+const noUnits = "the subscription has none of the features mail, files or db; nothing to do"
+
+// BackupSubscription backs up the subscription's units in order (mail,
+// files, db), each only when it is among the subscription's features.
+// unit, when not empty, restricts the run to that unit.
+func (e Env) BackupSubscription(ctx context.Context, sub inventory.Subscription, unit string) []Result {
+	if unit != "" && !sub.Has(unit) {
+		res := e.result(sub.Name, unit, "backup")
+		res.OK = true
+		res.Note = unit + " is not among the subscription's features; nothing to back up"
+		return []Result{res}
+	}
+	if unit == "" && !hasUnits(sub) {
+		res := e.result(sub.Name, "", "backup")
+		res.OK = true
+		res.Note = noUnits
+		return []Result{res}
+	}
+	var out []Result
+	for _, u := range unitOrder {
+		if (unit != "" && u != unit) || !sub.Has(u) {
+			continue
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		switch u {
+		case MailTag:
+			out = append(out, e.BackupMail(ctx, sub))
+		case FilesTag:
+			out = append(out, e.BackupFiles(ctx, sub))
+		case DBTag:
+			out = append(out, e.BackupDatabases(ctx, sub)...)
+		}
+	}
+	return out
+}
+
+// BackupAll backs up every subscription in inventory order, then the
+// server (the panel configuration, last), then records the stored size of
+// every repository that received a snapshot. unit, when not empty,
+// restricts the run to that unit.
+func (e Env) BackupAll(ctx context.Context, unit string) []Result {
+	results := []Result{}
+	var touched []inventory.Subscription
+	for _, s := range e.Inv.Subscriptions {
+		if ctx.Err() != nil {
+			return results
+		}
+		rs := e.BackupSubscription(ctx, s, unit)
+		results = append(results, rs...)
+		for _, r := range rs {
+			if r.Snapshot != "" {
+				touched = append(touched, s)
+				break
+			}
+		}
+	}
+	if ctx.Err() != nil {
+		return results
+	}
+	results = append(results, e.runServer(ctx, unit)...)
+	for _, s := range touched {
+		if ctx.Err() != nil {
+			break
+		}
+		results = append(results, e.Stats(ctx, s))
+	}
+	return results
+}
+
+// runServer is the hook for the server's own units, run after every
+// subscription in BackupAll.
+//
+// TASK 3 HOOK: back up panel-config into the _server repository here
+// (when unit is "" or panel-config and the inventory's server lists the
+// feature), and add _server to the repositories whose size is recorded.
+func (e Env) runServer(ctx context.Context, unit string) []Result {
+	return nil
+}
+
+// Stats records the bytes the subscription's repository stores. A failed
+// stats call is a note, never a failure: the result is OK and keeps the
+// size from the last successful call, if any.
+func (e Env) Stats(ctx context.Context, sub inventory.Subscription) Result {
+	res := e.result(sub.Name, "", "stats")
+	res.OK = true
+	r, _, err := e.Runner(sub)
+	var n uint64
+	if err == nil {
+		n, err = r.Stats(ctx)
+	}
+	if err == nil {
+		res.StoredBytes = n
+		return res
+	}
+	res.Note = "repository size not updated: " + err.Error()
+	if st, rerr := ReadState(e.Cfg.StateDir); rerr == nil {
+		if prev, ok := st[sub.Name][RepositoryKey]["stats"]; ok && prev.StoredBytes > 0 {
+			res.StoredBytes = prev.StoredBytes
+			res.Note += "; stored_bytes is from " + prev.Time.Format(time.RFC3339)
+		}
+	}
+	return res
+}
+
+// Forget applies the subscription's retention to every tag group of its
+// repository (one call per repository) and prunes when prune is local.
 func (e Env) Forget(ctx context.Context, sub inventory.Subscription) Result {
 	res := e.result(sub.Name, "", "forget")
 	if !hasUnits(sub) {
@@ -244,7 +353,7 @@ func (e Env) Forget(ctx context.Context, sub inventory.Subscription) Result {
 	if err := r.Unlock(ctx); err != nil {
 		return failed(res, err)
 	}
-	if err := r.Forget(ctx, MailTag, e.RetentionFor(sub), true); err != nil {
+	if err := r.Forget(ctx, GroupBy, e.RetentionFor(sub), true); err != nil {
 		return failed(res, err)
 	}
 	res.OK = true
@@ -288,8 +397,14 @@ func Lock(stateDir string) (func(), error) {
 	}, nil
 }
 
-func ReadState(stateDir string) (map[string]map[string]Result, error) {
-	st := map[string]map[string]Result{}
+// State is state.json: subscription -> unit key (see Result.StateKey) ->
+// action -> the last result.
+type State map[string]map[string]map[string]Result
+
+// ReadState reads state.json. Entries in an older shape (subscription ->
+// action -> result, from before units) are dropped.
+func ReadState(stateDir string) (State, error) {
+	st := State{}
 	b, err := os.ReadFile(filepath.Join(stateDir, "state.json"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return st, nil
@@ -297,7 +412,23 @@ func ReadState(stateDir string) (map[string]map[string]Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	return st, json.Unmarshal(b, &st)
+	var raw map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return nil, fmt.Errorf("state.json: %w", err)
+	}
+	for sub, units := range raw {
+		for unit, v := range units {
+			var actions map[string]Result
+			if json.Unmarshal(v, &actions) != nil {
+				continue
+			}
+			if st[sub] == nil {
+				st[sub] = map[string]map[string]Result{}
+			}
+			st[sub][unit] = actions
+		}
+	}
+	return st, nil
 }
 
 // Record merges results into state.json, written atomically.
@@ -307,10 +438,14 @@ func (e Env) Record(results []Result) error {
 		return err
 	}
 	for _, r := range results {
+		k := r.StateKey()
 		if st[r.Subscription] == nil {
-			st[r.Subscription] = map[string]Result{}
+			st[r.Subscription] = map[string]map[string]Result{}
 		}
-		st[r.Subscription][r.Action] = r
+		if st[r.Subscription][k] == nil {
+			st[r.Subscription][k] = map[string]Result{}
+		}
+		st[r.Subscription][k][r.Action] = r
 	}
 	b, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {

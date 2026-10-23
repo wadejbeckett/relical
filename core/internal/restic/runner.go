@@ -170,9 +170,11 @@ func (r Runner) Init(ctx context.Context) error {
 }
 
 // Backup returns the summary. On exit 3 (partial) it returns the summary
-// and the ExitError together, because the snapshot was saved.
-func (r Runner) Backup(ctx context.Context, paths, tags, excludes []string) (BackupSummary, error) {
+// and the ExitError together, because the snapshot was saved. extra are
+// further backup flags, such as --exclude-caches.
+func (r Runner) Backup(ctx context.Context, paths, tags, excludes []string, extra ...string) (BackupSummary, error) {
 	args := []string{"backup", "--json", "--one-file-system"}
+	args = append(args, extra...)
 	for _, t := range tags {
 		args = append(args, "--tag", t)
 	}
@@ -189,6 +191,28 @@ func (r Runner) Backup(ctx context.Context, paths, tags, excludes []string) (Bac
 		return BackupSummary{}, err
 	}
 	return sum, perr
+}
+
+// BackupStdin runs command and saves its standard output as the single
+// file filename (restic backup --stdin-from-command), so the data never
+// touches the disk unencrypted. restic 0.19 fails, and saves no
+// snapshot, when the command exits non-zero; the command's stderr is
+// part of restic's and so of the ExitError.
+func (r Runner) BackupStdin(ctx context.Context, command []string, filename string, tags []string) (BackupSummary, error) {
+	if len(command) == 0 {
+		return BackupSummary{}, errors.New("restic backup: no command for --stdin-from-command")
+	}
+	args := []string{"backup", "--json", "--stdin-from-command", "--stdin-filename", filename}
+	for _, t := range tags {
+		args = append(args, "--tag", t)
+	}
+	args = append(args, "--")
+	args = append(args, command...)
+	out, err := r.run(ctx, args...)
+	if err != nil {
+		return BackupSummary{}, err
+	}
+	return parseSummary(out)
 }
 
 func parseSummary(out []byte) (BackupSummary, error) {
@@ -234,8 +258,11 @@ func (r Runner) Snapshots(ctx context.Context, tag string) ([]Snapshot, error) {
 	return s, nil
 }
 
-func (r Runner) Forget(ctx context.Context, tag string, keep config.Retention, prune bool) error {
-	args := []string{"forget", "--tag", tag, "--group-by", "host,tags",
+// Forget applies keep to every group of snapshots (groupBy, for example
+// "tags", so mail, files and each database are kept apart) and prunes
+// when prune is set. It considers every snapshot in the repository.
+func (r Runner) Forget(ctx context.Context, groupBy string, keep config.Retention, prune bool) error {
+	args := []string{"forget", "--group-by", groupBy,
 		"--keep-daily", strconv.Itoa(keep.Daily),
 		"--keep-weekly", strconv.Itoa(keep.Weekly),
 		"--keep-monthly", strconv.Itoa(keep.Monthly)}
@@ -244,6 +271,25 @@ func (r Runner) Forget(ctx context.Context, tag string, keep config.Retention, p
 	}
 	_, err := r.run(ctx, args...)
 	return err
+}
+
+// Stats returns the bytes the repository stores (restic stats --mode
+// raw-data, total_size: after deduplication and compression).
+func (r Runner) Stats(ctx context.Context) (uint64, error) {
+	out, err := r.run(ctx, "stats", "--mode", "raw-data", "--json")
+	if err != nil {
+		return 0, err
+	}
+	var s struct {
+		TotalSize *uint64 `json:"total_size"`
+	}
+	if err := json.Unmarshal(out, &s); err != nil {
+		return 0, fmt.Errorf("restic stats: %w", err)
+	}
+	if s.TotalSize == nil {
+		return 0, errors.New("restic stats: no total_size in the output")
+	}
+	return *s.TotalSize, nil
 }
 
 func (r Runner) Check(ctx context.Context, readDataSubset string) error {

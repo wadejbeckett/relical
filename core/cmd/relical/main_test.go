@@ -105,12 +105,55 @@ func TestBackupAllThenStatus(t *testing.T) {
 		t.Fatalf("%d %s", code, out)
 	}
 	var results []map[string]any
-	if err := json.Unmarshal([]byte(out), &results); err != nil || len(results) != 1 || results[0]["ok"] != true ||
-		results[0]["subscription"] != "example.test" || results[0]["unit"] != "mail" {
+	if err := json.Unmarshal([]byte(out), &results); err != nil || len(results) != 2 || results[0]["ok"] != true ||
+		results[0]["subscription"] != "example.test" || results[0]["unit"] != "mail" ||
+		results[1]["action"] != "stats" || results[1]["stored_bytes"] != float64(4096) {
 		t.Fatalf("%v %s", err, out)
 	}
 	code, out = runCLI("-config", cfg, "status")
-	if code != 0 || !strings.Contains(out, `"example.test"`) || !strings.Contains(out, `"backup"`) {
+	var st map[string]map[string]map[string]map[string]any
+	if code != 0 || json.Unmarshal([]byte(out), &st) != nil || st["example.test"]["mail"]["backup"]["ok"] != true ||
+		st["example.test"]["repository"]["stats"]["stored_bytes"] != float64(4096) {
+		t.Fatalf("%d %s", code, out)
+	}
+}
+
+func TestBackupAllUnits(t *testing.T) {
+	root := t.TempDir()
+	cnf := filepath.Join(root, "mysql.cnf")
+	os.WriteFile(cnf, []byte("[client]\n"), 0o600)
+	sub := map[string]any{}
+	for k, v := range testSub {
+		sub[k] = v
+	}
+	sub["features"] = []string{"mail", "files", "db"}
+	sub["databases"] = []any{map[string]any{"type": "mysql", "name": "example_wp"}}
+	cfg := cliSetupWith(t, map[string]any{
+		"subscriptions": []any{sub}, "mysql": map[string]any{"defaults_file": cnf}, "mysqldump_bin": testutil.FakeMysqldump(t),
+	})
+	code, out := runCLI("-config", cfg, "backup", "--all")
+	var results []map[string]any
+	if code != 0 || json.Unmarshal([]byte(out), &results) != nil || len(results) != 4 {
+		t.Fatalf("%d %s", code, out)
+	}
+	for i, u := range []string{"mail", "files", "db", ""} {
+		if results[i]["unit"] != nil && results[i]["unit"] != u || results[i]["ok"] != true {
+			t.Errorf("result %d: %v", i, results[i])
+		}
+	}
+	if results[2]["database"] != "example_wp" {
+		t.Errorf("%v", results[2])
+	}
+	code, out = runCLI("-config", cfg, "backup", "--subscription", "example.test", "--unit", "db")
+	if code != 0 || json.Unmarshal([]byte(out), &results) != nil || len(results) != 1 || results[0]["database"] != "example_wp" {
+		t.Fatalf("%d %s", code, out)
+	}
+	code, out = runCLI("-config", cfg, "status")
+	if code != 0 || !strings.Contains(out, `"db:example_wp"`) || !strings.Contains(out, `"files"`) {
+		t.Fatalf("%d %s", code, out)
+	}
+	t.Setenv("FAKE_MYSQLDUMP_FAIL", "example_wp")
+	if code, out := runCLI("-config", cfg, "backup", "--subscription", "example.test", "--unit", "db"); code != 1 || !strings.Contains(out, `"ok": false`) {
 		t.Fatalf("%d %s", code, out)
 	}
 }
@@ -135,7 +178,7 @@ func TestUnknownSubscriptionIsJSONError(t *testing.T) {
 func TestUnimplementedUnitIsJSONError(t *testing.T) {
 	cfg := cliSetup(t)
 	for _, args := range [][]string{
-		{"backup", "--all", "--unit", "files"},
+		{"backup", "--all", "--unit", "panel-config"},
 		{"restore", "--unit", "db", "--domain", "example.test", "--mailbox", "alice"},
 	} {
 		code, out := runCLI(append([]string{"-config", cfg}, args...)...)

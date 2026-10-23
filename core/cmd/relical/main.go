@@ -28,7 +28,7 @@ commands:
   version
   inventory
   mailboxes --subscription S
-  backup    --subscription S | --all [--unit mail]
+  backup    --subscription S | --all [--unit mail|files|db]
   forget    --subscription S | --all
   check     --subscription S | --all [--read-data-subset 5%]
   snapshots --subscription S [--unit mail|files|db|panel-config]
@@ -49,10 +49,13 @@ var commandFlags = map[string][]string{
 }
 
 // units are the snapshot units of the CLI contract; implemented says
-// which ones this version can back up and restore.
+// which ones this version can back up and which it can restore.
 var (
 	units       = map[string]bool{"mail": true, "files": true, "db": true, "panel-config": true}
-	implemented = map[string]bool{"mail": true}
+	implemented = map[string]map[string]bool{
+		"backup":  {"mail": true, "files": true, "db": true},
+		"restore": {"mail": true},
+	}
 )
 
 func main() {
@@ -167,7 +170,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return emit(stdout, nil, err)
 	}
-	if (cmd == "backup" || cmd == "restore") && *unit != "" && !implemented[*unit] {
+	if impl, ok := implemented[cmd]; ok && *unit != "" && !impl[*unit] {
 		return emit(stdout, nil, fmt.Errorf("unit %s is not supported by this version of relical", *unit))
 	}
 	env := job.Env{Cfg: cfg, Locator: locator.Pattern(cfg.MailboxPattern), Now: time.Now, ExtraEnv: fakeEnvFromProcess()}
@@ -225,13 +228,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	defer unlock()
 	results := []job.Result{}
+	switch {
+	case cmd == "backup" && *all:
+		results = env.BackupAll(ctx, *unit)
+	case cmd == "backup":
+		results = append(results, env.BackupSubscription(ctx, subs[0], *unit)...)
+	}
 	for _, s := range subs {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || cmd == "backup" {
 			break
 		}
 		switch cmd {
-		case "backup":
-			results = append(results, env.Backup(ctx, s))
 		case "forget":
 			results = append(results, env.Forget(ctx, s))
 		case "check":

@@ -24,8 +24,13 @@ func setup(t *testing.T, prune string) (Env, map[string]string, func() string) {
 	keysDir := filepath.Join(root, "keys")
 	os.Mkdir(keysDir, 0o700)
 	bin, env, log := testutil.FakeRestic(t)
+	defaults := filepath.Join(root, "mysql.cnf")
+	if err := os.WriteFile(defaults, []byte("[client]\nuser=admin\npassword=x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cfg := &config.Config{
 		ServerID: "host.example.test", ResticBin: bin, StateDir: filepath.Join(root, "state"), KeysDir: keysDir,
+		MysqldumpBin: testutil.FakeMysqldump(t), MySQL: config.MySQL{DefaultsFile: defaults},
 		MailboxPattern:     mail + "/{domain}/{mailbox}/Maildir",
 		DefaultDestination: "d",
 		Destinations: map[string]config.Destination{
@@ -37,67 +42,14 @@ func setup(t *testing.T, prune string) (Env, map[string]string, func() string) {
 	inv := inventory.Inventory{Version: 2, Subscriptions: []inventory.Subscription{{
 		Name: "example.test", SysUser: "exampleuser", UID: 10001, GID: 1004, Home: "/var/www/vhosts/example.test",
 		Features: []string{"mail"}, MailDomains: []string{"example.test", "shop.example.test"},
+		Files: []string{"/var/www/vhosts/example.test"}, FileExcludes: inventory.DefaultFileExcludes,
+		Databases: []inventory.Database{{Type: "mysql", Name: "example_wp"}},
 	}}}
 	e := Env{Cfg: cfg, Inv: inv, Locator: locator.Pattern(cfg.MailboxPattern), Now: func() time.Time { return time.Date(2026, 10, 15, 2, 0, 0, 0, time.UTC) }, ExtraEnv: env}
 	if err := e.Prepare(); err != nil {
 		t.Fatal(err)
 	}
 	return e, env, log
-}
-
-func TestBackupInitsNewRepoAndExcludesTmp(t *testing.T) {
-	e, env, log := setup(t, "local")
-	env["FAKE_CAT_EXIT"] = "10"
-	r := e.Backup(context.Background(), mustSub(t, e, "example.test"))
-	if !r.OK || r.Snapshot == "" || r.Mailboxes != 2 {
-		t.Fatalf("%+v", r)
-	}
-	l := log()
-	if !strings.Contains(l, "init --repository-version 2") {
-		t.Errorf("no init:\n%s", l)
-	}
-	alice := filepath.Join(filepath.Dir(e.Cfg.StateDir), "mail/example.test/alice/Maildir")
-	for _, w := range []string{"--tag mail", "--exclude " + alice + "/tmp/*", "--exclude " + alice + "/.*/tmp/*", "--exclude **/dovecot.index*"} {
-		if !strings.Contains(l, w) {
-			t.Errorf("missing %q in\n%s", w, l)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(e.Cfg.KeysDir, "example.test.key")); err != nil {
-		t.Error("key not created")
-	}
-}
-
-func TestBackupWrongPasswordDoesNotInit(t *testing.T) {
-	e, env, log := setup(t, "local")
-	env["FAKE_CAT_EXIT"] = "12"
-	r := e.Backup(context.Background(), mustSub(t, e, "example.test"))
-	if r.OK || !strings.Contains(r.Error, "exit 12") {
-		t.Fatalf("%+v", r)
-	}
-	if strings.Contains(log(), "init") || strings.Contains(log(), "backup --json") {
-		t.Fatalf("ran init or backup after a wrong password:\n%s", log())
-	}
-}
-
-func TestBackupPartialIsOKWithNote(t *testing.T) {
-	e, env, _ := setup(t, "local")
-	env["FAKE_BACKUP_EXIT"] = "3"
-	r := e.Backup(context.Background(), mustSub(t, e, "example.test"))
-	if !r.OK || r.Snapshot == "" || r.Note == "" || !strings.Contains(r.Note, "exit 3") {
-		t.Fatalf("%+v", r)
-	}
-}
-
-func TestBackupPartialWithoutSummaryFails(t *testing.T) {
-	e, env, _ := setup(t, "local")
-	env["FAKE_BACKUP_EXIT"] = "3"
-	if err := os.WriteFile(env["FAKE_BACKUP_OUT"], []byte(`{"message_type":"status"}`+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	r := e.Backup(context.Background(), mustSub(t, e, "example.test"))
-	if r.OK || r.Snapshot != "" || r.Error == "" {
-		t.Fatalf("%+v", r)
-	}
 }
 
 // repoEnv returns the RESTIC_* variables the fake restic saw.
@@ -125,52 +77,12 @@ func TestSubscriptionNotInInventory(t *testing.T) {
 	}
 }
 
-func TestBackupWithoutMailFeatureNeverCallsRestic(t *testing.T) {
-	e, _, log := setup(t, "local")
-	sub := mustSub(t, e, "example.test")
-	sub.Features = []string{"files"}
-	for _, r := range []Result{e.Backup(context.Background(), sub), e.Forget(context.Background(), sub), e.Check(context.Background(), sub, "")} {
-		if !r.OK || r.Note == "" {
-			t.Errorf("%+v", r)
-		}
-	}
-	if log() != "" {
-		t.Fatalf("restic ran:\n%s", log())
-	}
-}
-
-func TestBackupCoversEveryMailDomain(t *testing.T) {
-	e, env, log := setup(t, "local")
-	shop := filepath.Join(filepath.Dir(e.Cfg.StateDir), "mail", "shop.example.test", "carol", "Maildir")
-	os.MkdirAll(filepath.Join(shop, "cur"), 0o700)
-	r := e.Backup(context.Background(), mustSub(t, e, "example.test"))
-	if !r.OK || r.Mailboxes != 3 || r.Subscription != "example.test" || r.Unit != "mail" {
-		t.Fatalf("%+v", r)
-	}
-	if !strings.Contains(log(), shop) || !strings.Contains(repoEnv(env), "RESTIC_REPOSITORY=/repo/example.test") {
-		t.Errorf("%s\n%s", log(), repoEnv(env))
-	}
-}
-
-func TestBackupMissingMailDomainDirIsSkipped(t *testing.T) {
-	e, _, _ := setup(t, "local")
-	// shop.example.test has no mail directory in setup.
-	if r := e.Backup(context.Background(), mustSub(t, e, "example.test")); !r.OK || r.Mailboxes != 2 {
-		t.Fatalf("%+v", r)
-	}
-	sub := mustSub(t, e, "example.test")
-	sub.MailDomains = []string{"shop.example.test"}
-	if r := e.Backup(context.Background(), sub); r.OK || !strings.Contains(r.Error, "no mailboxes") {
-		t.Fatalf("%+v", r)
-	}
-}
-
 func TestSftpArgsReachRestic(t *testing.T) {
 	e, _, log := setup(t, "local")
 	e.Cfg.Destinations["box"] = config.Destination{Repository: "sftp:u000000-sub1@u000000-sub1.your-storagebox.example:relical/{subscription}", Prune: "local", SftpArgs: "-p 23 -o StrictHostKeyChecking=yes"}
 	sub := mustSub(t, e, "example.test")
 	sub.Destination = "box"
-	if r := e.Backup(context.Background(), sub); !r.OK {
+	if r := e.BackupMail(context.Background(), sub); !r.OK {
 		t.Fatalf("%+v", r)
 	}
 	for _, l := range strings.Split(strings.TrimSpace(log()), "\n") {
@@ -192,7 +104,7 @@ func TestDestinationOverrideAndRetention(t *testing.T) {
 	if r := e.Forget(context.Background(), sub); !r.OK {
 		t.Fatalf("%+v", r)
 	}
-	if !strings.Contains(repoEnv(env), "RESTIC_REPOSITORY=/other/example.test") || !strings.Contains(log(), "forget --tag mail --group-by host,tags --keep-daily 3 --keep-weekly 0 --keep-monthly 0") {
+	if !strings.Contains(repoEnv(env), "RESTIC_REPOSITORY=/other/example.test") || !strings.Contains(log(), "forget --group-by tags --keep-daily 3 --keep-weekly 0 --keep-monthly 0 --prune") {
 		t.Errorf("%s", log())
 	}
 }
@@ -292,10 +204,17 @@ func TestLockIsExclusive(t *testing.T) {
 
 func TestRecordMergesState(t *testing.T) {
 	e, _, _ := setup(t, "local")
-	e.Record([]Result{{Subscription: "example.test", Action: "backup", OK: true, Snapshot: "a"}})
-	e.Record([]Result{{Subscription: "example.test", Action: "check", OK: true}})
+	e.Record([]Result{
+		{Subscription: "example.test", Unit: "mail", Action: "backup", OK: true, Snapshot: "a"},
+		{Subscription: "example.test", Unit: "db", Database: "example_wp", Action: "backup", OK: true, Snapshot: "b"},
+	})
+	e.Record([]Result{
+		{Subscription: "example.test", Action: "check", OK: true},
+		{Subscription: "example.test", Unit: "files", Action: "backup", OK: true, Snapshot: "c"},
+	})
 	st, err := ReadState(e.Cfg.StateDir)
-	if err != nil || st["example.test"]["backup"].Snapshot != "a" || !st["example.test"]["check"].OK {
+	if err != nil || st["example.test"]["mail"]["backup"].Snapshot != "a" || st["example.test"]["db:example_wp"]["backup"].Snapshot != "b" ||
+		st["example.test"]["files"]["backup"].Snapshot != "c" || !st["example.test"]["repository"]["check"].OK {
 		t.Fatalf("%+v %v", st, err)
 	}
 	fi, _ := os.Stat(filepath.Join(e.Cfg.StateDir, "state.json"))
@@ -309,5 +228,152 @@ func keysEnsure(t *testing.T, e Env) {
 	p := filepath.Join(e.Cfg.KeysDir, "example.test.key")
 	if err := os.WriteFile(p, []byte("k\n"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReadStateDropsOldShape(t *testing.T) {
+	e, _, _ := setup(t, "local")
+	old := `{"example.test": {"backup": {"subscription": "example.test", "action": "backup", "ok": true}}, "other.example.test": {"mail": {"backup": {"subscription": "other.example.test", "ok": true}}}}`
+	if err := os.WriteFile(filepath.Join(e.Cfg.StateDir, "state.json"), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := ReadState(e.Cfg.StateDir)
+	if err != nil || len(st["example.test"]) != 0 || !st["other.example.test"]["mail"]["backup"].OK {
+		t.Fatalf("%+v %v", st, err)
+	}
+	if err := e.Record([]Result{{Subscription: "example.test", Unit: "mail", Action: "backup", OK: true}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func allFeatures(e Env) { e.Inv.Subscriptions[0].Features = []string{"mail", "files", "db"} }
+
+// units lists "subscription unit[:database] action" per result.
+func units(rs []Result) []string {
+	var out []string
+	for _, r := range rs {
+		k := r.Subscription + " " + r.Unit
+		if r.Database != "" {
+			k += ":" + r.Database
+		}
+		out = append(out, k+" "+r.Action)
+	}
+	return out
+}
+
+func TestBackupAllOrder(t *testing.T) {
+	e, _, log := setup(t, "local")
+	allFeatures(e)
+	second := e.Inv.Subscriptions[0]
+	second.Name = "second.example.test"
+	second.MailDomains = []string{"example.test"}
+	second.Databases = []inventory.Database{{Type: "mysql", Name: "a"}, {Type: "mysql", Name: "b"}}
+	e.Inv.Subscriptions = append(e.Inv.Subscriptions, second)
+	rs := e.BackupAll(context.Background(), "")
+	want := []string{
+		"example.test mail backup", "example.test files backup", "example.test db:example_wp backup",
+		"second.example.test mail backup", "second.example.test files backup", "second.example.test db:a backup", "second.example.test db:b backup",
+		"example.test  stats", "second.example.test  stats",
+	}
+	if got := units(rs); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+	for _, r := range rs {
+		if !r.OK {
+			t.Errorf("%+v", r)
+		}
+	}
+	var calls []string
+	for _, l := range logLines(log()) {
+		f := strings.Fields(l)
+		switch {
+		case f[0] == "backup" && strings.Contains(l, "--stdin-from-command"):
+			calls = append(calls, "db "+f[len(f)-1])
+		case f[0] == "backup":
+			calls = append(calls, "backup "+f[indexOf(f, "--tag")+1])
+		case f[0] == "stats":
+			calls = append(calls, "stats")
+		}
+	}
+	wantCalls := []string{"backup mail", "backup files", "db example_wp", "backup mail", "backup files", "db a", "db b", "stats", "stats"}
+	if strings.Join(calls, "|") != strings.Join(wantCalls, "|") {
+		t.Fatalf("restic calls %q\nwant %q", calls, wantCalls)
+	}
+	if rs[7].StoredBytes != 4096 {
+		t.Errorf("stored bytes %+v", rs[7])
+	}
+}
+
+func indexOf(f []string, s string) int {
+	for i, x := range f {
+		if x == s {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestBackupAllUnitRestricts(t *testing.T) {
+	e, _, log := setup(t, "local")
+	allFeatures(e)
+	rs := e.BackupAll(context.Background(), "files")
+	if got := units(rs); strings.Join(got, "|") != "example.test files backup|example.test  stats" {
+		t.Fatalf("%q", got)
+	}
+	if strings.Contains(log(), "--tag mail") || strings.Contains(log(), "--stdin-from-command") {
+		t.Errorf("other units ran:\n%s", log())
+	}
+}
+
+func TestFeaturesGateUnits(t *testing.T) {
+	e, _, log := setup(t, "local")
+	sub := mustSub(t, e, "example.test")
+	sub.Features = []string{"files"} // mail_domains and databases are listed, but not in features
+	rs := e.BackupSubscription(context.Background(), sub, "")
+	if got := units(rs); len(got) != 1 || got[0] != "example.test files backup" || !rs[0].OK {
+		t.Fatalf("%q %+v", got, rs)
+	}
+	l := log()
+	if strings.Contains(l, "--tag mail") || strings.Contains(l, "--stdin-from-command") || !strings.Contains(l, "--tag files") {
+		t.Fatalf("%s", l)
+	}
+	for _, u := range []string{"mail", "db"} {
+		before := log()
+		rs := e.BackupSubscription(context.Background(), sub, u)
+		if len(rs) != 1 || !rs[0].OK || rs[0].Unit != u || !strings.Contains(rs[0].Note, "not among the subscription's features") {
+			t.Errorf("--unit %s: %+v", u, rs)
+		}
+		if log() != before {
+			t.Errorf("--unit %s ran restic", u)
+		}
+	}
+}
+
+func TestStatsFailureIsANote(t *testing.T) {
+	e, env, _ := setup(t, "local")
+	rs := e.BackupAll(context.Background(), "")
+	if err := e.Record(rs); err != nil {
+		t.Fatal(err)
+	}
+	env["FAKE_STATS_EXIT"] = "1"
+	e.Now = func() time.Time { return time.Date(2026, 10, 16, 2, 0, 0, 0, time.UTC) }
+	rs = e.BackupAll(context.Background(), "")
+	last := rs[len(rs)-1]
+	if last.Action != "stats" || !last.OK || last.StoredBytes != 4096 || !strings.Contains(last.Note, "restic stats: exit 1") || !strings.Contains(last.Note, "2026-10-15") {
+		t.Fatalf("%+v", last)
+	}
+}
+
+func TestStatsOnlyForRepositoriesWithASnapshot(t *testing.T) {
+	e, env, log := setup(t, "local")
+	env["FAKE_CAT_EXIT"] = "12" // wrong password: no backup succeeds
+	rs := e.BackupAll(context.Background(), "")
+	for _, r := range rs {
+		if r.Action == "stats" {
+			t.Fatalf("stats after a run without snapshots: %+v", r)
+		}
+	}
+	if strings.Contains(log(), "stats") {
+		t.Fatal(log())
 	}
 }

@@ -37,8 +37,8 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ResticBin != "restic" || c.DoveadmBin != "doveadm" {
-		t.Errorf("binaries = %q, %q", c.ResticBin, c.DoveadmBin)
+	if c.ResticBin != "restic" || c.DoveadmBin != "doveadm" || c.MysqldumpBin != "mysqldump" {
+		t.Errorf("binaries = %q, %q, %q", c.ResticBin, c.DoveadmBin, c.MysqldumpBin)
 	}
 	if c.Retention != (Retention{Daily: 14, Weekly: 8, Monthly: 12}) {
 		t.Errorf("retention = %+v", c.Retention)
