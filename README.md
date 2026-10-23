@@ -1,6 +1,6 @@
 # Relical
 
-Mail backup and archiving for hosting servers, built on restic. A panel-neutral core (`core/`) with thin control-panel adapters (`panels/`, starting with Plesk). Part of the Noiz Déjà Vu backup range.
+Backup for hosting servers (mail, website files, databases and the panel configuration), built on restic. A panel-neutral core (`core/`) with thin control-panel adapters (`panels/`, starting with Plesk). Part of the Noiz Déjà Vu backup range.
 
 Status: phase 2 in development (mail, website files and databases are backed up per subscription; mail can be restored; file and database restores and the panel configuration are being added). Not ready for production.
 
@@ -195,12 +195,13 @@ Copy `packaging/config.example.json` to `/etc/relical/config.json` and set mode 
 - `version`: must be `2`. A version 1 configuration (with `domains` and `{domain}` repositories) is refused; there is no automatic migration.
 - `roots`: the directories inventory paths must lie under: `files` (default `["/var/www/vhosts"]`) and `mail` (default `["/var/qmail/mailnames"]`).
 - `mailbox_pattern`: where a mail domain's mailboxes live, with `{domain}` and `{mailbox}` once each, under a mail root (default `/var/qmail/mailnames/{domain}/{mailbox}/Maildir`, the Plesk layout).
-- `destinations`: named restic repositories. `repository` must contain `{subscription}` once, so each subscription gets its own repository (the panel configuration uses the name `_server`); `env` holds the variables restic needs to reach it. For an `sftp:` repository, `sftp_args` (one line) is passed to restic as `-o sftp.args=<value>`, for example `-p 23 -i /etc/relical/ssh/id_ed25519`. `default_destination` applies to every subscription that does not name its own `destination`.
+- `destinations`: named restic repositories. `repository` must contain `{subscription}` once, so each subscription gets its own repository (the panel configuration uses the name `_server`); `env` holds the variables restic needs to reach it. For an `sftp:` repository, `sftp_args` (one line) is passed to restic as `-o sftp.args=<value>`, for example `-p 23 -i /etc/relical/ssh/id_ed25519`. restic splits the value on spaces and cannot quote, so it must not contain `"` and no path in it may contain a space; commas are kept. When an `sftp://host:port/` repository URL carries a port, `sftp_args` must not set one as well (`-p` or `-o Port`). `{subscription}` must be a whole path component of the repository (after `/` or `:`, followed by `/` or the end). `default_destination` applies to every subscription that does not name its own `destination`.
 - `prune` (required in each destination, `"local"` or `"remote"`): `local` runs `forget --prune` from this server. `remote` is for append-only destinations (for example rest-server with `--append-only`): the server cannot delete there, so `relical forget` does nothing but report that pruning runs on the destination host.
 - `retention`: snapshots to keep (daily, weekly, monthly; default 14, 8, 12). A subscription's own `retention` overrides it.
 - `limit_upload_kib` and `low_priority`: limit upload bandwidth and run restic under `nice` and `ionice`.
 - `mysql.defaults_file`: the MySQL client options file (mode 0600) used for database dumps. `mysqldump_bin` names the `mysqldump` binary (default `mysqldump`, found on `PATH`).
 - `keys_dir`: a random restic password per subscription is created here on the first backup (`<subscription>.key`, mode 0600). Create the directory beforehand with mode 0700; `state_dir` is created automatically. Losing a key loses that subscription's backups, so keep a copy somewhere safe.
+- Repository owners: on a subscription's first backup, its inventory `id` is written next to its key (`<subscription>.id`, mode 0600). Every later `backup`, `snapshots`, `restore`, `forget` and `check` compares the inventory's id with it and refuses on a mismatch, naming both ids. This stops a subscription that reuses a name (a deleted subscription's name taken by a new customer, or a rename onto an old name) from writing into, or restoring from, the previous owner's repository. To give the name a new repository, move the old `.key` and `.id` files and the repository itself aside; Relical never deletes them. A subscription without an `id` (possible only in a static inventory) records no owner.
 
 ### The inventory
 
@@ -211,16 +212,16 @@ The inventory says which subscriptions are covered. It is given in one of two wa
 
       "inventory_command": ["/usr/sbin/plesk", "bin", "extension", "--exec", "relical", "inventory.php"]
 
-  The output must be `{"version": 2, "subscriptions": [...]}`, optionally with `server` (unless the configuration has one) and `skipped`. The command gets 60 seconds and at most 16 MiB of output; a non-zero exit fails the run with its exit code and standard error.
+  The output must be `{"version": 2, "subscriptions": [...]}`, optionally with `server` (unless the configuration has one) and `skipped`; every subscription must have an `id`. The command runs with `PATH` as its only environment variable, in its own process group. It gets 60 seconds and at most 16 MiB of output; on a timeout the whole process group is killed. A non-zero exit fails the run with its exit code and standard error.
 
 Each subscription has:
 
-- `name`: the subscription's main domain (lower case), which names its repository and key; `_server` is reserved. `id` is the panel's stable id, if it has one.
-- `renamed_from`: the subscription's previous name, when the panel renamed it. Backups then go to a new repository under the new name; the old repository is left as it is, and `relical inventory` lists the rename under `renamed`.
+- `name`: the subscription's main domain (lower case), which names its repository and key; `_server` is reserved. `id` is the panel's stable id, which ties the repository to the subscription (see Repository owners); required from `inventory_command`, optional in a static inventory.
+- `renamed_from`: the subscription's previous name, when the panel renamed it (two subscriptions cannot give the same one). Backups then go to a new repository under the new name; the old repository is left as it is, and `relical inventory` lists the rename under `renamed`.
 - `features`: which units are backed up: `mail`, `files`, `db`.
-- `mail_domains`: the domains whose mailboxes belong to the subscription. A mail domain belongs to one subscription only.
-- `sys_user`, `uid`, `gid`, `home`: the system user and webspace root, which file and database restores write into. They may be left empty (uid and gid 0) only when `features` contains neither `files` nor `db`.
-- `files`: the backed-up directories (usually `[home]`), each a clean absolute path under a files root; `file_excludes`: patterns relative to each of them (default `logs/**`, `statistics/logs/**`, `tmp/**`, `.cagefs/**`).
+- `mail_domains`: the domains whose mailboxes belong to the subscription. A mail domain belongs to one subscription only, and may not be another subscription's name.
+- `sys_user`, `uid`, `gid`, `home`: the system user and webspace root, which file and database restores write into. They may be left empty (uid and gid 0) only when `features` contains neither `files` nor `db`. `home` must be `<files root>/<name>`; no two subscriptions' homes may be equal or nested. `uid` and `gid` must be those of `sys_user` on the system: they are not checked against it here, and file and database restores will check them before writing.
+- `files`: the backed-up directories (usually `[home]`), each equal to `home` or under it; `file_excludes`: patterns relative to each of them (default `logs/**`, `statistics/logs/**`, `tmp/**`, `.cagefs/**`).
 - `databases`: `{"type": "mysql", "name": "..."}` entries.
 - `destination` and `retention`: overrides of the defaults, or empty and `null`.
 

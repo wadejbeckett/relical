@@ -158,7 +158,7 @@ func TestBackupAllUnits(t *testing.T) {
 	}
 }
 
-func TestFailedDomainExitsOne(t *testing.T) {
+func TestFailedSubscriptionExitsOne(t *testing.T) {
 	cfg := cliSetup(t)
 	t.Setenv("FAKE_CAT_EXIT", "12")
 	code, out := runCLI("-config", cfg, "backup", "--subscription", "example.test")

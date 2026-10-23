@@ -1,4 +1,6 @@
 VERSION ?= 0.1.0-dev
+RELICAL_RESTIC ?= $(CURDIR)/.tools/restic
+RELICAL_REST_SERVER ?= $(CURDIR)/.tools/rest-server
 .PHONY: tools test integration e2e build
 
 tools:
@@ -8,7 +10,7 @@ test:
 	cd core && go vet ./... && go test -count=1 ./...
 
 integration:
-	cd core && RELICAL_RESTIC=$(CURDIR)/.tools/restic RELICAL_REST_SERVER=$(CURDIR)/.tools/rest-server \
+	cd core && RELICAL_RESTIC=$(RELICAL_RESTIC) RELICAL_REST_SERVER=$(RELICAL_REST_SERVER) \
 		go test -tags integration -count=1 ./...
 
 e2e:

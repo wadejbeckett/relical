@@ -53,13 +53,8 @@ cat > /etc/relical/config.json <<'EOC'
     {
       "id": "1",
       "name": "example.test",
-      "sys_user": "popuser",
-      "uid": 2000,
-      "gid": 2000,
-      "home": "/var/www/vhosts/example.test",
       "features": ["mail"],
-      "mail_domains": ["example.test"],
-      "files": ["/var/www/vhosts/example.test"]
+      "mail_domains": ["example.test"]
     }
   ]
 }
