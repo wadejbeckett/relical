@@ -1,5 +1,5 @@
-// Package job runs backup, forget and check for one domain at a time and
-// records the outcome in state.json.
+// Package job runs backup, forget and check for one subscription at a time
+// and records the outcome in state.json.
 package job
 
 import (
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wadejbeckett/relical/core/internal/config"
+	"github.com/wadejbeckett/relical/core/internal/inventory"
 	"github.com/wadejbeckett/relical/core/internal/keys"
 	"github.com/wadejbeckett/relical/core/internal/locator"
 	"github.com/wadejbeckett/relical/core/internal/restic"
@@ -23,25 +24,30 @@ import (
 // CommonExcludes are Dovecot's rebuildable index and cache files.
 var CommonExcludes = []string{"**/dovecot.index*", "**/dovecot.list.index*"}
 
+// MailTag tags mail snapshots.
+const MailTag = "mail"
+
 type Env struct {
 	Cfg      *config.Config
+	Inv      inventory.Inventory
 	Locator  locator.Pattern
 	Now      func() time.Time
 	ExtraEnv map[string]string // tests only
 }
 
 type Result struct {
-	Domain    string    `json:"domain"`
-	Action    string    `json:"action"`
-	Time      time.Time `json:"time"`
-	OK        bool      `json:"ok"`
-	Snapshot  string    `json:"snapshot,omitempty"`
-	Mailboxes int       `json:"mailboxes,omitempty"`
-	FilesNew  uint64    `json:"files_new,omitempty"`
-	DataAdded uint64    `json:"data_added,omitempty"`
-	Seconds   float64   `json:"seconds,omitempty"`
-	Note      string    `json:"note,omitempty"`
-	Error     string    `json:"error,omitempty"`
+	Subscription string    `json:"subscription"`
+	Unit         string    `json:"unit,omitempty"`
+	Action       string    `json:"action"`
+	Time         time.Time `json:"time"`
+	OK           bool      `json:"ok"`
+	Snapshot     string    `json:"snapshot,omitempty"`
+	Mailboxes    int       `json:"mailboxes,omitempty"`
+	FilesNew     uint64    `json:"files_new,omitempty"`
+	DataAdded    uint64    `json:"data_added,omitempty"`
+	Seconds      float64   `json:"seconds,omitempty"`
+	Note         string    `json:"note,omitempty"`
+	Error        string    `json:"error,omitempty"`
 }
 
 // Prepare creates the state directories. state_dir and restore/ are 0711
@@ -66,8 +72,35 @@ func (e Env) Prepare() error {
 	return nil
 }
 
-func (e Env) runnerWithKey(domain, keyPath string) (restic.Runner, config.Destination, error) {
-	_, dst, err := e.Cfg.DestinationFor(domain)
+// Subscription returns the inventory entry for name. config.ServerName
+// stands for the panel configuration's repository, on the default
+// destination.
+func (e Env) Subscription(name string) (inventory.Subscription, error) {
+	if name == config.ServerName {
+		return inventory.Subscription{Name: name}, nil
+	}
+	if s, ok := e.Inv.Find(name); ok {
+		return s, nil
+	}
+	return inventory.Subscription{}, fmt.Errorf("subscription %s is not in the inventory", name)
+}
+
+// DestinationFor returns the subscription's destination (its own when set,
+// else the default) with the repository named after the subscription.
+func (e Env) DestinationFor(sub inventory.Subscription) (string, config.Destination, error) {
+	return e.Cfg.DestinationFor(sub.Destination, sub.Name)
+}
+
+// RetentionFor returns the subscription's retention, else the default.
+func (e Env) RetentionFor(sub inventory.Subscription) config.Retention {
+	if sub.Retention != nil {
+		return *sub.Retention
+	}
+	return e.Cfg.Retention
+}
+
+func (e Env) runnerWithKey(sub inventory.Subscription, keyPath string) (restic.Runner, config.Destination, error) {
+	_, dst, err := e.DestinationFor(sub)
 	if err != nil {
 		return restic.Runner{}, dst, err
 	}
@@ -85,17 +118,17 @@ func (e Env) runnerWithKey(domain, keyPath string) (restic.Runner, config.Destin
 	}, dst, nil
 }
 
-// Runner returns a runner for a domain that already has a key.
-func (e Env) Runner(domain string) (restic.Runner, config.Destination, error) {
-	kp, err := keys.Path(e.Cfg.KeysDir, domain)
+// Runner returns a runner for a subscription that already has a key.
+func (e Env) Runner(sub inventory.Subscription) (restic.Runner, config.Destination, error) {
+	kp, err := keys.Path(e.Cfg.KeysDir, sub.Name)
 	if err != nil {
 		return restic.Runner{}, config.Destination{}, err
 	}
-	return e.runnerWithKey(domain, kp)
+	return e.runnerWithKey(sub, kp)
 }
 
-func (e Env) result(domain, action string) Result {
-	return Result{Domain: domain, Action: action, Time: e.Now().UTC()}
+func (e Env) result(sub, unit, action string) Result {
+	return Result{Subscription: sub, Unit: unit, Action: action, Time: e.Now().UTC()}
 }
 
 func failed(r Result, err error) Result {
@@ -103,23 +136,44 @@ func failed(r Result, err error) Result {
 	return r
 }
 
-func (e Env) Backup(ctx context.Context, domain string) Result {
-	res := e.result(domain, "backup")
-	if !e.Cfg.Enabled(domain) {
-		return failed(res, fmt.Errorf("domain %s is not enabled in the config", domain))
+// Mailboxes lists the mailboxes of every mail domain of the subscription.
+// A mail domain with no mail directory has no mailboxes.
+func (e Env) Mailboxes(sub inventory.Subscription) ([]locator.Mailbox, error) {
+	all := []locator.Mailbox{}
+	for _, d := range sub.MailDomains {
+		boxes, err := e.Locator.Mailboxes(d)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, boxes...)
 	}
-	boxes, err := e.Locator.Mailboxes(domain)
+	return all, nil
+}
+
+// Backup backs up the subscription's mail, across all its mail domains,
+// into one snapshot tagged mail in the subscription's repository.
+func (e Env) Backup(ctx context.Context, sub inventory.Subscription) Result {
+	res := e.result(sub.Name, MailTag, "backup")
+	if !sub.Has("mail") {
+		res.OK = true
+		res.Note = "mail is not among the subscription's features; nothing to back up"
+		return res
+	}
+	boxes, err := e.Mailboxes(sub)
 	if err != nil {
 		return failed(res, err)
 	}
 	if len(boxes) == 0 {
 		return failed(res, errors.New("no mailboxes found"))
 	}
-	kp, _, err := keys.Ensure(e.Cfg.KeysDir, domain)
+	kp, _, err := keys.Ensure(e.Cfg.KeysDir, sub.Name)
 	if err != nil {
 		return failed(res, err)
 	}
-	r, _, err := e.runnerWithKey(domain, kp)
+	r, _, err := e.runnerWithKey(sub, kp)
 	if err != nil {
 		return failed(res, err)
 	}
@@ -139,7 +193,7 @@ func (e Env) Backup(ctx context.Context, domain string) Result {
 		p := globEscape(b.Path)
 		excludes = append(excludes, p+"/tmp/*", p+"/.*/tmp/*")
 	}
-	sum, err := r.Backup(ctx, paths, []string{"backup"}, excludes)
+	sum, err := r.Backup(ctx, paths, []string{MailTag}, excludes)
 	if err != nil && restic.ExitCode(err) != restic.ExitPartial {
 		return failed(res, err)
 	}
@@ -163,9 +217,20 @@ func globEscape(s string) string {
 	return r.Replace(s)
 }
 
-func (e Env) Forget(ctx context.Context, domain string) Result {
-	res := e.result(domain, "forget")
-	r, dst, err := e.Runner(domain)
+// hasUnits reports whether this build backs up anything for sub; until
+// files and databases are implemented, only mail is.
+func hasUnits(sub inventory.Subscription) bool { return sub.Has("mail") }
+
+const noUnits = "the subscription has no feature this version backs up; nothing to do"
+
+func (e Env) Forget(ctx context.Context, sub inventory.Subscription) Result {
+	res := e.result(sub.Name, "", "forget")
+	if !hasUnits(sub) {
+		res.OK = true
+		res.Note = noUnits
+		return res
+	}
+	r, dst, err := e.Runner(sub)
 	if err != nil {
 		return failed(res, err)
 	}
@@ -179,16 +244,21 @@ func (e Env) Forget(ctx context.Context, domain string) Result {
 	if err := r.Unlock(ctx); err != nil {
 		return failed(res, err)
 	}
-	if err := r.Forget(ctx, "backup", e.Cfg.Retention, true); err != nil {
+	if err := r.Forget(ctx, MailTag, e.RetentionFor(sub), true); err != nil {
 		return failed(res, err)
 	}
 	res.OK = true
 	return res
 }
 
-func (e Env) Check(ctx context.Context, domain, subset string) Result {
-	res := e.result(domain, "check")
-	r, _, err := e.Runner(domain)
+func (e Env) Check(ctx context.Context, sub inventory.Subscription, subset string) Result {
+	res := e.result(sub.Name, "", "check")
+	if !hasUnits(sub) {
+		res.OK = true
+		res.Note = noUnits
+		return res
+	}
+	r, _, err := e.Runner(sub)
 	if err != nil {
 		return failed(res, err)
 	}
@@ -237,10 +307,10 @@ func (e Env) Record(results []Result) error {
 		return err
 	}
 	for _, r := range results {
-		if st[r.Domain] == nil {
-			st[r.Domain] = map[string]Result{}
+		if st[r.Subscription] == nil {
+			st[r.Subscription] = map[string]Result{}
 		}
-		st[r.Domain][r.Action] = r
+		st[r.Subscription][r.Action] = r
 	}
 	b, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {

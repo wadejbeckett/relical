@@ -1,4 +1,4 @@
-// Package testutil provides fake restic and doveadm binaries for tests.
+// Package testutil provides fake restic, doveadm and inventory commands for tests.
 // They log their arguments and behave according to FAKE_* variables,
 // which tests pass through the runner's own Env (the runner does not
 // inherit the parent environment).
@@ -93,8 +93,8 @@ func FakeRestic(t *testing.T) (string, map[string]string, func() string) {
 		`{"message_type":"status","percent_done":0.5}`+"\n"+
 			`{"message_type":"summary","files_new":3,"data_added":2048,"data_added_packed":1024,"total_duration":1.5,"snapshot_id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`+"\n"), 0o600)
 	os.WriteFile(env["FAKE_SNAPSHOTS_OUT"], []byte(
-		`[{"id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","time":"2026-10-14T02:00:00Z","paths":["/m"],"hostname":"h","tags":["backup"]},`+
-			`{"id":"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210","time":"2026-10-15T02:00:00Z","paths":["/m"],"hostname":"h","tags":["backup"]}]`), 0o600)
+		`[{"id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","time":"2026-10-14T02:00:00Z","paths":["/m"],"hostname":"h","tags":["mail"]},`+
+			`{"id":"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210","time":"2026-10-15T02:00:00Z","paths":["/m"],"hostname":"h","tags":["mail"]}]`), 0o600)
 	read := func() string { b, _ := os.ReadFile(log); return string(b) }
 	return write(t, "restic", fakeRestic), env, read
 }
@@ -103,4 +103,27 @@ func FakeRestic(t *testing.T) (string, map[string]string, func() string) {
 func FakeDoveadm(t *testing.T) string {
 	t.Helper()
 	return write(t, "doveadm", fakeDoveadm)
+}
+
+// FakeInventory returns an inventory_command that prints out and exits 0.
+func FakeInventory(t *testing.T, out string) string {
+	t.Helper()
+	data := filepath.Join(t.TempDir(), "inventory.json")
+	if err := os.WriteFile(data, []byte(out), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return write(t, "inventory", "#!/bin/sh\nexec cat '"+data+"'\n")
+}
+
+// FakeInventoryFailing returns an inventory_command that prints a partial
+// inventory and an error on stderr, then exits 1.
+func FakeInventoryFailing(t *testing.T) string {
+	t.Helper()
+	return write(t, "inventory", "#!/bin/sh\necho '{\"version\": 2, \"subscriptions\": ['\necho 'panel database unreachable' >&2\nexit 1\n")
+}
+
+// FakeInventoryScript returns an inventory_command with the given shell body.
+func FakeInventoryScript(t *testing.T, body string) string {
+	t.Helper()
+	return write(t, "inventory", "#!/bin/sh\n"+body+"\n")
 }

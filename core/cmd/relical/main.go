@@ -1,4 +1,4 @@
-// Command relical backs up and restores mail with restic. Every command
+// Command relical backs up and restores hosting subscriptions with restic. Every command
 // prints JSON on stdout; panel adapters call it and never run restic.
 package main
 
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wadejbeckett/relical/core/internal/config"
+	"github.com/wadejbeckett/relical/core/internal/inventory"
 	"github.com/wadejbeckett/relical/core/internal/job"
 	"github.com/wadejbeckett/relical/core/internal/locator"
 	"github.com/wadejbeckett/relical/core/internal/restore"
@@ -23,7 +24,36 @@ import (
 var version = "0.1.0-dev"
 
 const usage = `usage: relical [-config PATH] COMMAND [flags]
-commands: version, mailboxes, backup, forget, check, snapshots, restore, status`
+commands:
+  version
+  inventory
+  mailboxes --subscription S
+  backup    --subscription S | --all [--unit mail]
+  forget    --subscription S | --all
+  check     --subscription S | --all [--read-data-subset 5%]
+  snapshots --subscription S [--unit mail|files|db|panel-config]
+  restore   [--subscription S] [--unit mail] --domain D --mailbox M [--snapshot ID] [--folder F]
+  status`
+
+// commandFlags lists the flags each command accepts.
+var commandFlags = map[string][]string{
+	"version":   {},
+	"inventory": {},
+	"status":    {},
+	"mailboxes": {"subscription"},
+	"backup":    {"subscription", "all", "unit"},
+	"forget":    {"subscription", "all"},
+	"check":     {"subscription", "all", "read-data-subset"},
+	"snapshots": {"subscription", "unit"},
+	"restore":   {"subscription", "unit", "domain", "mailbox", "snapshot", "folder"},
+}
+
+// units are the snapshot units of the CLI contract; implemented says
+// which ones this version can back up and restore.
+var (
+	units       = map[string]bool{"mail": true, "files": true, "db": true, "panel-config": true}
+	implemented = map[string]bool{"mail": true}
+)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -57,6 +87,14 @@ func fakeEnvFromProcess() map[string]string {
 	return m
 }
 
+func usageError(stderr io.Writer, msg string) int {
+	if msg != "" {
+		fmt.Fprintln(stderr, msg)
+	}
+	fmt.Fprintln(stderr, usage)
+	return 2
+}
+
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	global := flag.NewFlagSet("relical", flag.ContinueOnError)
 	global.SetOutput(stderr)
@@ -66,24 +104,20 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	rest := global.Args()
 	if len(rest) == 0 {
-		fmt.Fprintln(stderr, usage)
-		return 2
+		return usageError(stderr, "")
 	}
 	cmd, cmdArgs := rest[0], rest[1:]
-	switch cmd {
-	case "version", "mailboxes", "backup", "forget", "check", "snapshots", "restore", "status":
-	default:
-		fmt.Fprintln(stderr, usage)
-		return 2
-	}
-	if cmd == "version" {
-		return emit(stdout, map[string]string{"version": version}, nil)
+	allowed, ok := commandFlags[cmd]
+	if !ok {
+		return usageError(stderr, "unknown command "+cmd)
 	}
 
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	domain := fs.String("domain", "", "domain name")
-	all := fs.Bool("all", false, "every enabled domain")
+	subName := fs.String("subscription", "", "subscription name (its main domain), or _server for the panel configuration")
+	all := fs.Bool("all", false, "every subscription in the inventory")
+	unit := fs.String("unit", "", "unit: mail, files, db or panel-config")
+	domain := fs.String("domain", "", "mail domain (restore)")
 	mailbox := fs.String("mailbox", "", "mailbox local part (restore)")
 	snapshot := fs.String("snapshot", "latest", "snapshot id or latest (restore)")
 	folder := fs.String("folder", "", "IMAP folder to restore; default the whole mailbox")
@@ -91,43 +125,99 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(cmdArgs); err != nil {
 		return 2
 	}
+	if fs.NArg() > 0 {
+		return usageError(stderr, fmt.Sprintf("%s: unexpected argument %q", cmd, fs.Arg(0)))
+	}
+	var bad []string
+	fs.Visit(func(f *flag.Flag) {
+		for _, a := range allowed {
+			if f.Name == a {
+				return
+			}
+		}
+		bad = append(bad, "--"+f.Name)
+	})
+	if len(bad) > 0 {
+		return usageError(stderr, fmt.Sprintf("%s does not take %s", cmd, strings.Join(bad, ", ")))
+	}
+	if *unit != "" && !units[*unit] {
+		return usageError(stderr, fmt.Sprintf("unknown unit %q", *unit))
+	}
+	switch cmd {
+	case "version":
+		return emit(stdout, map[string]string{"version": version}, nil)
+	case "backup", "forget", "check":
+		if (*subName == "") == !*all {
+			return usageError(stderr, "give exactly one of --subscription or --all")
+		}
+	case "mailboxes", "snapshots":
+		if *subName == "" {
+			return usageError(stderr, cmd+" needs --subscription")
+		}
+	case "restore":
+		if *domain == "" || *mailbox == "" {
+			return usageError(stderr, "restore needs --domain and --mailbox")
+		}
+		if *unit == "" {
+			*unit = "mail"
+		}
+	}
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		return emit(stdout, nil, err)
 	}
+	if (cmd == "backup" || cmd == "restore") && *unit != "" && !implemented[*unit] {
+		return emit(stdout, nil, fmt.Errorf("unit %s is not supported by this version of relical", *unit))
+	}
 	env := job.Env{Cfg: cfg, Locator: locator.Pattern(cfg.MailboxPattern), Now: time.Now, ExtraEnv: fakeEnvFromProcess()}
+	if cmd != "status" {
+		if env.Inv, err = inventory.Load(ctx, cfg); err != nil {
+			return emit(stdout, nil, err)
+		}
+	}
+	if cmd == "inventory" {
+		return emit(stdout, env.Inv, nil)
+	}
 	if err := env.Prepare(); err != nil {
 		return emit(stdout, nil, err)
 	}
 
 	switch cmd {
 	case "mailboxes":
-		boxes, err := env.Locator.Mailboxes(*domain)
-		return emit(stdout, boxes, err)
-	case "snapshots":
-		r, _, err := env.Runner(*domain)
+		sub, err := env.Subscription(*subName)
 		if err != nil {
 			return emit(stdout, nil, err)
 		}
-		snaps, err := r.Snapshots(ctx, "")
+		boxes, err := env.Mailboxes(sub)
+		return emit(stdout, boxes, err)
+	case "snapshots":
+		sub, err := env.Subscription(*subName)
+		if err != nil {
+			return emit(stdout, nil, err)
+		}
+		r, _, err := env.Runner(sub)
+		if err != nil {
+			return emit(stdout, nil, err)
+		}
+		snaps, err := r.Snapshots(ctx, *unit)
 		return emit(stdout, snaps, err)
 	case "status":
 		st, err := job.ReadState(cfg.StateDir)
 		return emit(stdout, st, err)
 	case "restore":
-		res, err := restore.Run(ctx, env, restore.Request{Domain: *domain, Mailbox: *mailbox, Snapshot: *snapshot, Folder: *folder})
+		res, err := restore.Run(ctx, env, restore.Request{Subscription: *subName, Domain: *domain, Mailbox: *mailbox, Snapshot: *snapshot, Folder: *folder})
 		return emit(stdout, res, err)
 	}
 
 	// backup, forget, check
-	if (*domain == "") == !*all {
-		fmt.Fprintln(stderr, "give exactly one of --domain or --all")
-		return 2
-	}
-	domains := cfg.Domains
-	if *domain != "" {
-		domains = []string{*domain}
+	subs := env.Inv.Subscriptions
+	if *subName != "" {
+		sub, err := env.Subscription(*subName)
+		if err != nil {
+			return emit(stdout, nil, err)
+		}
+		subs = []inventory.Subscription{sub}
 	}
 	unlock, err := job.Lock(cfg.StateDir)
 	if err != nil {
@@ -135,17 +225,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	defer unlock()
 	results := []job.Result{}
-	for _, d := range domains {
+	for _, s := range subs {
 		if ctx.Err() != nil {
 			break
 		}
 		switch cmd {
 		case "backup":
-			results = append(results, env.Backup(ctx, d))
+			results = append(results, env.Backup(ctx, s))
 		case "forget":
-			results = append(results, env.Forget(ctx, d))
+			results = append(results, env.Forget(ctx, s))
 		case "check":
-			results = append(results, env.Check(ctx, d, *subset))
+			results = append(results, env.Check(ctx, s, *subset))
 		}
 	}
 	if err := env.Record(results); err != nil {

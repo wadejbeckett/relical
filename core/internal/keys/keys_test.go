@@ -41,9 +41,18 @@ func TestEnsureRefusesOpenDir(t *testing.T) {
 	}
 }
 
-func TestEnsureRefusesBadDomain(t *testing.T) {
-	if _, _, err := Ensure(keyDir(t), "../x"); err == nil {
-		t.Fatal("bad domain accepted")
+func TestEnsureRefusesBadName(t *testing.T) {
+	for _, n := range []string{"../x", "_other", "", "Example.test"} {
+		if _, _, err := Ensure(keyDir(t), n); err == nil {
+			t.Errorf("name %q accepted", n)
+		}
+	}
+}
+
+func TestEnsureAcceptsServerName(t *testing.T) {
+	p, created, err := Ensure(keyDir(t), "_server")
+	if err != nil || !created || filepath.Base(p) != "_server.key" {
+		t.Fatalf("%s %v %v", p, created, err)
 	}
 }
 

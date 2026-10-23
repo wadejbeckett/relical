@@ -20,23 +20,29 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/wadejbeckett/relical/core/internal/inventory"
 	"github.com/wadejbeckett/relical/core/internal/job"
 	"github.com/wadejbeckett/relical/core/internal/restic"
 )
 
 type Request struct {
-	Domain   string
-	Mailbox  string
-	Snapshot string // "latest", or 8–64 hex characters
-	Folder   string // IMAP folder name; empty restores the whole mailbox
+	// Subscription owns the repository. When empty, it is the
+	// subscription whose mail_domains include Domain.
+	Subscription string
+	Domain       string
+	Mailbox      string
+	Snapshot     string // "latest", or 8–64 hex characters
+	Folder       string // IMAP folder name; empty restores the whole mailbox
 }
 
 type Result struct {
-	Domain     string `json:"domain"`
-	Mailbox    string `json:"mailbox"`
-	Snapshot   string `json:"snapshot"`
-	RestoredTo string `json:"restored_to"`
-	Messages   int    `json:"messages"`
+	Subscription string `json:"subscription"`
+	Unit         string `json:"unit"`
+	Domain       string `json:"domain"`
+	Mailbox      string `json:"mailbox"`
+	Snapshot     string `json:"snapshot"`
+	RestoredTo   string `json:"restored_to"`
+	Messages     int    `json:"messages"`
 }
 
 var snapshotRE = regexp.MustCompile(`^(latest|[0-9a-f]{8,64})$`)
@@ -119,23 +125,49 @@ func validFolder(f string) bool {
 	return len(f) <= 255
 }
 
+// subscriptionFor resolves the subscription and checks that it owns the
+// mail domain, so a restore can only read that subscription's repository.
+func subscriptionFor(env job.Env, req Request) (inventory.Subscription, error) {
+	if req.Subscription == "" {
+		if s, ok := env.Inv.ByMailDomain(req.Domain); ok {
+			return s, nil
+		}
+		return inventory.Subscription{}, fmt.Errorf("no subscription in the inventory has mail domain %q", req.Domain)
+	}
+	s, ok := env.Inv.Find(req.Subscription)
+	if !ok {
+		return inventory.Subscription{}, fmt.Errorf("subscription %s is not in the inventory", req.Subscription)
+	}
+	for _, d := range s.MailDomains {
+		if d == req.Domain {
+			return s, nil
+		}
+	}
+	return inventory.Subscription{}, fmt.Errorf("mail domain %q is not one of subscription %s's mail domains", req.Domain, s.Name)
+}
+
 func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
-	res := Result{Domain: req.Domain, Mailbox: req.Mailbox}
+	res := Result{Subscription: req.Subscription, Unit: job.MailTag, Domain: req.Domain, Mailbox: req.Mailbox}
 	if !snapshotRE.MatchString(req.Snapshot) {
 		return res, fmt.Errorf("snapshot must be latest or 8-64 hex characters, got %q", req.Snapshot)
 	}
 	if !validFolder(req.Folder) {
 		return res, errors.New("folder name contains control characters")
 	}
+	sub, err := subscriptionFor(env, req)
+	if err != nil {
+		return res, err
+	}
+	res.Subscription = sub.Name
 	box, err := env.Locator.Find(req.Domain, req.Mailbox)
 	if err != nil {
 		return res, err
 	}
-	r, _, err := env.Runner(req.Domain)
+	r, _, err := env.Runner(sub)
 	if err != nil {
 		return res, err
 	}
-	snaps, err := r.Snapshots(ctx, "backup")
+	snaps, err := r.Snapshots(ctx, job.MailTag)
 	if err != nil {
 		return res, err
 	}

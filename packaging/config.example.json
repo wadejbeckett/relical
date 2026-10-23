@@ -1,17 +1,22 @@
 {
-  "server_id": "mail.example.test",
+  "version": 2,
+  "server_id": "host.example.test",
   "restic_bin": "/usr/local/bin/restic",
   "doveadm_bin": "/usr/bin/doveadm",
   "state_dir": "/var/lib/relical",
   "keys_dir": "/etc/relical/keys",
+  "roots": {
+    "files": ["/var/www/vhosts"],
+    "mail": ["/var/qmail/mailnames"]
+  },
   "mailbox_pattern": "/var/qmail/mailnames/{domain}/{mailbox}/Maildir",
-  "domains": ["example.test"],
+  "mysql": {"defaults_file": "/etc/relical/mysql.cnf"},
   "default_destination": "archive",
   "destinations": {
     "archive": {
-      "repository": "rest:https://backup.example.test:8000/mail-example/{domain}/",
+      "repository": "rest:https://backup.example.test:8000/host-example/{subscription}/",
       "env": {
-        "RESTIC_REST_USERNAME": "mail-example",
+        "RESTIC_REST_USERNAME": "host-example",
         "RESTIC_REST_PASSWORD": "change-me",
         "RESTIC_CACERT": "/etc/relical/archive-ca.pem"
       },
@@ -20,5 +25,28 @@
   },
   "retention": {"daily": 14, "weekly": 8, "monthly": 12},
   "limit_upload_kib": 20480,
-  "low_priority": true
+  "low_priority": true,
+  "subscriptions": [
+    {
+      "id": "17",
+      "name": "example.test",
+      "renamed_from": "",
+      "sys_user": "exampleuser",
+      "uid": 10001,
+      "gid": 1004,
+      "home": "/var/www/vhosts/example.test",
+      "features": ["mail", "files", "db"],
+      "mail_domains": ["example.test", "shop.example.test"],
+      "files": ["/var/www/vhosts/example.test"],
+      "file_excludes": ["logs/**", "statistics/logs/**", "tmp/**"],
+      "databases": [{"type": "mysql", "name": "example_wp"}],
+      "destination": "",
+      "retention": null
+    }
+  ],
+  "server": {
+    "features": ["panel-config"],
+    "config_command": ["/usr/sbin/plesk", "bin", "pleskbackup", "--server", "-exclude-mail", "-exclude-files", "-exclude-databases", "-exclude-logs", "-include-server-settings", "-output-file", "{output}"],
+    "config_ext": "tar"
+  }
 }

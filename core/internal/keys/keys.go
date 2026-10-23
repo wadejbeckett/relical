@@ -1,6 +1,7 @@
-// Package keys manages one random restic repository password per domain.
-// Losing a key loses that domain's backups: escrow copies are an
-// operational duty (SCOPE §6).
+// Package keys manages one random restic repository password per
+// repository: one per subscription, plus one for the panel configuration
+// (config.ServerName). Losing a key loses that repository's backups:
+// escrow copies are an operational duty (SCOPE §6).
 package keys
 
 import (
@@ -26,14 +27,14 @@ func checkDir(dir string) error {
 	return nil
 }
 
-func keyPath(dir, domain string) (string, error) {
-	if !config.ValidDomain(domain) {
-		return "", fmt.Errorf("invalid domain %q", domain)
+func keyPath(dir, name string) (string, error) {
+	if !config.ValidRepoName(name) {
+		return "", fmt.Errorf("invalid subscription name %q", name)
 	}
 	if err := checkDir(dir); err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, domain+".key"), nil
+	return filepath.Join(dir, name+".key"), nil
 }
 
 func checkFile(p string, fi fs.FileInfo) error {
@@ -46,23 +47,23 @@ func checkFile(p string, fi fs.FileInfo) error {
 	return nil
 }
 
-// Path returns the existing key file for domain.
-func Path(dir, domain string) (string, error) {
-	p, err := keyPath(dir, domain)
+// Path returns the existing key file for a subscription.
+func Path(dir, name string) (string, error) {
+	p, err := keyPath(dir, name)
 	if err != nil {
 		return "", err
 	}
 	fi, err := os.Stat(p)
 	if err != nil {
-		return "", fmt.Errorf("no key for %s: %w", domain, err)
+		return "", fmt.Errorf("no key for %s: %w", name, err)
 	}
 	return p, checkFile(p, fi)
 }
 
-// Ensure returns the key file for domain, creating a new random key if
-// none exists. It never replaces an existing key.
-func Ensure(dir, domain string) (string, bool, error) {
-	p, err := keyPath(dir, domain)
+// Ensure returns the key file for a subscription, creating a new random
+// key if none exists. It never replaces an existing key.
+func Ensure(dir, name string) (string, bool, error) {
+	p, err := keyPath(dir, name)
 	if err != nil {
 		return "", false, err
 	}

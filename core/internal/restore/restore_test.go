@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wadejbeckett/relical/core/internal/config"
+	"github.com/wadejbeckett/relical/core/internal/inventory"
 	"github.com/wadejbeckett/relical/core/internal/job"
 	"github.com/wadejbeckett/relical/core/internal/locator"
 	"github.com/wadejbeckett/relical/core/internal/testutil"
@@ -26,10 +27,16 @@ func setup(t *testing.T) (job.Env, map[string]string, func() string) {
 	cfg := &config.Config{
 		ServerID: "h", ResticBin: bin, DoveadmBin: testutil.FakeDoveadm(t),
 		StateDir: filepath.Join(root, "state"), KeysDir: keysDir,
-		MailboxPattern: mail + "/{domain}/{mailbox}/Maildir", Domains: []string{"example.test"},
-		DefaultDestination: "d", Destinations: map[string]config.Destination{"d": {Repository: "/repo/{domain}", Prune: "local"}},
+		MailboxPattern:     mail + "/{domain}/{mailbox}/Maildir",
+		DefaultDestination: "d", Destinations: map[string]config.Destination{"d": {Repository: "/repo/{subscription}", Prune: "local"}},
 	}
-	e := job.Env{Cfg: cfg, Locator: locator.Pattern(cfg.MailboxPattern), Now: time.Now, ExtraEnv: env}
+	inv := inventory.Inventory{Version: 2, Subscriptions: []inventory.Subscription{
+		{Name: "example.test", SysUser: "exampleuser", UID: 10001, GID: 1004, Home: "/var/www/vhosts/example.test",
+			Features: []string{"mail"}, MailDomains: []string{"example.test"}},
+		{Name: "other.example.test", SysUser: "otheruser", UID: 10002, GID: 1004, Home: "/var/www/vhosts/other.example.test",
+			Features: []string{"mail"}, MailDomains: []string{"other.example.test"}},
+	}}
+	e := job.Env{Cfg: cfg, Inv: inv, Locator: locator.Pattern(cfg.MailboxPattern), Now: time.Now, ExtraEnv: env}
 	if err := e.Prepare(); err != nil {
 		t.Fatal(err)
 	}
@@ -226,5 +233,44 @@ func TestRestoreFailsClosedWhenStatusUnreadable(t *testing.T) {
 	env["FAKE_STATUS_LONG"] = "1"
 	if _, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest"}); err == nil {
 		t.Fatal("an unreadable mailbox status was accepted")
+	}
+}
+
+func TestRestoreUsesTheSubscriptionRepository(t *testing.T) {
+	e, env, log := setup(t)
+	res, err := Run(context.Background(), e, Request{Subscription: "example.test", Domain: "example.test", Mailbox: "alice", Snapshot: "latest"})
+	if err != nil || res.Subscription != "example.test" || res.Unit != "mail" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if !strings.Contains(log(), "snapshots --json --tag mail") {
+		t.Errorf("%s", log())
+	}
+	b, _ := os.ReadFile(env["FAKE_LOG"] + ".env")
+	if !strings.Contains(string(b), "RESTIC_REPOSITORY=/repo/example.test") {
+		t.Errorf("%s", b)
+	}
+}
+
+func TestRestoreInfersSubscriptionFromMailDomain(t *testing.T) {
+	e, _, _ := setup(t)
+	res, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest"})
+	if err != nil || res.Subscription != "example.test" {
+		t.Fatalf("%+v %v", res, err)
+	}
+}
+
+func TestRestoreRefusesDomainOfAnotherSubscription(t *testing.T) {
+	e, _, log := setup(t)
+	for _, req := range []Request{
+		{Subscription: "other.example.test", Domain: "example.test", Mailbox: "alice", Snapshot: "latest"},
+		{Subscription: "nope.example.test", Domain: "example.test", Mailbox: "alice", Snapshot: "latest"},
+		{Domain: "nope.example.test", Mailbox: "alice", Snapshot: "latest"},
+	} {
+		if _, err := Run(context.Background(), e, req); err == nil {
+			t.Errorf("%+v accepted", req)
+		}
+	}
+	if log() != "" {
+		t.Errorf("restic or doveadm ran:\n%s", log())
 	}
 }
