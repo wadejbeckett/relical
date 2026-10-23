@@ -23,6 +23,7 @@ require_once __DIR__ . '/../library/autoload.php';
 try {
     $command = Command::parse(array_slice($argv, 1));
 } catch (InvalidArgumentException $e) {
+    fwrite(STDERR, 'refused: ' . $e->getMessage() . "\n");
     echo json_encode(['error' => 'refused: ' . $e->getMessage()], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE), "\n";
     exit(2);
 }
@@ -30,6 +31,7 @@ try {
 try {
     exit(Process::run($command->argv(), STDOUT, STDERR));
 } catch (Throwable $e) {
+    fwrite(STDERR, $e->getMessage() . "\n");
     echo json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE), "\n";
     exit(1);
 }

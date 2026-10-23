@@ -11,7 +11,8 @@ declare(strict_types=1);
  * atomically. The MySQL option file carries Plesk's database admin password
  * from /etc/psa/.psa.shadow; the password is never printed.
  *
- * Exit 0 with `{"ok": true, ...}`, or exit 1 with `{"error": "..."}`.
+ * Exit 0 with `{"ok": true, ...}`, or exit 1 with `{"error": "..."}` (the
+ * message also goes to stderr).
  */
 
 use Noiz\Relical\ConfigWriter;
@@ -44,6 +45,8 @@ try {
 } catch (Throwable $e) {
     // Messages come from ConfigWriter/RootFile and name paths, never values
     // read from the shadow file.
-    echo json_encode(['error' => 'write-config: ' . $e->getMessage()], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE), "\n";
+    $message = 'write-config: ' . $e->getMessage();
+    fwrite(STDERR, $message . "\n");
+    echo json_encode(['error' => $message], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE), "\n";
     exit(1);
 }
