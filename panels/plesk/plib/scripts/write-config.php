@@ -15,9 +15,8 @@ declare(strict_types=1);
  * message also goes to stderr).
  */
 
-use Noiz\Relical\ConfigWriter;
+use Noiz\Relical\ConfigFiles;
 use Noiz\Relical\Paths;
-use Noiz\Relical\RootFile;
 use Noiz\Relical\Settings;
 
 pm_Loader::registerAutoload();
@@ -26,24 +25,12 @@ pm_Context::init('relical');
 require_once __DIR__ . '/../library/autoload.php';
 
 try {
-    $config = ConfigWriter::render(Settings::fromPlesk()->configInput(), (string) gethostname());
-
-    $password = @file_get_contents(Paths::PSA_SHADOW);
-    if ($password === false) {
-        throw new RuntimeException(sprintf('could not read %s', Paths::PSA_SHADOW));
-    }
-    $optionFile = ConfigWriter::mysqlOptionFile(rtrim($password, "\r\n"));
-    unset($password);
-
-    RootFile::ensureDir(Paths::ETC_DIR);
-    RootFile::write(Paths::MYSQL_CNF, $optionFile);
-    unset($optionFile);
-    RootFile::write(Paths::CONFIG, ConfigWriter::toJson($config));
+    ConfigFiles::write(Settings::fromPlesk()->configInput(), (string) gethostname());
 
     echo json_encode(['ok' => true, 'config' => Paths::CONFIG, 'mysql_defaults_file' => Paths::MYSQL_CNF], JSON_UNESCAPED_SLASHES), "\n";
     exit(0);
 } catch (Throwable $e) {
-    // Messages come from ConfigWriter/RootFile and name paths, never values
+    // Messages come from ConfigFiles/ConfigWriter/RootFile and name paths, never values
     // read from the shadow file.
     $message = 'write-config: ' . $e->getMessage();
     fwrite(STDERR, $message . "\n");
