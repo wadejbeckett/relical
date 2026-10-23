@@ -6,3 +6,8 @@ composer.lock
 # PHPUnit
 /.phpunit.cache/
 .phpunit.result.cache
+
+# Bundled at build time (build/build-panel.sh)
+/plib/bin/relical
+/plib/bin/restic
+/plib/bin/SHA256SUMS
