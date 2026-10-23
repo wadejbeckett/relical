@@ -226,12 +226,22 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Errorf("destination %s: repository uses {domain}; config version 2 keeps one repository per subscription, so replace {domain} with {subscription}", name))
 		} else if strings.Count(dst.Repository, "{subscription}") != 1 {
 			errs = append(errs, fmt.Errorf("destination %s: repository must contain {subscription} once", name))
+		} else if !wholeComponent(dst.Repository, "{subscription}") {
+			// Otherwise /srv/b.{subscription} for a.test and /srv/{subscription}
+			// for b.a.test would be the same repository.
+			errs = append(errs, fmt.Errorf("destination %s: {subscription} must be a whole path component of the repository (after / or :, followed by / or the end)", name))
 		}
 		if dst.SftpArgs != "" && !strings.HasPrefix(dst.Repository, "sftp:") {
 			errs = append(errs, fmt.Errorf("destination %s: sftp_args is only for sftp: repositories", name))
 		}
 		if strings.ContainsAny(dst.SftpArgs, "\r\n\x00") {
 			errs = append(errs, fmt.Errorf("destination %s: sftp_args must be one line", name))
+		}
+		if strings.Contains(dst.SftpArgs, `"`) {
+			errs = append(errs, fmt.Errorf(`destination %s: sftp_args must not contain " (restic splits the value on spaces and cannot quote)`, name))
+		}
+		if sftpURLPort(dst.Repository) && setsPort(dst.SftpArgs) {
+			errs = append(errs, fmt.Errorf("destination %s: the repository URL has a port, so sftp_args must not set one (-p or -o Port)", name))
 		}
 		if dst.Prune != "local" && dst.Prune != "remote" {
 			errs = append(errs, fmt.Errorf(`destination %s: prune must be "local" or "remote"`, name))
@@ -241,6 +251,51 @@ func (c *Config) Validate() error {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
+}
+
+// wholeComponent reports whether ph is preceded by / or : and followed by
+// / or the end of s.
+func wholeComponent(s, ph string) bool {
+	i := strings.Index(s, ph)
+	if i <= 0 || (s[i-1] != '/' && s[i-1] != ':') {
+		return false
+	}
+	rest := s[i+len(ph):]
+	return rest == "" || rest[0] == '/'
+}
+
+// sftpURLPort reports whether an sftp://host:port/... repository names a port.
+func sftpURLPort(repo string) bool {
+	rest, ok := strings.CutPrefix(repo, "sftp://")
+	if !ok {
+		return false
+	}
+	host, _, _ := strings.Cut(rest, "/")
+	if i := strings.LastIndex(host, "@"); i >= 0 {
+		host = host[i+1:]
+	}
+	if strings.HasPrefix(host, "[") { // [ipv6]:port
+		_, p, _ := strings.Cut(host, "]")
+		return strings.HasPrefix(p, ":") && len(p) > 1
+	}
+	_, p, ok := strings.Cut(host, ":")
+	return ok && p != ""
+}
+
+// setsPort reports whether ssh arguments set the port.
+func setsPort(args string) bool {
+	f := strings.Fields(args)
+	for i, a := range f {
+		switch {
+		case strings.HasPrefix(a, "-p"):
+			return true
+		case strings.HasPrefix(strings.ToLower(a), "-oport"):
+			return true
+		case a == "-o" && i+1 < len(f) && strings.HasPrefix(strings.ToLower(f[i+1]), "port"):
+			return true
+		}
+	}
+	return false
 }
 
 // DestinationFor returns the named destination (the default when name is

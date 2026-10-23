@@ -15,6 +15,8 @@ const fakeRestic = `#!/bin/sh
 echo "$*" >> "$FAKE_LOG"
 env | grep -E '^RESTIC_' | sort >> "$FAKE_LOG.env"
 [ -n "$RESTIC_PASSWORD" ] && echo "LEAKED RESTIC_PASSWORD" >> "$FAKE_LOG"
+# Skip the global flags. Every global flag the runner passes takes a value
+# (-o, --limit-upload, --retry-lock); a boolean one would need its own case.
 while [ "${1#-}" != "$1" ]; do shift 2; done
 if [ -n "$FAKE_HANG" ]; then
   # Stand-in for a long restic run; restic removes its own lock on SIGTERM.

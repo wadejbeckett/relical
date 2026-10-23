@@ -107,7 +107,9 @@ var retriesLock = map[string]bool{"backup": true, "check": true, "forget": true}
 func (r Runner) command(ctx context.Context, args ...string) *exec.Cmd {
 	full := []string{}
 	if r.SftpArgs != "" {
-		full = append(full, "-o", "sftp.args="+r.SftpArgs)
+		// restic parses each -o value as CSV: quoted, a comma in the
+		// value (such as -o Ciphers=a,b) is kept instead of cutting it off.
+		full = append(full, "-o", `"sftp.args=`+strings.ReplaceAll(r.SftpArgs, `"`, `""`)+`"`)
 	}
 	if r.LimitUploadKiB > 0 {
 		full = append(full, "--limit-upload", strconv.Itoa(r.LimitUploadKiB))

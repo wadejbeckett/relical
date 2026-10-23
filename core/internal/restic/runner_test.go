@@ -163,12 +163,16 @@ func TestSftpArgsOption(t *testing.T) {
 	if err := r.Check(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := strings.TrimSpace(log()), "-o sftp.args=-p 23 -i /etc/relical/ssh/id_ed25519 --retry-lock 30m check"; got != want {
+	if got, want := strings.TrimSpace(log()), `-o "sftp.args=-p 23 -i /etc/relical/ssh/id_ed25519" --retry-lock 30m check`; got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
 	cmd := r.command(context.Background(), "snapshots")
-	if a := cmd.Args; len(a) < 3 || a[1] != "-o" || a[2] != "sftp.args=-p 23 -i /etc/relical/ssh/id_ed25519" {
+	if a := cmd.Args; len(a) < 3 || a[1] != "-o" || a[2] != `"sftp.args=-p 23 -i /etc/relical/ssh/id_ed25519"` {
 		t.Errorf("args = %q (the value must be one argument)", a)
+	}
+	r.SftpArgs = `-o Ciphers=aes128-ctr,aes256-ctr -o X="y"`
+	if a := r.command(context.Background(), "snapshots").Args; a[2] != `"sftp.args=-o Ciphers=aes128-ctr,aes256-ctr -o X=""y"""` {
+		t.Errorf("not CSV-quoted: %q", a[2])
 	}
 }
 

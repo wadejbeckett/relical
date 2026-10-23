@@ -310,3 +310,27 @@ func TestFilesExcludesAndCaches(t *testing.T) {
 		}
 	}
 }
+
+// TestSftpArgsReachSshIntact runs the real restic against a fake ssh on
+// PATH: a comma in sftp_args must reach ssh, not cut the value off.
+func TestSftpArgsReachSshIntact(t *testing.T) {
+	r := realRunner(t, "sftp:u000000-sub1@u000000-sub1.your-storagebox.example:relical/example.test")
+	dir := t.TempDir()
+	argv := filepath.Join(dir, "argv")
+	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte("#!/bin/sh\nfor a in \"$@\"; do echo \"[$a]\"; done > '"+argv+"'\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	r.SftpArgs = "-p 23 -o Ciphers=aes128-ctr,aes256-ctr -i /etc/relical/ssh/id_ed25519"
+	if _, err := r.Exists(context.Background()); err == nil {
+		t.Fatal("fake ssh connected")
+	}
+	b, err := os.ReadFile(argv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.ReplaceAll(strings.TrimSpace(string(b)), "\n", " ")
+	if !strings.Contains(got, "[-p] [23] [-o] [Ciphers=aes128-ctr,aes256-ctr] [-i] [/etc/relical/ssh/id_ed25519]") {
+		t.Errorf("ssh argv: %s", got)
+	}
+}

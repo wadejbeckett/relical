@@ -156,9 +156,52 @@ func TestSftpArgs(t *testing.T) {
 	if _, err := Load(write(t, notSftp, 0o600)); err == nil || !strings.Contains(err.Error(), "only for sftp:") {
 		t.Errorf("sftp_args on a rest: repository: %v", err)
 	}
+	quote := strings.Replace(validJSON, `"prune": "local"}`, `"prune": "local", "sftp_args": "-o ProxyCommand=\"x y\""}`, 1)
+	if _, err := Load(write(t, quote, 0o600)); err == nil || !strings.Contains(err.Error(), "must not contain \"") {
+		t.Errorf("quote: %v", err)
+	}
+	comma := strings.Replace(validJSON, `"prune": "local"}`, `"prune": "local", "sftp_args": "-p 23 -o Ciphers=aes128-ctr,aes256-ctr"}`, 1)
+	if _, err := Load(write(t, comma, 0o600)); err != nil {
+		t.Errorf("comma refused (the runner quotes it): %v", err)
+	}
+	for args, bad := range map[string]bool{"-p 23": true, "-p23": true, "-o Port=23": true, "-oPort=23": true, "-i /k -o StrictHostKeyChecking=yes": false} {
+		body := strings.Replace(validJSON, `"sftp:backup@box.example.test:/relical/{subscription}", "prune": "local"}`,
+			`"sftp://backup@box.example.test:2222//relical/{subscription}", "prune": "local", "sftp_args": "`+args+`"}`, 1)
+		_, err := Load(write(t, body, 0o600))
+		if bad != (err != nil) || (bad && !strings.Contains(err.Error(), "has a port")) {
+			t.Errorf("URL with port, sftp_args %q: %v", args, err)
+		}
+	}
+	// Without a port in the URL, -p is how the port is given.
+	noPort := strings.Replace(validJSON, `"sftp:backup@box.example.test:/relical/{subscription}", "prune": "local"}`,
+		`"sftp://backup@box.example.test//relical/{subscription}", "prune": "local", "sftp_args": "-p 23"}`, 1)
+	if _, err := Load(write(t, noPort, 0o600)); err != nil {
+		t.Errorf("sftp:// without port: %v", err)
+	}
 	newline := strings.Replace(validJSON, `"prune": "local"}`, `"prune": "local", "sftp_args": "-p 23\n-o ProxyCommand=x"}`, 1)
 	if _, err := Load(write(t, newline, 0o600)); err == nil || !strings.Contains(err.Error(), "one line") {
 		t.Errorf("newline: %v", err)
+	}
+}
+
+func TestSubscriptionIsAWholeComponent(t *testing.T) {
+	for repo, ok := range map[string]bool{
+		`/relical/b.{subscription}`: false,
+		`/relical/{subscription}.d`: false,
+		`/relical/{subscription}/`:  true,
+		`/relical/{subscription}/x`: true,
+		`/relical/x/{subscription}`: true,
+		`relical-{subscription}`:    false,
+	} {
+		body := strings.Replace(validJSON, `/relical/{subscription}`, repo, 1)
+		_, err := Load(write(t, body, 0o600))
+		if ok != (err == nil) {
+			t.Errorf("repository %s: %v", repo, err)
+		}
+	}
+	body := strings.Replace(validJSON, `sftp:backup@box.example.test:/relical/{subscription}`, `sftp:backup@box.example.test:{subscription}`, 1)
+	if _, err := Load(write(t, body, 0o600)); err != nil {
+		t.Errorf("after a colon: %v", err)
 	}
 }
 
