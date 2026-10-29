@@ -69,7 +69,8 @@ final class UnitsTest extends TestCase
         foreach (Units::SERVICES as $name) {
             self::assertStringNotContainsString('TimeoutStopSec=infinity', $units[$name], $name);
             self::assertStringContainsString("\nTimeoutStopSec=15min\n", $units[$name], $name);
-            self::assertStringContainsString("\nRuntimeMaxSec=20h\n", $units[$name], $name);
+            self::assertStringContainsString("\nTimeoutStartSec=20h\n", $units[$name], $name);
+            self::assertDoesNotMatchRegularExpression('/^RuntimeMaxSec=/m', $units[$name], 'no effect on Type=oneshot');
         }
     }
 
