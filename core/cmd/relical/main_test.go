@@ -490,3 +490,47 @@ func TestBackupAllRunsRetentionUnlessInterrupted(t *testing.T) {
 		t.Errorf("forgets %d after an interrupted run; stderr %s", forgets(), errb.String())
 	}
 }
+
+// An invalid inventory entry no longer stops the run: the valid
+// subscriptions are backed up, the invalid one is a failed result (exit
+// 1, not in the state file) and a failed row in the report.
+func TestInvalidSubscriptionIsLeftOutOfTheRun(t *testing.T) {
+	bad := map[string]any{}
+	for k, v := range testSub {
+		bad[k] = v
+	}
+	bad["id"], bad["name"], bad["mail_domains"] = "18", "bad.example.test", []string{}
+	bad["features"], bad["databases"] = []string{"db"}, []any{map[string]any{"type": "mysql", "name": "sys"}}
+	bad["home"], bad["files"] = "/var/www/vhosts/bad.example.test", []string{}
+	cfg := cliSetupWith(t, map[string]any{"subscriptions": []any{testSub, bad}})
+	code, out := runCLI("-config", cfg, "backup", "--all", "--no-forget")
+	var results []map[string]any
+	if code != 1 || json.Unmarshal([]byte(out), &results) != nil || len(results) != 3 ||
+		results[0]["subscription"] != "bad.example.test" || results[0]["ok"] != false ||
+		!strings.Contains(results[0]["error"].(string), `"sys" is a server or panel database`) ||
+		results[1]["subscription"] != "example.test" || results[1]["ok"] != true {
+		t.Fatalf("%d %s", code, out)
+	}
+	if _, out := runCLI("-config", cfg, "status"); strings.Contains(out, "bad.example.test") {
+		t.Errorf("the invalid entry is in the state file: %s", out)
+	}
+	_, out = runCLI("-config", cfg, "report")
+	var rep job.Report
+	if json.Unmarshal([]byte(out), &rep) != nil || rep.Failed != 1 || rep.OK != 1 {
+		t.Fatalf("%s", out)
+	}
+	found := false
+	for _, r := range rep.Rows {
+		found = found || (r.Subscription == "bad.example.test" && r.Unit == "inventory" && !r.OK && strings.Contains(r.Error, "invalid inventory entry"))
+	}
+	if !found {
+		t.Errorf("no failed inventory row: %s", out)
+	}
+	// Restores and listings of the valid subscription still work.
+	if code, out := runCLI("-config", cfg, "snapshots", "--subscription", "example.test"); code != 0 {
+		t.Errorf("%d %s", code, out)
+	}
+	if code, out := runCLI("-config", cfg, "snapshots", "--subscription", "bad.example.test"); code != 1 || !strings.Contains(out, "not in the inventory") {
+		t.Errorf("%d %s", code, out)
+	}
+}

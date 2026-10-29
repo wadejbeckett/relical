@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -87,11 +88,14 @@ type Rename struct {
 	Note         string `json:"note"`
 }
 
-// Skip is a subscription the adapter left out, with its reason. It is
-// informational only.
+// Skip is a subscription left out of the inventory, with its reason:
+// by the adapter (informational), or by validation (Invalid: the entry is
+// wrong, so the subscription is not backed up; report shows it as a
+// failure).
 type Skip struct {
-	Name   string `json:"name"`
-	Reason string `json:"reason"`
+	Name    string `json:"name"`
+	Reason  string `json:"reason"`
+	Invalid bool   `json:"invalid,omitempty"`
 }
 
 // UnmarshalJSON accepts a bare string (the name), an object with name
@@ -548,46 +552,133 @@ func orEmpty[T any](v []T) []T {
 	return v
 }
 
+// validate checks every subscription and the server. A subscription's own
+// errors, and a conflict between two subscriptions (a shared name, id,
+// mail domain or database, nested homes, the same renamed_from), skip the
+// subscriptions involved: each becomes a Skip with Invalid set and the
+// reasons, and the rest of the inventory still loads, so one bad entry
+// never stops every other subscription's backups and restores. Only
+// errors that belong to no subscription (the server's) are fatal.
 func validate(cfg *config.Config, subs []Subscription, server *Server, requireID bool) (Inventory, error) {
 	inv := Inventory{Version: config.Version, Subscriptions: []Subscription{}, Server: server, Renamed: []Rename{}, Skipped: []Skip{}}
-	var errs []error
-	names, ids, mailOwner, dbOwner := map[string]bool{}, map[string]string{}, map[string]string{}, map[string]string{}
+	errs := make([][]error, len(subs))
+	add := func(i int, err error) { errs[i] = append(errs[i], err) }
+	// conflict records err for every entry in idx when there are two or more.
+	conflict := func(idx []int, err func(i int) error) {
+		if len(idx) < 2 {
+			return
+		}
+		for _, i := range idx {
+			add(i, err(i))
+		}
+	}
+	others := func(subs []Subscription, idx []int, self int) string {
+		var n []string
+		for _, i := range idx {
+			if i != self {
+				n = append(n, subs[i].Name)
+			}
+		}
+		return strings.Join(n, ", ")
+	}
+	byName := map[string][]int{}
 	for i := range subs {
-		s := subs[i]
-		label := fmt.Sprintf("subscription %s", s.Name)
+		s := &subs[i]
 		switch {
 		case s.Name == config.ServerName:
-			errs = append(errs, fmt.Errorf("subscriptions[%d]: name %s is reserved for the panel configuration", i, config.ServerName))
+			add(i, fmt.Errorf("name %s is reserved for the panel configuration", config.ServerName))
 			continue
 		case !config.ValidDomain(s.Name):
-			errs = append(errs, fmt.Errorf("subscriptions[%d]: name %q is not a valid lower-case domain name", i, s.Name))
-			continue
-		case names[s.Name]:
-			errs = append(errs, fmt.Errorf("%s: listed twice", label))
+			add(i, fmt.Errorf("name %q is not a valid lower-case domain name", s.Name))
 			continue
 		}
-		names[s.Name] = true
-		for _, err := range validateSubscription(cfg, &s, requireID) {
-			errs = append(errs, fmt.Errorf("%s: %w", label, err))
+		byName[s.Name] = append(byName[s.Name], i)
+		errs[i] = append(errs[i], validateSubscription(cfg, s, requireID)...)
+	}
+	// Cross-subscription checks, over the entries with a valid name and
+	// only the values that are valid on their own: no subscription may
+	// cover another's webspace, mail or databases.
+	ids, mailOwner, dbOwner, renamedFrom := map[string][]int{}, map[string][]int{}, map[string][]int{}, map[string][]int{}
+	var homes []int
+	for _, name := range sortedKeys(byName) {
+		idx := byName[name]
+		conflict(idx, func(int) error { return errors.New("listed twice") })
+	}
+	for i := range subs {
+		s := subs[i]
+		if len(byName[s.Name]) == 0 {
+			continue // an invalid or reserved name
 		}
-		if s.ID != "" {
-			if other, ok := ids[s.ID]; ok {
-				errs = append(errs, fmt.Errorf("%s: id %q is also used by %s", label, s.ID, other))
+		if s.ID != "" && idRE.MatchString(s.ID) {
+			ids[s.ID] = append(ids[s.ID], i)
+		}
+		for _, d := range dedupe(s.MailDomains) {
+			if config.ValidDomain(d) {
+				mailOwner[d] = append(mailOwner[d], i)
+				if d != s.Name && len(byName[d]) > 0 {
+					add(i, fmt.Errorf("mail domain %s is another subscription's name", d))
+					for _, o := range byName[d] {
+						add(o, fmt.Errorf("its name is a mail domain of %s", s.Name))
+					}
+				}
 			}
-			ids[s.ID] = s.Name
 		}
-		for _, d := range s.MailDomains {
-			if other, ok := mailOwner[d]; ok && other != s.Name {
-				errs = append(errs, fmt.Errorf("%s: mail domain %s is also listed by %s", label, d, other))
-			}
-			mailOwner[d] = s.Name
-		}
+		seen := map[string]bool{}
 		for _, d := range s.Databases {
 			k := d.Type + "/" + d.Name
-			if other, ok := dbOwner[k]; ok && other != s.Name {
-				errs = append(errs, fmt.Errorf("%s: database %s (%s) is also listed by %s", label, d.Name, d.Type, other))
+			if dbTypeRE.MatchString(d.Type) && dbNameRE.MatchString(d.Name) && !seen[k] {
+				seen[k] = true
+				dbOwner[k] = append(dbOwner[k], i)
 			}
-			dbOwner[k] = s.Name
+		}
+		if checkPath(s.Home, cfg.Roots.Files) == nil && isWebspaceOf(s.Home, s.Name, cfg.Roots.Files) {
+			homes = append(homes, i)
+		}
+		if s.RenamedFrom != "" && config.ValidDomain(s.RenamedFrom) && s.RenamedFrom != s.Name {
+			renamedFrom[s.RenamedFrom] = append(renamedFrom[s.RenamedFrom], i)
+			if len(byName[s.RenamedFrom]) > 0 {
+				add(i, fmt.Errorf("renamed_from %s is still a subscription in this inventory", s.RenamedFrom))
+			}
+		}
+	}
+	for _, id := range sortedKeys(ids) {
+		idx := ids[id]
+		conflict(idx, func(i int) error { return fmt.Errorf("id %q is also used by %s", id, others(subs, idx, i)) })
+	}
+	for _, d := range sortedKeys(mailOwner) {
+		idx := mailOwner[d]
+		conflict(idx, func(i int) error { return fmt.Errorf("mail domain %s is also listed by %s", d, others(subs, idx, i)) })
+	}
+	for _, k := range sortedKeys(dbOwner) {
+		idx := dbOwner[k]
+		typ, name, _ := strings.Cut(k, "/")
+		conflict(idx, func(i int) error {
+			return fmt.Errorf("database %s (%s) is also listed by %s", name, typ, others(subs, idx, i))
+		})
+	}
+	for _, from := range sortedKeys(renamedFrom) {
+		idx := renamedFrom[from]
+		conflict(idx, func(i int) error {
+			return fmt.Errorf("renamed_from %s is also given by %s", from, others(subs, idx, i))
+		})
+	}
+	for a, i := range homes {
+		for _, j := range homes[a+1:] {
+			if within(subs[i].Home, subs[j].Home) || within(subs[j].Home, subs[i].Home) {
+				add(i, fmt.Errorf("home %s and the home %s of %s are equal or nested", subs[i].Home, subs[j].Home, subs[j].Name))
+				add(j, fmt.Errorf("home %s and the home %s of %s are equal or nested", subs[j].Home, subs[i].Home, subs[i].Name))
+			}
+		}
+	}
+	for i := range subs {
+		s := subs[i]
+		if len(errs[i]) > 0 {
+			reasons := make([]string, len(errs[i]))
+			for k, err := range errs[i] {
+				reasons[k] = err.Error()
+			}
+			inv.Skipped = append(inv.Skipped, Skip{Name: s.Name, Reason: "invalid inventory entry: " + strings.Join(reasons, "; "), Invalid: true})
+			continue
 		}
 		s.Features = orEmpty(s.Features)
 		s.MailDomains = orEmpty(s.MailDomains)
@@ -597,54 +688,58 @@ func validate(cfg *config.Config, subs []Subscription, server *Server, requireID
 			s.FileExcludes = append([]string{}, DefaultFileExcludes...)
 		}
 		inv.Subscriptions = append(inv.Subscriptions, s)
-	}
-	// Cross-subscription checks: no subscription may cover another's
-	// webspace or mail.
-	renamedFrom := map[string]string{}
-	for i, s := range inv.Subscriptions {
-		label := fmt.Sprintf("subscription %s", s.Name)
-		for _, o := range inv.Subscriptions[i+1:] {
-			if s.Home != "" && o.Home != "" && (within(s.Home, o.Home) || within(o.Home, s.Home)) {
-				errs = append(errs, fmt.Errorf("%s: home %s and the home %s of %s are equal or nested", label, s.Home, o.Home, o.Name))
-			}
-		}
-		for _, d := range s.MailDomains {
-			if d != s.Name && names[d] {
-				errs = append(errs, fmt.Errorf("%s: mail domain %s is another subscription's name", label, d))
-			}
-		}
 		if s.RenamedFrom != "" {
-			if other, ok := renamedFrom[s.RenamedFrom]; ok {
-				errs = append(errs, fmt.Errorf("%s: renamed_from %s is also given by %s", label, s.RenamedFrom, other))
-			}
-			renamedFrom[s.RenamedFrom] = s.Name
+			inv.Renamed = append(inv.Renamed, Rename{
+				Subscription: s.Name, RenamedFrom: s.RenamedFrom,
+				Note: fmt.Sprintf("renamed from %s: backups now go to a new repository for %s; the repository for %s is kept as it is and is no longer backed up, pruned or checked", s.RenamedFrom, s.Name, s.RenamedFrom),
+			})
 		}
 	}
-	for _, s := range inv.Subscriptions {
-		if s.RenamedFrom == "" {
-			continue
-		}
-		if names[s.RenamedFrom] {
-			errs = append(errs, fmt.Errorf("subscription %s: renamed_from %s is still a subscription in this inventory", s.Name, s.RenamedFrom))
-			continue
-		}
-		inv.Renamed = append(inv.Renamed, Rename{
-			Subscription: s.Name, RenamedFrom: s.RenamedFrom,
-			Note: fmt.Sprintf("renamed from %s: backups now go to a new repository for %s; the repository for %s is kept as it is and is no longer backed up, pruned or checked", s.RenamedFrom, s.Name, s.RenamedFrom),
-		})
-	}
+	var fatal []error
 	if server != nil {
 		server.Features = orEmpty(server.Features)
 		if server.EncryptWithRepoKey == nil {
 			on := true
 			server.EncryptWithRepoKey = &on
 		}
-		errs = append(errs, validateServer(server)...)
+		fatal = append(fatal, validateServer(server)...)
 	}
-	if err := errors.Join(errs...); err != nil {
+	if err := errors.Join(fatal...); err != nil {
 		return Inventory{}, fmt.Errorf("inventory: %w", err)
 	}
 	return inv, nil
+}
+
+// Invalid returns the subscriptions validation left out (see validate).
+func (inv Inventory) Invalid() []Skip {
+	var out []Skip
+	for _, s := range inv.Skipped {
+		if s.Invalid {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func sortedKeys(m map[string][]int) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func dedupe(v []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range v {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // ValidDatabaseName reports whether name passes the inventory's database

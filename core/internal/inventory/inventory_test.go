@@ -3,6 +3,7 @@ package inventory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -55,10 +56,28 @@ func sub(over map[string]any) string {
 	return string(b)
 }
 
+// load is Load with the subscriptions that validation skipped turned into
+// an error, for the tests of what validation refuses; the skipping itself
+// is pinned by TestInventoryInvalidSubscriptionIsSkipped.
+func load(ctx context.Context, cfg *config.Config) (Inventory, error) {
+	inv, err := Load(ctx, cfg)
+	if err != nil {
+		return inv, err
+	}
+	var errs []string
+	for _, s := range inv.Invalid() {
+		errs = append(errs, "subscription "+s.Name+": "+strings.TrimPrefix(s.Reason, "invalid inventory entry: "))
+	}
+	if len(errs) > 0 {
+		return inv, errors.New(strings.Join(errs, "\n"))
+	}
+	return inv, nil
+}
+
 func list(subs ...string) string { return "[" + strings.Join(subs, ",") + "]" }
 
 func TestLoadStaticAppliesDefaults(t *testing.T) {
-	inv, err := Load(context.Background(), cfgWith(list(sub(map[string]any{"databases": nil, "features": nil}))))
+	inv, err := load(context.Background(), cfgWith(list(sub(map[string]any{"databases": nil, "features": nil}))))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,20 +129,20 @@ func TestInventoryRejectsBadPaths(t *testing.T) {
 		"unknown field":        {"homedir": "/x"},
 	}
 	for name, over := range cases {
-		_, err := Load(context.Background(), cfgWith(list(sub(over))))
+		_, err := load(context.Background(), cfgWith(list(sub(over))))
 		if err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	_, err := Load(context.Background(), cfgWith(list(sub(map[string]any{"files": []string{"/etc"}}))))
+	_, err := load(context.Background(), cfgWith(list(sub(map[string]any{"files": []string{"/etc"}}))))
 	if err == nil || !strings.Contains(err.Error(), "subscription example.test: files[0]") {
 		t.Errorf("error does not name the subscription and field: %v", err)
 	}
-	_, err = Load(context.Background(), cfgWith(list(sub(map[string]any{"name": "_server"}))))
+	_, err = load(context.Background(), cfgWith(list(sub(map[string]any{"name": "_server"}))))
 	if err == nil || !strings.Contains(err.Error(), "reserved") {
 		t.Errorf("_server: %v", err)
 	}
-	if _, err := Load(context.Background(), cfgWith(list(sub(map[string]any{"destination": "other", "databases": []map[string]string{{"type": "pgsql", "name": "x$y-1"}}})))); err != nil {
+	if _, err := load(context.Background(), cfgWith(list(sub(map[string]any{"destination": "other", "databases": []map[string]string{{"type": "pgsql", "name": "x$y-1"}}})))); err != nil {
 		t.Errorf("valid override and database refused: %v", err)
 	}
 }
@@ -135,14 +154,14 @@ func TestInventoryRejectsDuplicates(t *testing.T) {
 		"mail domain": list(sub(nil), sub(map[string]any{"id": "18", "name": "other.example.test", "mail_domains": []string{"shop.example.test"}})),
 		"database":    list(sub(map[string]any{"databases": []map[string]string{{"type": "mysql", "name": "a"}, {"type": "mysql", "name": "a"}}})),
 	} {
-		if _, err := Load(context.Background(), cfgWith(subs)); err == nil {
+		if _, err := load(context.Background(), cfgWith(subs)); err == nil {
 			t.Errorf("duplicate %s accepted", name)
 		}
 	}
 }
 
 func TestInventoryRenameIsReported(t *testing.T) {
-	inv, err := Load(context.Background(), cfgWith(list(sub(map[string]any{"name": "new.example.test", "renamed_from": "old.example.test", "mail_domains": []string{"new.example.test"}}))))
+	inv, err := load(context.Background(), cfgWith(list(sub(map[string]any{"name": "new.example.test", "renamed_from": "old.example.test", "mail_domains": []string{"new.example.test"}}))))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +175,7 @@ func TestInventoryRenameIsReported(t *testing.T) {
 		t.Errorf("repository = %s", d.Repository)
 	}
 	// renamed_from naming a subscription that still exists is a contradiction.
-	_, err = Load(context.Background(), cfgWith(list(
+	_, err = load(context.Background(), cfgWith(list(
 		sub(map[string]any{"name": "new.example.test", "renamed_from": "example.test", "mail_domains": []string{}}),
 		sub(map[string]any{"id": "18"}))))
 	if err == nil || !strings.Contains(err.Error(), "still a subscription") {
@@ -169,12 +188,12 @@ const validServer = `{"features": ["panel-config"], "config_command": ["/usr/sbi
 func TestServerValidation(t *testing.T) {
 	cfg := cfgWith("[]")
 	cfg.Server = json.RawMessage(validServer)
-	inv, err := Load(context.Background(), cfg)
+	inv, err := load(context.Background(), cfg)
 	if err != nil || inv.Server == nil || inv.Server.ConfigExt != "tar" || !inv.Server.Encrypt() || inv.Server.EncryptWithRepoKey == nil {
 		t.Fatalf("%+v %v", inv.Server, err)
 	}
 	cfg.Server = json.RawMessage(strings.Replace(validServer, `"config_ext"`, `"encrypt_with_repo_key": false, "config_ext"`, 1))
-	if inv, err := Load(context.Background(), cfg); err != nil || inv.Server.Encrypt() {
+	if inv, err := load(context.Background(), cfg); err != nil || inv.Server.Encrypt() {
 		t.Fatalf("encrypt_with_repo_key false: %+v %v", inv.Server, err)
 	}
 	for name, s := range map[string]string{
@@ -187,7 +206,7 @@ func TestServerValidation(t *testing.T) {
 		"unknown field":    strings.Replace(validServer, `"config_ext"`, `"cfg": 1, "config_ext"`, 1),
 	} {
 		cfg.Server = json.RawMessage(s)
-		if _, err := Load(context.Background(), cfg); err == nil {
+		if _, err := load(context.Background(), cfg); err == nil {
 			t.Errorf("%s accepted", name)
 		}
 	}
@@ -202,7 +221,7 @@ func cmdCfg(argv ...string) *config.Config {
 
 func TestLoadFromCommand(t *testing.T) {
 	out := `{"version": 2, "subscriptions": ` + list(sub(nil)) + `, "server": ` + validServer + `}`
-	inv, err := Load(context.Background(), cmdCfg(testutil.FakeInventory(t, out)))
+	inv, err := load(context.Background(), cmdCfg(testutil.FakeInventory(t, out)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +237,7 @@ func TestLoadFromCommandPassesArguments(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "args")
 	bin := testutil.FakeInventoryScript(t, `echo "$*" > '`+out+`'; echo '{"version": 2, "subscriptions": []}'`)
-	if _, err := Load(context.Background(), cmdCfg(bin, "--scope", "all")); err != nil {
+	if _, err := load(context.Background(), cmdCfg(bin, "--scope", "all")); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(out); strings.TrimSpace(string(b)) != "--scope all" {
@@ -227,7 +246,7 @@ func TestLoadFromCommandPassesArguments(t *testing.T) {
 }
 
 func TestLoadFromCommandFailureReportsExitAndStderr(t *testing.T) {
-	_, err := Load(context.Background(), cmdCfg(testutil.FakeInventoryFailing(t)))
+	_, err := load(context.Background(), cmdCfg(testutil.FakeInventoryFailing(t)))
 	if err == nil || !strings.Contains(err.Error(), "exit 1") || !strings.Contains(err.Error(), "panel database unreachable") {
 		t.Fatalf("err = %v", err)
 	}
@@ -246,7 +265,7 @@ func TestLoadFromCommandRefusesBadOutput(t *testing.T) {
 		"no id":            `{"version": 2, "subscriptions": ` + list(sub(map[string]any{"id": ""})) + `}`,
 		"bad subscription": `{"version": 2, "subscriptions": ` + list(sub(map[string]any{"home": "/etc"})) + `}`,
 	} {
-		if _, err := Load(context.Background(), cmdCfg(testutil.FakeInventory(t, out))); err == nil {
+		if _, err := load(context.Background(), cmdCfg(testutil.FakeInventory(t, out))); err == nil {
 			t.Errorf("%s accepted", name)
 		}
 	}
@@ -255,13 +274,13 @@ func TestLoadFromCommandRefusesBadOutput(t *testing.T) {
 func TestLoadFromCommandServerInBothPlacesRefused(t *testing.T) {
 	cfg := cmdCfg(testutil.FakeInventory(t, `{"version": 2, "subscriptions": [], "server": `+validServer+`}`))
 	cfg.Server = json.RawMessage(validServer)
-	if _, err := Load(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "both") {
+	if _, err := load(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "both") {
 		t.Fatalf("err = %v", err)
 	}
 	// The config's server applies when the command gives none.
 	cfg = cmdCfg(testutil.FakeInventory(t, `{"version": 2, "subscriptions": []}`))
 	cfg.Server = json.RawMessage(validServer)
-	if inv, err := Load(context.Background(), cfg); err != nil || inv.Server == nil {
+	if inv, err := load(context.Background(), cfg); err != nil || inv.Server == nil {
 		t.Fatalf("%+v %v", inv, err)
 	}
 }
@@ -271,7 +290,7 @@ func TestLoadFromCommandOutputCap(t *testing.T) {
 	MaxOutput = 1024
 	defer func() { MaxOutput = old }()
 	bin := testutil.FakeInventoryScript(t, `head -c 100000 /dev/zero`)
-	if _, err := Load(context.Background(), cmdCfg(bin)); err == nil || !strings.Contains(err.Error(), "exceeds 1024 bytes") {
+	if _, err := load(context.Background(), cmdCfg(bin)); err == nil || !strings.Contains(err.Error(), "exceeds 1024 bytes") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -281,7 +300,7 @@ func TestLoadFromCommandTimeout(t *testing.T) {
 	CommandTimeout = 200 * time.Millisecond
 	defer func() { CommandTimeout = old }()
 	start := time.Now()
-	_, err := Load(context.Background(), cmdCfg(testutil.FakeInventoryScript(t, `exec sleep 30`)))
+	_, err := load(context.Background(), cmdCfg(testutil.FakeInventoryScript(t, `exec sleep 30`)))
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("err = %v", err)
 	}
@@ -301,7 +320,7 @@ func TestExamplePackagingInventoryLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inv, err := Load(context.Background(), cfg)
+	inv, err := load(context.Background(), cfg)
 	if err != nil || len(inv.Subscriptions) != 1 || inv.Server == nil {
 		t.Fatalf("%+v %v", inv, err)
 	}
@@ -309,7 +328,7 @@ func TestExamplePackagingInventoryLoads(t *testing.T) {
 
 func TestMailOnlySubscriptionNeedsNoWebspace(t *testing.T) {
 	mailOnly := map[string]any{"features": []string{"mail"}, "sys_user": "", "uid": 0, "gid": 0, "home": "", "files": []string{}, "databases": []map[string]string{}}
-	inv, err := Load(context.Background(), cfgWith(list(sub(mailOnly))))
+	inv, err := load(context.Background(), cfgWith(list(sub(mailOnly))))
 	if err != nil || inv.Subscriptions[0].Home != "" {
 		t.Fatalf("mail-only refused: %+v %v", inv, err)
 	}
@@ -320,7 +339,7 @@ func TestMailOnlySubscriptionNeedsNoWebspace(t *testing.T) {
 			over[kk] = vv
 		}
 		over[k] = v
-		if _, err := Load(context.Background(), cfgWith(list(sub(over)))); err == nil {
+		if _, err := load(context.Background(), cfgWith(list(sub(over)))); err == nil {
 			t.Errorf("mail-only with %s=%v accepted", k, v)
 		}
 	}
@@ -328,23 +347,23 @@ func TestMailOnlySubscriptionNeedsNoWebspace(t *testing.T) {
 	for _, features := range [][]string{{"mail", "files"}, {"db"}} {
 		for k, v := range map[string]any{"sys_user": "", "uid": 0, "gid": 0, "home": ""} {
 			over := map[string]any{"features": features, k: v}
-			_, err := Load(context.Background(), cfgWith(list(sub(over))))
+			_, err := load(context.Background(), cfgWith(list(sub(over))))
 			if err == nil || !strings.Contains(err.Error(), k) {
 				t.Errorf("features %v with empty %s: %v", features, k, err)
 			}
 		}
 	}
-	if _, err := Load(context.Background(), cfgWith(list(sub(map[string]any{"features": []string{"files"}, "files": []string{}})))); err == nil {
+	if _, err := load(context.Background(), cfgWith(list(sub(map[string]any{"features": []string{"files"}, "files": []string{}})))); err == nil {
 		t.Error("files feature without files accepted")
 	}
-	if _, err := Load(context.Background(), cfgWith(list(sub(map[string]any{"features": []string{"db"}, "files": []string{}})))); err != nil {
+	if _, err := load(context.Background(), cfgWith(list(sub(map[string]any{"features": []string{"db"}, "files": []string{}})))); err != nil {
 		t.Errorf("db-only without files refused: %v", err)
 	}
 }
 
 func TestSkippedIsKeptAndNeverFails(t *testing.T) {
 	out := `{"version": 2, "subscriptions": [], "skipped": ["a.example.test", {"name": "b.example.test", "reason": "suspended", "extra": 1}, {"name": 7}, 42]}`
-	inv, err := Load(context.Background(), cmdCfg(testutil.FakeInventory(t, out)))
+	inv, err := load(context.Background(), cmdCfg(testutil.FakeInventory(t, out)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,21 +376,21 @@ func TestSkippedIsKeptAndNeverFails(t *testing.T) {
 			t.Errorf("skipped[%d] = %+v, want %+v", i, inv.Skipped[i], want[i])
 		}
 	}
-	inv, err = Load(context.Background(), cmdCfg(testutil.FakeInventory(t, `{"version": 2, "subscriptions": [], "skipped": "oops"}`)))
+	inv, err = load(context.Background(), cmdCfg(testutil.FakeInventory(t, `{"version": 2, "subscriptions": [], "skipped": "oops"}`)))
 	if err != nil || len(inv.Skipped) != 1 {
 		t.Fatalf("%+v %v", inv.Skipped, err)
 	}
-	inv, err = Load(context.Background(), cmdCfg(testutil.FakeInventory(t, `{"version": 2, "subscriptions": []}`)))
+	inv, err = load(context.Background(), cmdCfg(testutil.FakeInventory(t, `{"version": 2, "subscriptions": []}`)))
 	if b, _ := json.Marshal(inv); err != nil || !strings.Contains(string(b), `"skipped":[]`) {
 		t.Fatalf("%s %v", b, err)
 	}
 }
 
 func TestStaticInventoryMayOmitID(t *testing.T) {
-	if _, err := Load(context.Background(), cfgWith(list(sub(map[string]any{"id": ""})))); err != nil {
+	if _, err := load(context.Background(), cfgWith(list(sub(map[string]any{"id": ""})))); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Load(context.Background(), cmdCfg(testutil.FakeInventory(t, `{"version": 2, "subscriptions": `+list(sub(map[string]any{"id": nil}))+`}`)))
+	_, err := load(context.Background(), cmdCfg(testutil.FakeInventory(t, `{"version": 2, "subscriptions": `+list(sub(map[string]any{"id": nil}))+`}`)))
 	if err == nil || !strings.Contains(err.Error(), "subscription example.test: id: is required") {
 		t.Fatalf("err = %v", err)
 	}
@@ -394,20 +413,20 @@ func TestInventoryRejectsCrossSubscriptionPaths(t *testing.T) {
 		"mail of another's name":    {list(sub(map[string]any{"mail_domains": []string{"example.test", "b.example.test"}}), b(nil)), "is another subscription's name"},
 		"same renamed_from":         {list(sub(map[string]any{"renamed_from": "old.example.test"}), b(map[string]any{"renamed_from": "old.example.test"})), "is also given by"},
 	} {
-		if _, err := Load(context.Background(), cfgWith(c.subs)); err == nil || !strings.Contains(err.Error(), c.why) {
+		if _, err := load(context.Background(), cfgWith(c.subs)); err == nil || !strings.Contains(err.Error(), c.why) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
 	// With nested files roots, a home can lie inside another's.
 	cfg := cfgWith(list(sub(nil), b(map[string]any{"home": "/var/www/vhosts/example.test/b.example.test", "files": []string{"/var/www/vhosts/example.test/b.example.test"}})))
 	cfg.Roots.Files = append(cfg.Roots.Files, "/var/www/vhosts/example.test")
-	if _, err := Load(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "are equal or nested") {
+	if _, err := load(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "are equal or nested") {
 		t.Errorf("nested home: %v", err)
 	}
 	// Two separate webspaces with their own files, mail and subpaths are fine.
 	ok := list(sub(map[string]any{"files": []string{"/var/www/vhosts/example.test/httpdocs", "/var/www/vhosts/example.test/private"}}),
 		b(map[string]any{"mail_domains": []string{"b.example.test"}}))
-	if _, err := Load(context.Background(), cfgWith(ok)); err != nil {
+	if _, err := load(context.Background(), cfgWith(ok)); err != nil {
 		t.Errorf("valid pair refused: %v", err)
 	}
 }
@@ -417,33 +436,33 @@ func TestInventoryRejectsForeignAndSystemDatabases(t *testing.T) {
 	db := func(name string) map[string]any {
 		return map[string]any{"databases": []map[string]string{{"type": "mysql", "name": name}}}
 	}
-	_, err := Load(context.Background(), cfgWith(list(sub(db("b_wp")), b)))
+	_, err := load(context.Background(), cfgWith(list(sub(db("b_wp")), b)))
 	if err == nil || !strings.Contains(err.Error(), "database b_wp (mysql) is also listed by example.test") {
 		t.Errorf("database of another subscription: %v", err)
 	}
 	for _, name := range []string{"mysql", "information_schema", "performance_schema", "sys", "psa", "PSA", "apsc", "horde",
 		"roundcubemail", "atmail", "sitebuilder5", "phpmyadmin", "phpmyadmin_abc123", "phpMyAdmin"} {
-		_, err := Load(context.Background(), cfgWith(list(sub(db(name)))))
+		_, err := load(context.Background(), cfgWith(list(sub(db(name)))))
 		if err == nil || !strings.Contains(err.Error(), "is a server or panel database") {
 			t.Errorf("system database %s: %v", name, err)
 		}
 	}
 	// A leading - or $ would reach mysqldump's argv as (part of) an option.
 	for _, name := range []string{"-rx", "-Tx", "--all", "$x"} {
-		_, err := Load(context.Background(), cfgWith(list(sub(db(name)))))
+		_, err := load(context.Background(), cfgWith(list(sub(db(name)))))
 		if err == nil || !strings.Contains(err.Error(), "starting with a letter, digit or _") {
 			t.Errorf("database name %s: %v", name, err)
 		}
 	}
 	// Names that only contain a reserved word are customers' own.
 	for _, name := range []string{"psa_shop", "my_sys", "wp_mysql", "horde2"} {
-		if _, err := Load(context.Background(), cfgWith(list(sub(db(name))))); err != nil {
+		if _, err := load(context.Background(), cfgWith(list(sub(db(name))))); err != nil {
 			t.Errorf("%s refused: %v", name, err)
 		}
 	}
 	// The same name with another type is another database.
 	other := sub(map[string]any{"id": "18", "name": "b.example.test", "mail_domains": []string{}, "databases": []map[string]string{{"type": "postgresql", "name": "example_wp"}}})
-	if _, err := Load(context.Background(), cfgWith(list(sub(nil), other))); err != nil {
+	if _, err := load(context.Background(), cfgWith(list(sub(nil), other))); err != nil {
 		t.Errorf("same name, other type refused: %v", err)
 	}
 }
@@ -455,7 +474,7 @@ func TestLoadFromCommandTimeoutKillsChildren(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	// The grandchild holds no pipe, so only the process-group kill ends it.
 	bin := testutil.FakeInventoryScript(t, `sleep 30 >/dev/null 2>&1 & echo $! > '`+pidFile+`'; wait`)
-	if _, err := Load(context.Background(), cmdCfg(bin)); err == nil || !strings.Contains(err.Error(), "timed out") {
+	if _, err := load(context.Background(), cmdCfg(bin)); err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("err = %v", err)
 	}
 	b, err := os.ReadFile(pidFile)
@@ -476,8 +495,75 @@ func TestLoadFromCommandTimeoutKillsChildren(t *testing.T) {
 func TestLoadFromCommandInterrupted(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(200*time.Millisecond, cancel)
-	_, err := Load(ctx, cmdCfg(testutil.FakeInventoryScript(t, `exec sleep 30`)))
+	_, err := load(ctx, cmdCfg(testutil.FakeInventoryScript(t, `exec sleep 30`)))
 	if err == nil || !strings.Contains(err.Error(), "interrupted") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// TestInventoryInvalidSubscriptionIsSkipped: a subscription's own errors,
+// and a conflict between two, skip the subscriptions involved with their
+// reasons; the others load. Only the server's errors stay fatal.
+func TestInventoryInvalidSubscriptionIsSkipped(t *testing.T) {
+	good := sub(map[string]any{"id": "9", "name": "good.example.test", "mail_domains": []string{"good.example.test"}, "databases": []map[string]string{}})
+	bad := sub(map[string]any{"id": "2", "name": "bad.example.test", "mail_domains": []string{}, "databases": []map[string]string{{"type": "mysql", "name": "phpmyadmin_old"}}})
+	inv, err := Load(context.Background(), cfgWith(list(good, bad)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inv.Subscriptions) != 1 || inv.Subscriptions[0].Name != "good.example.test" {
+		t.Fatalf("%+v %+v", inv.Subscriptions, inv.Skipped)
+	}
+	if len(inv.Skipped) != 1 || inv.Skipped[0].Name != "bad.example.test" || !inv.Skipped[0].Invalid ||
+		!strings.Contains(inv.Skipped[0].Reason, `databases[0].name: "phpmyadmin_old" is a server or panel database`) {
+		t.Fatalf("%+v", inv.Skipped)
+	}
+	if len(inv.Invalid()) != 1 {
+		t.Errorf("Invalid: %+v", inv.Invalid())
+	}
+
+	// A conflict skips both subscriptions; a third, unrelated one loads.
+	a := sub(map[string]any{"id": "1", "name": "a.example.test", "mail_domains": []string{"a.example.test", "shared.example.test"}, "databases": []map[string]string{{"type": "mysql", "name": "a_wp"}}})
+	b := sub(map[string]any{"id": "2", "name": "b.example.test", "mail_domains": []string{"shared.example.test"}, "databases": []map[string]string{{"type": "mysql", "name": "b_wp"}}})
+	c := sub(map[string]any{"id": "3", "name": "c.example.test", "mail_domains": []string{}, "databases": []map[string]string{{"type": "mysql", "name": "a_wp"}}})
+	inv, err = Load(context.Background(), cfgWith(list(a, b, c, good)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inv.Subscriptions) != 1 || inv.Subscriptions[0].Name != "good.example.test" {
+		t.Fatalf("%+v", inv.Subscriptions)
+	}
+	reasons := map[string]string{}
+	for _, s := range inv.Skipped {
+		reasons[s.Name] = s.Reason
+	}
+	for name, want := range map[string]string{
+		"a.example.test": "mail domain shared.example.test is also listed by b.example.test; database a_wp (mysql) is also listed by c.example.test",
+		"b.example.test": "mail domain shared.example.test is also listed by a.example.test",
+		"c.example.test": "database a_wp (mysql) is also listed by a.example.test",
+	} {
+		if !strings.Contains(reasons[name], want) {
+			t.Errorf("%s: %q, want %q", name, reasons[name], want)
+		}
+	}
+
+	// From inventory_command too, with the adapter's own skipped after.
+	out := `{"version": 2, "subscriptions": ` + list(good, sub(map[string]any{"id": "", "name": "noid.example.test", "mail_domains": []string{}, "databases": []map[string]string{}})) +
+		`, "skipped": [{"name": "x.example.test", "reason": "no hosting"}]}`
+	inv, err = Load(context.Background(), cmdCfg(testutil.FakeInventory(t, out)))
+	if err != nil || len(inv.Subscriptions) != 1 || len(inv.Skipped) != 2 || inv.Skipped[0].Name != "noid.example.test" ||
+		!strings.Contains(inv.Skipped[0].Reason, "id: is required") || inv.Skipped[1].Invalid || len(inv.Invalid()) != 1 {
+		t.Fatalf("%+v %v", inv, err)
+	}
+	b2, _ := json.Marshal(inv.Skipped)
+	if !strings.Contains(string(b2), `"invalid":true`) || strings.Count(string(b2), `"invalid"`) != 1 {
+		t.Errorf("%s", b2)
+	}
+
+	// The server's errors are the configuration's, and stay fatal.
+	cfg := cfgWith(list(good))
+	cfg.Server = json.RawMessage(strings.Replace(validServer, `"tar"`, `"tar.gz"`, 1))
+	if _, err := Load(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "config_ext") {
+		t.Errorf("server error: %v", err)
 	}
 }

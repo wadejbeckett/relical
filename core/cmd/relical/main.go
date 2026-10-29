@@ -363,6 +363,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (code int
 	if err := env.Record(results); err != nil {
 		fmt.Fprintln(stderr, "warning: state not saved:", err)
 	}
+	if *all {
+		// Subscriptions whose inventory entry is invalid were left out;
+		// they fail the run, but are not recorded in the state file.
+		results = append(env.InvalidResults(cmd), results...)
+	}
 	code = emit(stdout, results, nil)
 	for _, r := range results {
 		if !r.OK {

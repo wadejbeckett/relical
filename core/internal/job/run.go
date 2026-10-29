@@ -146,6 +146,19 @@ func plannedUnits(sub inventory.Subscription, unit string) [][2]string {
 	return out
 }
 
+// InvalidResults gives one failed result per subscription that the
+// inventory left out because its entry is invalid (inventory.Skip with
+// Invalid), so that an --all run of action reports them and exits 1.
+// They are not recorded in the state file: report shows them from the
+// inventory, and they disappear once the entry is fixed.
+func (e Env) InvalidResults(action string) []Result {
+	var out []Result
+	for _, s := range e.Inv.Invalid() {
+		out = append(out, failed(e.result(s.Name, "", action), fmt.Errorf("%s; left out of this run", s.Reason)))
+	}
+	return out
+}
+
 // ForgetAll runs Forget for each of subs in order, with the breaker.
 func (e Env) ForgetAll(ctx context.Context, subs []inventory.Subscription) []Result {
 	return e.eachRepository(ctx, subs, "forget", func(s inventory.Subscription) Result { return e.Forget(ctx, s) })
@@ -233,6 +246,11 @@ func (e Env) Subscription(name string) (inventory.Subscription, error) {
 	}
 	if s, ok := e.Inv.Find(name); ok {
 		return s, nil
+	}
+	for _, s := range e.Inv.Skipped {
+		if s.Name == name && s.Reason != "" {
+			return inventory.Subscription{}, fmt.Errorf("subscription %s is not in the inventory: it was left out (%s)", name, s.Reason)
+		}
 	}
 	return inventory.Subscription{}, fmt.Errorf("subscription %s is not in the inventory", name)
 }

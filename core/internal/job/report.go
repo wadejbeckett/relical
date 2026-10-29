@@ -46,6 +46,10 @@ type ReportRenamed struct {
 	Note        string `json:"note"`
 }
 
+// InventoryUnit is the unit of the report row of a subscription whose
+// inventory entry is invalid.
+const InventoryUnit = "inventory"
+
 // Report thresholds: a backup older than BackupStale or a check older
 // than CheckStale is a warning.
 const (
@@ -120,6 +124,12 @@ func BuildReport(st State, inv *inventory.Inventory, invErr error, now time.Time
 		rep.Warnings = append(rep.Warnings, "the inventory could not be loaded, so renames and removed subscriptions are not reported: "+invErr.Error())
 	}
 	if inv != nil {
+		// A subscription whose inventory entry is invalid is not backed
+		// up at all: a failed row, until the entry is fixed.
+		for _, s := range inv.Invalid() {
+			rep.Rows = append(rep.Rows, ReportRow{Subscription: s.Name, Unit: InventoryUnit, OK: false, Time: rep.Generated, Error: s.Reason})
+			rep.Failed++
+		}
 		for _, r := range inv.Renamed {
 			rep.Renamed = append(rep.Renamed, ReportRenamed{Name: r.Subscription, RenamedFrom: r.RenamedFrom, Note: r.Note})
 		}
