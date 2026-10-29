@@ -13,6 +13,7 @@ declare(strict_types=1);
  * and the exit code is 1, so the core never backs up from a partial list.
  */
 
+use Noiz\Relical\ConfigFiles;
 use Noiz\Relical\Coverage;
 use Noiz\Relical\Inventory;
 use Noiz\Relical\Paths;
@@ -65,6 +66,14 @@ try {
 
     $inventory = Inventory::build($webspaces, $scope);
     $inventory['skipped'] = array_merge($inventory['skipped'], $source->notes());
+
+    // Plesk's MySQL admin password can change (a repair, --set-mysql-password);
+    // the option file follows it here, every run, not only on a settings save.
+    try {
+        ConfigFiles::refreshMysqlOptionFile();
+    } catch (Throwable $e) {
+        $inventory['skipped'][] = Inventory::skip('', 'MySQL option file: ' . $e->getMessage());
+    }
 
     try {
         RootFile::ensureDir(Paths::STATE_DIR);
