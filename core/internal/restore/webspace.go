@@ -484,9 +484,9 @@ var statfs = syscall.Statfs
 // system that the server's sites, mail and databases also need. Free
 // inodes are checked the same way (InodeReservePercent of them).
 const (
-	SpaceReservePercent         = 5
-	MinSpaceReserve      uint64 = 10 << 30
-	InodeReservePercent         = 5
+	SpaceReservePercent        = 5
+	MinSpaceReserve     uint64 = 10 << 30
+	InodeReservePercent        = 5
 )
 
 // ensureSpace refuses a restore of path (empty for the whole snapshot)

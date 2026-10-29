@@ -12,15 +12,16 @@ Wants=network-online.target
 Type=oneshot
 # The configuration defaults to /etc/relical/config.json.
 ExecStart=/usr/local/lib/relical/relical backup --all
-# A stop (systemctl stop, a reboot, RuntimeMaxSec=) sends SIGTERM: relical
-# stops restic, records what it has, skips retention and exits. 15 minutes
-# covers that; restic gets 60 seconds to remove its lock before it is
+# A stop (systemctl stop, a reboot, TimeoutStartSec= running out) sends
+# SIGTERM: relical stops restic, records what it has, skips retention and
+# exits. 15 minutes covers that; restic gets 60 seconds to remove its lock before it is
 # killed.
 TimeoutStopSec=15min
 # A last resort against a run that hangs (every sftp: destination already
 # gets ssh connect and keepalive timeouts): systemd stops the run after 20
-# hours, before the next night's.
-RuntimeMaxSec=20h
+# hours, before the next night's. For Type=oneshot the start timeout is the
+# one that applies; RuntimeMaxSec= is ignored.
+TimeoutStartSec=20h
 # The backup yields CPU and disk to the sites and mail it is backing up.
 Nice=19
 IOSchedulingClass=idle
