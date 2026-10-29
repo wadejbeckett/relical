@@ -1,7 +1,7 @@
 VERSION ?= 0.1.0-dev
 RELICAL_RESTIC ?= $(CURDIR)/.tools/restic
 RELICAL_REST_SERVER ?= $(CURDIR)/.tools/rest-server
-.PHONY: tools test integration e2e build
+.PHONY: tools test integration e2e build plesk-ext
 
 tools:
 	tools/fetch.sh
@@ -19,3 +19,9 @@ e2e:
 build:
 	cd core && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" \
 		-o ../dist/relical ./cmd/relical
+
+# The Plesk extension package; build/build-panel.sh arrives with the
+# panel-plesk branch.
+plesk-ext: build
+	@if [ -x build/build-panel.sh ]; then build/build-panel.sh plesk $(VERSION); \
+	else echo "build/build-panel.sh is not in this tree (it comes with the panel-plesk branch)" >&2; exit 1; fi
