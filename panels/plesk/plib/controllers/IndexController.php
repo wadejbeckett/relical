@@ -6,6 +6,7 @@ use Noiz\Relical\Command;
 use Noiz\Relical\Coverage;
 use Noiz\Relical\Destination;
 use Noiz\Relical\HostKey;
+use Noiz\Relical\Overview;
 use Noiz\Relical\Paths;
 use Noiz\Relical\Report;
 use Noiz\Relical\RootScripts;
@@ -62,9 +63,11 @@ class IndexController extends pm_Controller_Action
 
         $this->view->form = $form;
         $this->view->destination = $destination?->display();
-        $this->view->publicKey = $this->publicKey();
-        $this->view->status = $this->statusRows();
-        $this->view->report = $this->report();
+        $overview = RootScripts::run('overview.php', [], Overview::TIMEOUT);
+        $parts = Overview::parse($overview['data'], RootScripts::error($overview));
+        $this->view->publicKey = $this->publicKey($parts['public_key']);
+        $this->view->status = $this->statusRows($parts['status']);
+        $this->view->report = Report::fromCli($parts['report']['code'], $parts['report']['stdout'], $parts['report']['stderr']);
         $this->view->connectionUrl = pm_Context::getActionUrl('index', 'connection');
         $this->view->probeUrl = pm_Context::getActionUrl('index', 'probe');
         $this->view->backupUrl = pm_Context::getActionUrl('index', 'backup');
@@ -360,18 +363,20 @@ class IndexController extends pm_Controller_Action
 
     // ----- connection -----
 
-    private function publicKey(): array
+    /**
+     * @param array{key: string, error: string} $part from overview.php
+     * @return array{key: string, error: string}
+     */
+    private function publicKey(array $part): array
     {
-        $result = RootScripts::run('show-pubkey.php', [], self::SCRIPT_TIMEOUT);
-        if ($result['code'] === 0 && is_string($result['data']['public_key'] ?? null)) {
-            try {
-                return ['key' => HostKey::publicKeyLine($result['data']['public_key']), 'error' => ''];
-            } catch (InvalidArgumentException $e) {
-                return ['key' => '', 'error' => $e->getMessage()];
-            }
+        if ($part['key'] === '') {
+            return ['key' => '', 'error' => $part['error'] !== '' ? $part['error'] : 'the public key could not be read'];
         }
-
-        return ['key' => '', 'error' => RootScripts::error($result)];
+        try {
+            return ['key' => HostKey::publicKeyLine($part['key']), 'error' => ''];
+        } catch (InvalidArgumentException $e) {
+            return ['key' => '', 'error' => $e->getMessage()];
+        }
     }
 
     private function trustHostKey(string $fingerprint): void
@@ -405,15 +410,18 @@ class IndexController extends pm_Controller_Action
 
     // ----- status -----
 
-    /** @return array{rows: list<array<string, mixed>>, error: string} */
-    private function statusRows(): array
+    /**
+     * @param array{code: int, stdout: string, stderr: string, timed_out: bool} $call `relical status`, from overview.php
+     * @return array{rows: list<array<string, mixed>>, error: string}
+     */
+    private function statusRows(array $call): array
     {
-        $result = RootScripts::run('cli.php', ['status'], self::SCRIPT_TIMEOUT);
         try {
-            $rows = Status::rows(Status::parse($result['stdout']));
+            $rows = Status::rows(Status::parse($call['stdout']));
         } catch (RuntimeException $e) {
-            // The core's own error when it printed one, else why cli.php failed.
-            return ['rows' => [], 'error' => $result['data'] !== null ? $e->getMessage() : RootScripts::error($result)];
+            // The core's own error when it printed one, else why the call failed.
+            $printed = is_array(json_decode($call['stdout'], true));
+            return ['rows' => [], 'error' => $printed ? $e->getMessage() : RootScripts::error($call + ['data' => null])];
         }
         foreach ($rows as &$row) {
             $row['stored'] = Status::bytes($row['stored_bytes']);
@@ -427,14 +435,6 @@ class IndexController extends pm_Controller_Action
         unset($row);
 
         return ['rows' => $rows, 'error' => ''];
-    }
-
-    /** @return array<string, mixed> Report::fromCli() */
-    private function report(): array
-    {
-        $result = RootScripts::run('cli.php', ['report'], self::SCRIPT_TIMEOUT);
-
-        return Report::fromCli($result['code'], $result['stdout'], $result['stderr']);
     }
 
     /** @param array{code: int, data: ?array<mixed>, stdout: string, stderr: string, timed_out: bool} $result */

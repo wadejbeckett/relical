@@ -27,7 +27,7 @@ final class Command
      * takes. cli.php takes what parse() accepts.
      */
     public const SCRIPTS = [
-        'cli.php', 'write-config.php', 'install-timers.php', 'show-pubkey.php',
+        'cli.php', 'write-config.php', 'install-timers.php', 'overview.php',
         'hostkey.php', 'probe.php', 'log-tail.php', 'running.php',
         'restore-run.php', 'restore-result.php', 'restore-running.php',
     ];

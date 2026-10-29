@@ -314,7 +314,7 @@ final class CommandTest extends TestCase
     {
         yield 'write-config' => ['write-config.php', []];
         yield 'install-timers' => ['install-timers.php', []];
-        yield 'show-pubkey' => ['show-pubkey.php', []];
+        yield 'overview' => ['overview.php', []];
         yield 'probe' => ['probe.php', []];
         yield 'log-tail' => ['log-tail.php', []];
         yield 'running' => ['running.php', []];
@@ -349,7 +349,8 @@ final class CommandTest extends TestCase
         yield 'post-install from the screens' => ['post-install.php', []];
         yield 'path in the name' => ['../scripts/cli.php', ['status']];
         yield 'argument to a no-argument script' => ['write-config.php', ['--force']];
-        yield 'show-pubkey with a path' => ['show-pubkey.php', ['/etc/relical/ssh/id_ed25519']];
+        yield 'overview with a path' => ['overview.php', ['/etc/relical/ssh/id_ed25519']];
+        yield 'show-pubkey is gone' => ['show-pubkey.php', []];
         yield 'log-tail with a count' => ['log-tail.php', ['1000']];
         yield 'hostkey without an action' => ['hostkey.php', []];
         yield 'hostkey unknown action' => ['hostkey.php', ['remove']];

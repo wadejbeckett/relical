@@ -13,7 +13,7 @@ what PHPUnit covers. Each line names the assumption and where it lives.
       context is harmless. (Header of every `plib/scripts/*.php`.)
 - [ ] The same for `plesk bin extension --exec relical <script>` run as root
       from the web UI: `write-config.php`, `install-timers.php`, `cli.php`,
-      `inventory.php`, `hostkey.php`, `probe.php`, `show-pubkey.php`,
+      `inventory.php`, `hostkey.php`, `probe.php`, `overview.php`,
       `log-tail.php`.
 
 ## Install, upgrade and removal
