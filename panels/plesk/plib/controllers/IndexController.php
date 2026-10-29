@@ -354,7 +354,7 @@ class IndexController extends pm_Controller_Action
         $form->addElement('text', Settings::LIMIT_UPLOAD_KIB, [
             'label' => 'Upload limit (KiB/s)',
             'value' => (string) $settings->limitUploadKib(),
-            'description' => '0 for no limit.',
+            'description' => sprintf('0 for no limit; blank for the default, %d (20 MiB/s).', Settings::DEFAULT_LIMIT_UPLOAD_KIB),
         ]);
         $form->addControlButtons([
             'sendTitle' => 'Save',

@@ -23,6 +23,12 @@ final class Settings
     public const BACKUP_TIME = 'backup_time';
     public const LIMIT_UPLOAD_KIB = 'limit_upload_kib';
 
+    /**
+     * 20 MiB/s: the first run copies everything (about 3 TiB on a large
+     * server), so it should not fill the uplink unless asked to.
+     */
+    public const DEFAULT_LIMIT_UPLOAD_KIB = 20480;
+
     /** Every setting, in the order the settings form shows them. */
     public const KEYS = [
         self::SCOPE, self::SFTP_HOST, self::SFTP_PORT, self::SFTP_USER, self::SFTP_PATH,
@@ -187,10 +193,10 @@ final class Settings
         return $this->stringOrDefault(self::BACKUP_TIME, '01:00');
     }
 
-    /** Upload limit in KiB/s; 0 means no limit. */
+    /** Upload limit in KiB/s; 0 means no limit, blank the default. */
     public function limitUploadKib(): int
     {
-        return $this->int(self::LIMIT_UPLOAD_KIB, 0);
+        return $this->int(self::LIMIT_UPLOAD_KIB, self::DEFAULT_LIMIT_UPLOAD_KIB);
     }
 
     /**
