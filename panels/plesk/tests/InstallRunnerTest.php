@@ -6,6 +6,7 @@ namespace Noiz\Relical\Tests;
 
 use Noiz\Relical\Action;
 use Noiz\Relical\InstallRunner;
+use Noiz\Relical\Installer;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -111,6 +112,35 @@ final class InstallRunnerTest extends TestCase
     {
         $this->expectExceptionMessage('Nothing was changed.');
         (new InstallRunner($this->out, $this->err))->run([Action::note('x'), Action::run(['/bin/false'])]);
+    }
+
+    public function testUninstallDeletesOnlyItsOwnLeftoversAndKeepsADirectoryWithOtherFiles(): void
+    {
+        $lib = $this->dir . '/lib';
+        mkdir($lib);
+        foreach (['.relical.new', '.restic.new', '.relical.0123456789ab.tmp', '..restic.new.abcdef012345.tmp', 'admin-notes.txt', '.relical.new.bak'] as $name) {
+            file_put_contents($lib . '/' . $name, 'x');
+        }
+
+        $runner = new InstallRunner($this->out, $this->err);
+        $runner->run([Action::removeDir($lib, true, Installer::OWN_LIB_FILES)]);
+
+        self::assertSame([], $runner->warnings(), 'files Relical did not install are a note, not a failure');
+        self::assertSame(['.relical.new.bak', 'admin-notes.txt'], array_values(array_diff(scandir($lib), ['.', '..'])));
+        self::assertStringContainsString('note: kept ' . $lib . ' because it holds files Relical did not install: .relical.new.bak, admin-notes.txt', self::contents($this->err));
+    }
+
+    public function testUninstallRemovesTheDirectoryOnceOnlyItsOwnLeftoversWereThere(): void
+    {
+        $lib = $this->dir . '/lib';
+        mkdir($lib);
+        file_put_contents($lib . '/.restic.new', 'x');
+
+        $runner = new InstallRunner($this->out, $this->err);
+        $runner->run([Action::removeDir($lib, true, Installer::OWN_LIB_FILES)]);
+
+        self::assertDirectoryDoesNotExist($lib);
+        self::assertSame([], $runner->warnings());
     }
 
     public function testACommandThatExitsNonZeroFails(): void

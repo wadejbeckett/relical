@@ -130,13 +130,56 @@ final class InstallRunner
                 if (is_link($p['path'])) {
                     throw new RuntimeException(sprintf('%s is a symbolic link', $p['path']));
                 }
-                if (is_dir($p['path']) && !@rmdir($p['path'])) {
+                if (!is_dir($p['path'])) {
+                    return;
+                }
+                if (($p['own_files'] ?? null) !== null) {
+                    $this->removeDirKeepingOthers($p['path'], $p['own_files']);
+                    return;
+                }
+                if (!@rmdir($p['path'])) {
                     throw new RuntimeException(sprintf('could not remove %s (is it empty?)', $p['path']));
                 }
                 return;
         }
 
         throw new RuntimeException(sprintf('unknown step %s', $action->type));
+    }
+
+    /**
+     * Deletes the files in $dir whose names match $ownFiles, then removes
+     * $dir if nothing else is left. Anything else in it is not Relical's to
+     * delete: the directory is kept and the names go to stderr.
+     */
+    private function removeDirKeepingOthers(string $dir, string $ownFiles): void
+    {
+        $others = [];
+        foreach (scandir($dir) ?: [] as $name) {
+            if ($name === '.' || $name === '..') {
+                continue;
+            }
+            $path = $dir . '/' . $name;
+            if (preg_match($ownFiles, $name) === 1 && (is_link($path) || is_file($path))) {
+                if (!@unlink($path)) {
+                    throw new RuntimeException(sprintf('could not remove %s', $path));
+                }
+                continue;
+            }
+            $others[] = $name;
+        }
+        if ($others !== []) {
+            sort($others);
+            fwrite($this->err, sprintf(
+                "%snote: kept %s because it holds files Relical did not install: %s\n",
+                $this->prefix,
+                $dir,
+                implode(', ', array_slice($others, 0, 10)) . (count($others) > 10 ? ', ...' : '')
+            ));
+            return;
+        }
+        if (!@rmdir($dir)) {
+            throw new RuntimeException(sprintf('could not remove %s', $dir));
+        }
     }
 
     private static function isRoot(): bool

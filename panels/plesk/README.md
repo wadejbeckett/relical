@@ -53,8 +53,10 @@ the repository keys in `/etc/relical/keys`, the pinned host key in
 ## Removing
 
 Removing the extension stops and disables both timers, stops a backup or
-check that is still running, removes the four units and
-`/usr/local/lib/relical/`.
+check that is still running, and removes the four units and the two
+binaries in `/usr/local/lib/relical/`. It deletes nothing else it did not
+install: if other files are in that directory, the directory is kept and the
+removal names them.
 
 It keeps `/etc/relical` and `/var/lib/relical`. The repository keys in
 `/etc/relical/keys` are the only way to read the backups. Keep them, with a

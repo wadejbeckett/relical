@@ -9,8 +9,12 @@ declare(strict_types=1);
  * It keeps /etc/relical (configuration, the Storage Box key, the pinned host
  * key and the repository keys) and /var/lib/relical (state and log), so a
  * reinstall carries on with the same repositories and the backups stay
- * readable. Every step runs even when an earlier one fails; exit code 1
- * means something could not be removed and is named on stderr.
+ * readable. It deletes only what the installer put in /usr/local/lib/relical
+ * (the two binaries and its own staging and temporary copies); if anything
+ * else is in that directory, the directory is kept and the names are printed
+ * as a note, without failing the uninstall. Every step runs even when an
+ * earlier one fails; exit code 1 means something Relical installed could not
+ * be removed and is named on stderr (Plesk then stops the removal).
  */
 
 use Noiz\Relical\InstallRunner;

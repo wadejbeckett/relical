@@ -24,6 +24,14 @@ final class Installer
     public const SUMS_FILE = 'SHA256SUMS';
 
     /**
+     * Names the installer may leave in /usr/local/lib/relical after an
+     * interrupted run: the staging copies (stagedPath()) and RootFile's
+     * temporary files. Uninstall deletes these and nothing else it did not
+     * install.
+     */
+    public const OWN_LIB_FILES = '/^(\.(relical|restic)\.new|\.\.?(relical|restic)(\.new)?\.[0-9a-f]{12}\.tmp)$/D';
+
+    /**
      * @param string $binDir    the extension's plib/bin
      * @param string $systemctl absolute path of systemctl
      * @param string $sshKeygen absolute path of ssh-keygen
@@ -182,7 +190,7 @@ final class Installer
             }
         }
         if ($this->probe->exists(Paths::LIB_DIR)) {
-            $plan[] = Action::removeDir(Paths::LIB_DIR, true);
+            $plan[] = Action::removeDir(Paths::LIB_DIR, true, self::OWN_LIB_FILES);
         }
         $plan[] = Action::note(sprintf('kept %s and %s', Paths::ETC_DIR, Paths::STATE_DIR));
 

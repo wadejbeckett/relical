@@ -92,9 +92,16 @@ final class Action
         return new self(self::REMOVE_FILE, 'remove ' . $path, ['path' => $path], $optional);
     }
 
-    public static function removeDir(string $path, bool $optional = false): self
+    /**
+     * @param string|null $ownFiles a pattern (preg) for the names of files the
+     *        installer itself may have left in the directory (staging copies,
+     *        temporary files): those are deleted first. With a pattern, a
+     *        directory that still holds anything else is kept with a note on
+     *        stderr instead of failing.
+     */
+    public static function removeDir(string $path, bool $optional = false, ?string $ownFiles = null): self
     {
-        return new self(self::REMOVE_DIR, 'remove ' . $path, ['path' => $path], $optional);
+        return new self(self::REMOVE_DIR, 'remove ' . $path, ['path' => $path, 'own_files' => $ownFiles], $optional);
     }
 
     public static function rename(string $from, string $to): self
