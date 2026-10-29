@@ -32,7 +32,11 @@ commands:
   forget    --subscription S | --all
   check     --subscription S | --all [--read-data-subset 5%]
   snapshots --subscription S [--unit mail|files|db|panel-config]
+  ls        --subscription S --snapshot ID [--path P]
   restore   [--subscription S] [--unit mail] --domain D --mailbox M [--snapshot ID] [--folder F]
+  restore   --subscription S --unit files [--snapshot ID] [--path P]
+  restore   --subscription S --unit db --database D [--snapshot ID]
+  restore   --subscription _server --unit panel-config [--snapshot ID]
   status
   adopt     --subscription S`
 
@@ -46,7 +50,8 @@ var commandFlags = map[string][]string{
 	"forget":    {"subscription", "all"},
 	"check":     {"subscription", "all", "read-data-subset"},
 	"snapshots": {"subscription", "unit"},
-	"restore":   {"subscription", "unit", "domain", "mailbox", "snapshot", "folder"},
+	"ls":        {"subscription", "snapshot", "path"},
+	"restore":   {"subscription", "unit", "domain", "mailbox", "snapshot", "folder", "path", "database"},
 	"adopt":     {"subscription"},
 }
 
@@ -56,7 +61,7 @@ var (
 	units       = map[string]bool{"mail": true, "files": true, "db": true, "panel-config": true}
 	implemented = map[string]map[string]bool{
 		"backup":  {"mail": true, "files": true, "db": true, "panel-config": true},
-		"restore": {"mail": true},
+		"restore": {"mail": true, "files": true, "db": true, "panel-config": true},
 	}
 )
 
@@ -127,6 +132,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	snapshot := fs.String("snapshot", "latest", "snapshot id or latest (restore)")
 	folder := fs.String("folder", "", "IMAP folder to restore; default the whole mailbox")
 	subset := fs.String("read-data-subset", "", "check: also read this share of the data, e.g. 5%")
+	path := fs.String("path", "", "path relative to the webspace root (restore --unit files, ls)")
+	database := fs.String("database", "", "database name (restore --unit db)")
 	if err := fs.Parse(cmdArgs); err != nil {
 		return 2
 	}
@@ -134,7 +141,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return usageError(stderr, fmt.Sprintf("%s: unexpected argument %q", cmd, fs.Arg(0)))
 	}
 	var bad []string
+	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) {
+		set[f.Name] = true
 		for _, a := range allowed {
 			if f.Name == a {
 				return
@@ -159,12 +168,30 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if *subName == "" {
 			return usageError(stderr, cmd+" needs --subscription")
 		}
-	case "restore":
-		if *domain == "" || *mailbox == "" {
-			return usageError(stderr, "restore needs --domain and --mailbox")
+	case "ls":
+		if *subName == "" || !set["snapshot"] {
+			return usageError(stderr, "ls needs --subscription and --snapshot")
 		}
+	case "restore":
 		if *unit == "" {
 			*unit = "mail"
+		}
+		// The flags each restore unit needs and takes, besides
+		// --subscription, --unit and --snapshot.
+		need := map[string][]string{"mail": {"domain", "mailbox"}, "files": {}, "db": {"database"}, "panel-config": {}}[*unit]
+		takes := map[string][]string{"mail": {"folder"}, "files": {"path"}}[*unit]
+		for _, f := range need {
+			if !set[f] || fs.Lookup(f).Value.String() == "" {
+				return usageError(stderr, fmt.Sprintf("restore --unit %s needs --%s", *unit, f))
+			}
+		}
+		for _, f := range []string{"domain", "mailbox", "folder", "path", "database"} {
+			if set[f] && !contains(need, f) && !contains(takes, f) {
+				return usageError(stderr, fmt.Sprintf("restore --unit %s does not take --%s", *unit, f))
+			}
+		}
+		if *subName == "" && *unit != "mail" {
+			return usageError(stderr, fmt.Sprintf("restore --unit %s needs --subscription", *unit))
 		}
 	}
 
@@ -229,7 +256,21 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			code = 1
 		}
 		return code
+	case "ls":
+		res, err := restore.Ls(ctx, env, restore.LsRequest{Subscription: *subName, Snapshot: *snapshot, Path: *path})
+		return emit(stdout, res, err)
 	case "restore":
+		switch *unit {
+		case "files":
+			res, err := restore.RunFiles(ctx, env, restore.FilesRequest{Subscription: *subName, Snapshot: *snapshot, Path: *path})
+			return emit(stdout, res, err)
+		case "db":
+			res, err := restore.RunDB(ctx, env, restore.DBRequest{Subscription: *subName, Database: *database, Snapshot: *snapshot})
+			return emit(stdout, res, err)
+		case "panel-config":
+			res, err := restore.RunPanelConfig(ctx, env, restore.PanelConfigRequest{Subscription: *subName, Snapshot: *snapshot})
+			return emit(stdout, res, err)
+		}
 		res, err := restore.Run(ctx, env, restore.Request{Subscription: *subName, Domain: *domain, Mailbox: *mailbox, Snapshot: *snapshot, Folder: *folder})
 		return emit(stdout, res, err)
 	}
@@ -284,4 +325,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return code
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }

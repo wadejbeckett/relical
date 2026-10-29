@@ -175,16 +175,47 @@ func TestUnknownSubscriptionIsJSONError(t *testing.T) {
 	}
 }
 
-func TestUnimplementedUnitIsJSONError(t *testing.T) {
+func TestRestoreUnitFlags(t *testing.T) {
 	cfg := cliSetup(t)
 	for _, args := range [][]string{
-		{"restore", "--unit", "panel-config", "--domain", "example.test", "--mailbox", "alice"},
-		{"restore", "--unit", "db", "--domain", "example.test", "--mailbox", "alice"},
+		{"restore", "--unit", "db", "--subscription", "example.test"},
+		{"restore", "--unit", "db", "--subscription", "example.test", "--database", ""},
+		{"restore", "--unit", "db", "--subscription", "example.test", "--database", "example_wp", "--path", "httpdocs"},
+		{"restore", "--unit", "files", "--subscription", "example.test", "--domain", "example.test"},
+		{"restore", "--unit", "files", "--subscription", "example.test", "--folder", "Sent"},
+		{"restore", "--unit", "files", "--path", "httpdocs"},
+		{"restore", "--unit", "panel-config", "--subscription", "_server", "--path", "x"},
+		{"restore", "--domain", "example.test", "--mailbox", "alice", "--path", "httpdocs"},
+		{"ls", "--subscription", "example.test"},
+		{"ls", "--snapshot", "01234567"},
 	} {
-		code, out := runCLI(append([]string{"-config", cfg}, args...)...)
-		if code != 1 || !strings.Contains(out, "not supported") {
-			t.Errorf("%q: %d %s", args, code, out)
+		if code, _ := runCLI(append([]string{"-config", cfg}, args...)...); code != 2 {
+			t.Errorf("%q: exit %d, want 2", args, code)
 		}
+	}
+	// A valid combination reaches the restore code: a JSON error here.
+	code, out := runCLI("-config", cfg, "restore", "--unit", "db", "--subscription", "example.test", "--database", "mysql")
+	if code != 1 || !strings.Contains(out, "not a valid subscription database name") {
+		t.Errorf("%d %s", code, out)
+	}
+}
+
+func TestLsCommand(t *testing.T) {
+	cfg := cliSetup(t)
+	os.WriteFile(filepath.Join(filepath.Dir(cfg), "keys", "example.test.key"), []byte("k\n"), 0o600)
+	code, out := runCLI("-config", cfg, "ls", "--subscription", "example.test", "--snapshot", "fedcba98")
+	var res struct {
+		Path    string `json:"path"`
+		Entries []struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+			Size int    `json:"size"`
+		} `json:"entries"`
+		Truncated *bool `json:"truncated"`
+	}
+	if code != 0 || json.Unmarshal([]byte(out), &res) != nil || res.Path != "/" || len(res.Entries) != 1 ||
+		res.Entries[0].Name != "index.html" || res.Truncated == nil || *res.Truncated {
+		t.Fatalf("%d %s", code, out)
 	}
 }
 
