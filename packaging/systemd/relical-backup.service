@@ -25,3 +25,7 @@ TimeoutStartSec=20h
 # The backup yields CPU and disk to the sites and mail it is backing up.
 Nice=19
 IOSchedulingClass=idle
+# relical exits 4 when it is stopped (systemctl stop, a reboot): a
+# deliberate stop is not a failure. A run stopped by TimeoutStartSec= is
+# still one, because systemd records Result=timeout whatever the exit code.
+SuccessExitStatus=4

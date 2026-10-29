@@ -478,16 +478,27 @@ func TestBackupAllRunsRetentionUnlessInterrupted(t *testing.T) {
 	if code, _ := runCLI("-config", cfg, "backup", "--subscription", "example.test", "--no-forget"); code != 2 {
 		t.Errorf("--no-forget without --all: exit %d", code)
 	}
-	// A stop (SIGTERM) during the backup: no forget afterwards.
+	// A stop (SIGTERM) during the backup: exit 4 and no forget afterwards.
 	t.Setenv("FAKE_HANG", "1")
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(300 * time.Millisecond); cancel() }()
 	var out, errb bytes.Buffer
-	if code := run(ctx, []string{"-config", cfg, "backup", "--all"}, &out, &errb); code != 1 {
+	if code := run(ctx, []string{"-config", cfg, "backup", "--all"}, &out, &errb); code != exitInterrupted || exitInterrupted != 4 {
 		t.Fatalf("interrupted run: exit %d %s", code, out.String())
 	}
 	if forgets() != 1 || !strings.Contains(errb.String(), "interrupted") {
 		t.Errorf("forgets %d after an interrupted run; stderr %s", forgets(), errb.String())
+	}
+	// The run log records the same exit code.
+	var c map[string]any
+	b, _ := os.ReadFile(cfg)
+	json.Unmarshal(b, &c)
+	raw, _ := os.ReadFile(filepath.Join(c["state_dir"].(string), job.LogName))
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	var last job.LogLine
+	json.Unmarshal([]byte(lines[len(lines)-1]), &last)
+	if last.Event != "end" || last.Code == nil || *last.Code != exitInterrupted {
+		t.Errorf("last log line after an interrupted run: %s", lines[len(lines)-1])
 	}
 }
 
@@ -573,5 +584,13 @@ func TestCheckAllWaitsForTheRunLock(t *testing.T) {
 	checkLockWait = 300 * time.Millisecond
 	if code, out := runCLI("-config", cfg, "check", "--all"); code != 1 || !strings.Contains(out, "waited 300ms") {
 		t.Fatalf("check --all after the wait: %d %s", code, out)
+	}
+	// A stop while it waits is an interruption (exit 4), not a failure.
+	checkLockWait = 3 * time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	var stdout, errb bytes.Buffer
+	if code := run(ctx, []string{"-config", cfg, "check", "--all"}, &stdout, &errb); code != exitInterrupted {
+		t.Fatalf("check --all stopped while waiting: %d %s %s", code, stdout.String(), errb.String())
 	}
 }

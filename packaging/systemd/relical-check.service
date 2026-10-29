@@ -16,3 +16,7 @@ Type=oneshot
 ExecStart=/usr/local/lib/relical/relical check --all --read-data-subset 5%%
 Nice=19
 IOSchedulingClass=idle
+# relical exits 4 when it is stopped (systemctl stop, a reboot): a
+# deliberate stop is not a failure. A run stopped by TimeoutStartSec= is
+# still one, because systemd records Result=timeout whatever the exit code.
+SuccessExitStatus=4

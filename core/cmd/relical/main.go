@@ -232,6 +232,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (code int
 			}
 		}()
 	}
+	// A run stopped by SIGINT or SIGTERM (systemctl stop, a reboot) exits
+	// with exitInterrupted, whatever it had done by then, so the units can
+	// list it in SuccessExitStatus=. Registered after the run log's
+	// deferred end, so the log records this code.
+	defer func() {
+		if ctx.Err() != nil {
+			fmt.Fprintln(stderr, "interrupted")
+			code = exitInterrupted
+		}
+	}()
 	if cmd == "report" {
 		return report(ctx, env, stdout)
 	}
@@ -403,12 +413,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (code int
 			code = 1
 		}
 	}
-	if ctx.Err() != nil {
-		fmt.Fprintln(stderr, "interrupted")
-		return 1
-	}
 	return code
 }
+
+// exitInterrupted is the exit code of a run stopped by SIGINT or SIGTERM.
+const exitInterrupted = 4
 
 // checkLockWait is how long check --all waits for the run lock; a
 // variable so that tests can shorten it.
