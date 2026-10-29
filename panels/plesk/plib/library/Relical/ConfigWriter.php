@@ -19,6 +19,13 @@ final class ConfigWriter
 {
     public const DESTINATION = 'storagebox';
 
+    /**
+     * Plesk's Dovecot keeps every folder in the inbox namespace
+     * (prefix INBOX., separator .), so a mail restore's new folder is
+     * INBOX.Restored <date> <id> (core config key mail_folder_prefix).
+     */
+    public const MAIL_FOLDER_PREFIX = 'INBOX.';
+
     private const HOST = '/^[a-z0-9][a-z0-9.-]{0,252}$/D';
     private const USER = '/^[a-z0-9_][a-z0-9_-]{0,63}$/D';
     private const PATH = '/^[A-Za-z0-9_.\/][A-Za-z0-9_.\/-]{0,254}$/D';
@@ -52,6 +59,7 @@ final class ConfigWriter
             'state_dir' => Paths::STATE_DIR,
             'keys_dir' => Paths::KEYS_DIR,
             'mailbox_pattern' => Paths::MAILBOX_PATTERN,
+            'mail_folder_prefix' => self::MAIL_FOLDER_PREFIX,
             'roots' => ['files' => [Paths::FILES_ROOT], 'mail' => [Paths::MAIL_ROOT]],
             'mysql' => ['defaults_file' => Paths::MYSQL_CNF],
             'inventory_command' => Paths::inventoryCommand(),

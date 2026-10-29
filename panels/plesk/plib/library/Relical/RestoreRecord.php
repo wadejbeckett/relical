@@ -224,13 +224,17 @@ final class RestoreRecord
 
     /**
      * Where the restored copy is, as the customer finds it: the IMAP folder
-     * for mail, else the path from the `restored-<date>-<id>` folder in the
-     * subscription's home directory (above httpdocs) down.
+     * for mail, without Plesk's `INBOX.` namespace prefix that webmail and
+     * mail programs do not show, else the path from the
+     * `restored-<date>-<id>` folder in the subscription's home directory
+     * (above httpdocs) down.
      */
     public static function location(string $unit, string $restoredTo): string
     {
         if ($unit === 'mail') {
-            return $restoredTo;
+            return str_starts_with($restoredTo, ConfigWriter::MAIL_FOLDER_PREFIX)
+                ? substr($restoredTo, strlen(ConfigWriter::MAIL_FOLDER_PREFIX))
+                : $restoredTo;
         }
         $at = strpos($restoredTo, '/restored-');
 

@@ -76,6 +76,7 @@ final class RestoreRecordTest extends TestCase
     public function testLocations(): void
     {
         self::assertSame('Restored 2026-10-28 abcdef12', RestoreRecord::location('mail', 'Restored 2026-10-28 abcdef12'));
+        self::assertSame('Restored 2026-10-28 abcdef12', RestoreRecord::location('mail', 'INBOX.Restored 2026-10-28 abcdef12'));
         self::assertSame('restored-2026-10-28-abcdef12/example_wp.sql', RestoreRecord::location('db', '/var/www/vhosts/example.test/restored-2026-10-28-abcdef12/example_wp.sql'));
     }
 

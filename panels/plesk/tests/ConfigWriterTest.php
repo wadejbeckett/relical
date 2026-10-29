@@ -39,6 +39,7 @@ final class ConfigWriterTest extends TestCase
         self::assertSame('/usr/local/lib/relical/restic', $config['restic_bin']);
         self::assertSame('/var/lib/relical', $config['state_dir']);
         self::assertSame('/etc/relical/keys', $config['keys_dir']);
+        self::assertSame('INBOX.', $config['mail_folder_prefix']);
         self::assertSame(['defaults_file' => '/etc/relical/mysql.cnf'], $config['mysql']);
         self::assertSame(
             Paths::inventoryCommand(),
