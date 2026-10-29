@@ -270,6 +270,46 @@ final class RestoreRecordTest extends TestCase
         self::assertSame(4, RestoreRecord::recentCustomerRestores($records, 'example.test', $now));
     }
 
+    /** @return iterable<string, array{string}> */
+    public static function refusalsThatRestoredNothing(): iterable
+    {
+        yield 'busy' => [RestoreRecord::BUSY];
+        yield 'server busy' => [RestoreRecord::SERVER_BUSY];
+        yield 'over the limit' => [RestoreRecord::TOO_MANY_RESTORES];
+        yield 'already exists' => ['/var/www/vhosts/example.test/restored-2026-10-29-6779981c already exists (it may be from an earlier, possibly incomplete restore of this snapshot); delete or rename it to restore this snapshot again'];
+        yield 'left by root' => ['/var/www/vhosts/example.test/restored-2026-10-29-6779981c already exists and is still owned by root: it is left from a restore of this snapshot that was interrupted; ask the server\'s administrator to remove it, then restore again'];
+        yield 'database already exists' => ['/var/www/vhosts/example.test/restored-2026-10-29-6779981c/example_wp.sql already exists'];
+        yield 'not in snapshot' => ['path "httpdocs/x" is not in snapshot 6779981c'];
+        yield 'no snapshots' => ['no backup snapshots'];
+        yield 'snapshot not found' => ['snapshot 6779981c not found'];
+        yield 'no database backup' => ['snapshot 6779981c has no backup of database example_wp'];
+        yield 'free space' => ['not enough free space for this restore in /var/www/vhosts/example.test (need 2.0 GiB, free 1.0 GiB)'];
+        yield 'locked' => ['restic: unable to create lock in backend: ' . RestoreRecord::CORE_LOCKED];
+        yield 'run lock' => ['another relical run holds the lock'];
+    }
+
+    /** @dataProvider refusalsThatRestoredNothing */
+    public function testARestoreRefusedBeforeAnythingWasRestoredDoesNotCount(string $error): void
+    {
+        $now = strtotime('2026-10-29T12:00:00Z');
+        $records = [
+            self::record('files', '2026-10-29T11:00:00Z'),
+            self::record('db', '2026-10-29T11:00:00Z'),
+            self::record('files', '2026-10-29T11:30:00Z', ['state' => 'failed', 'error' => $error]),
+        ];
+
+        self::assertSame(2, RestoreRecord::recentCustomerRestores($records, 'example.test', $now));
+    }
+
+    public function testARestoreThatRanAndFailedStillCounts(): void
+    {
+        $now = strtotime('2026-10-29T12:00:00Z');
+        foreach (['the restore did not finish in time', RestoreRecord::STOPPED, 'restic: exit 1', 'exit 3', ''] as $error) {
+            $records = [self::record('files', '2026-10-29T11:00:00Z', ['state' => 'failed', 'error' => $error])];
+            self::assertSame(1, RestoreRecord::recentCustomerRestores($records, 'example.test', $now), $error);
+        }
+    }
+
     public function testRunningRecordsSayWhoStartedThem(): void
     {
         $args = ['restore', '--subscription', 'example.test', '--unit', 'files', '--snapshot', 'abcdef12'];

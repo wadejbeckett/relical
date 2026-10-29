@@ -143,15 +143,35 @@ ok "binaries match SHA256SUMS; /etc/relical, keys, ssh, mysql.cnf modes; timers 
 [ "$(px 'plesk bin extension --exec relical running.php')" = '{"running":false}' ] || fail "running.php through extension --exec"
 ok "plesk bin extension --exec relical <script> reaches root"
 # The panel user's environment must not reach PHP as root (whole-branch review finding 7).
-# The ini disables json_encode and logs errors to a marker file: if it is
-# read, running.php fails and the marker appears. (auto_append_file, the
-# review's proof, does not run after exit(), which every root script calls.)
-px 'mkdir -p /tmp/relical-ini && printf "%s\n" "disable_functions=json_encode" "log_errors=1" "error_log=/tmp/relical-ini/marker" > /tmp/relical-ini/zz.ini && chmod -R a+rX /tmp/relical-ini && chmod 1777 /tmp/relical-ini'
+# The ini sets error_log to a marker file. Plesk's PHP 8.4 reads a scanned
+# ini but does not enforce disable_functions from it, so the checks use
+# what it does honour: error_log, read back with ini_get(), and an error
+# logged to the marker. (auto_append_file, the review's proof, does not run
+# after exit(), which every root script calls.)
+px 'mkdir -p /tmp/relical-ini && printf "%s\n" "log_errors=1" "display_errors=0" "error_log=/tmp/relical-ini/marker" > /tmp/relical-ini/zz.ini && cp /tmp/relical-ini/zz.ini /tmp/relical-ini/php.ini && chmod -R a+rX /tmp/relical-ini && chmod 1777 /tmp/relical-ini'
 OUT=$(docker exec "$P" su -s /bin/sh psaadm -c "PHP_INI_SCAN_DIR=/tmp/relical-ini PHPRC=/tmp/relical-ini $RR running.php" 2>&1 || true)
 [ "$OUT" = '{"running":false}' ] || fail "running.php with the panel user's PHP_INI_SCAN_DIR: $OUT"
-px 'test ! -e /tmp/relical-ini/marker' || fail "PHP_INI_SCAN_DIR from the panel user reached PHP as root through relical-root"
-px 'PHP_INI_SCAN_DIR=/tmp/relical-ini /opt/psa/admin/bin/php -r "echo json_encode(1);" >/dev/null 2>&1; test -e /tmp/relical-ini/marker' \
-    || fail "the ini trick itself did not work, so the check above proves nothing"
+# A root script that reports what PHP read: running.php is swapped for a
+# probe for these checks only (relical-root runs only its allowlisted names).
+S=/opt/psa/admin/plib/modules/relical/scripts
+px "cp -p $S/running.php /root/running.php.keep"
+docker exec -i "$P" sh -c "cat > $S/running.php" <<'EOP'
+<?php
+echo json_encode(['error_log' => (string) ini_get('error_log'), 'scanned' => (string) php_ini_scanned_files(), 'loaded' => (string) php_ini_loaded_file()]), "\n";
+trigger_error('relical ini probe', E_USER_WARNING);
+EOP
+# Positive control: plain PHP with PHP_INI_SCAN_DIR reads the ini and logs to the marker.
+CTRL=$(px "PHP_INI_SCAN_DIR=/tmp/relical-ini /opt/psa/admin/bin/php $S/running.php 2>/dev/null" || true)
+case $CTRL in *'"error_log":"\/tmp\/relical-ini\/marker"'*) ;; *) fail "the ini trick itself did not work (ini_get), so the check below proves nothing: $CTRL" ;; esac
+px 'test -s /tmp/relical-ini/marker' || fail "the ini trick itself did not work (no error logged to the marker), so the check below proves nothing"
+px 'rm -f /tmp/relical-ini/marker'
+# The same probe as the panel user runs it through relical-root.
+ROOTOUT=$(docker exec "$P" su -s /bin/sh psaadm -c "PHP_INI_SCAN_DIR=/tmp/relical-ini PHPRC=/tmp/relical-ini $RR running.php 2>/dev/null" || true)
+px "mv /root/running.php.keep $S/running.php"
+case $ROOTOUT in *'"error_log":'*) ;; *) fail "the probe did not run as root through relical-root: $ROOTOUT" ;; esac
+case $ROOTOUT in *relical-ini*) fail "PHP_INI_SCAN_DIR or PHPRC from the panel user reached PHP as root through relical-root: $ROOTOUT" ;; esac
+px 'test ! -e /tmp/relical-ini/marker' || fail "PHP_INI_SCAN_DIR from the panel user reached PHP as root: the root script logged to the marker"
+[ "$(px 'plesk bin extension --exec relical running.php')" = '{"running":false}' ] || fail "running.php was not put back"
 px 'rm -rf /tmp/relical-ini'
 ok "relical-root clears the environment: PHP_INI_SCAN_DIR and PHPRC do not reach PHP"
 
@@ -219,14 +239,25 @@ px 'plesk bin extension --exec relical cli.php status' | grep -q '"panel-config"
 px 'plesk bin extension --exec relical cli.php report' > "$WORK/report.json"
 grep -q '"failed": 0' "$WORK/report.json" && grep -q '"ok": 4' "$WORK/report.json" || fail "report"
 ok "mail $MAIL1, files $FILES1, db $DB1 and panel-config backed up (real pleskbackup); no dump on disk; status and report"
-px 'systemctl start relical-notify@relical-backup.service' || fail "relical-notify@relical-backup.service did not run"
-px 'grep -q "relical-notify: relical-backup.service failed" /var/lib/relical/relical.log' || fail "the failure notice is not in the run log"
+# A real failure: a drop-in makes the run fail, and OnFailure= must start
+# relical-notify@relical-backup.service.service (%n is the full unit name).
+NOTIFY=relical-notify@relical-backup.service.service
+[ "$(px 'systemctl show -p OnFailure --value relical-backup.service')" = "$NOTIFY" ] || fail "OnFailure= of relical-backup.service is not $NOTIFY"
+px 'test ! -e /var/lib/relical/last-failure.json && ! grep -q "relical-notify:" /var/lib/relical/relical.log' || fail "a failure notice exists before the forced failure"
+px 'mkdir -p /etc/systemd/system/relical-backup.service.d && printf "%s\n" "[Service]" "ExecStart=" "ExecStart=/bin/false" > /etc/systemd/system/relical-backup.service.d/zz-test-fail.conf && systemctl daemon-reload'
+if px 'systemctl start relical-backup.service'; then fail "relical-backup.service with ExecStart=/bin/false did not fail"; fi
+timeout 120 bash -c "until docker exec $P grep -q 'relical-notify: relical-backup.service failed' /var/lib/relical/relical.log; do sleep 2; done" \
+    || fail "OnFailure= did not write the failure notice to the run log"
+timeout 60 bash -c "while [ \"\$(docker exec $P systemctl show -p ActiveState --value $NOTIFY)\" = activating ]; do sleep 1; done" || true
+px 'rm /etc/systemd/system/relical-backup.service.d/zz-test-fail.conf && rmdir /etc/systemd/system/relical-backup.service.d && systemctl daemon-reload && systemctl reset-failed relical-backup.service'
+px 'systemctl cat relical-backup.service | grep -q "^ExecStart=/usr/local/lib/relical/relical "' || fail "the failing drop-in was not removed"
 [ "$(px 'stat -c %a:%U /var/lib/relical/last-failure.json')" = 600:root ] || fail "last-failure.json is not 0600 root"
-px 'journalctl -u relical-notify@relical-backup.service --no-pager -n 20' | tee "$WORK/notify.txt" | grep -q '"logged":true' || fail "notify.php did not log: $(cat "$WORK/notify.txt")"
+px 'grep -q "\"unit\":\"relical-backup.service\"" /var/lib/relical/last-failure.json' || fail "last-failure.json does not name relical-backup.service"
+px "journalctl -u $NOTIFY --no-pager -n 20" | tee "$WORK/notify.txt" | grep -q '"logged":true' || fail "notify.php did not log: $(cat "$WORK/notify.txt")"
 grep -o '"mailed":[a-z]*,"to":"[^"]*"' "$WORK/notify.txt" || true   # mail delivery is reported, not required here
 get admin /modules/relical/index.php "$WORK/admin-failed.html" >/dev/null
 grep -q 'Last failed run' "$WORK/admin-failed.html" && grep -q 'Last successful backup' "$WORK/admin-failed.html" || fail "the settings page does not show the last failure and success"
-ok "relical-notify@ logs the failure, keeps last-failure.json, the settings page shows it"
+ok "a failing run starts $NOTIFY, which logs it and writes last-failure.json (0600 root); the settings page shows it"
 
 # ---------------------------------------------------------------------------
 say "6. restores (as restore-run.php is started by the customer screens)"
@@ -250,7 +281,9 @@ SQL=$(px "ls $W/restored-*-$DB1/example_wp.sql")
 px "mysql -uadmin -p\"\$(cat /etc/psa/.psa.shadow)\" -e 'CREATE DATABASE scratch_wp' && mysql -uadmin -p\"\$(cat /etc/psa/.psa.shadow)\" scratch_wp < $SQL"
 [ "$(px 'mysql -uadmin -p"$(cat /etc/psa/.psa.shadow)" -N scratch_wp -e "select title from posts where id=1"')" = 'hello relical' ] || fail "dump does not load"
 px 'mysql -uadmin -p"$(cat /etc/psa/.psa.shadow)" -e "DROP DATABASE scratch_wp"'
-ok "db: example_wp.sql (0600, exampleuser) loads into a scratch database"
+asPanel "restore-running.php example.test" | grep -q '"recent_restores":2' \
+    || fail "the refused second files restore counted towards the daily limit: $(asPanel "restore-running.php example.test")"
+ok "db: example_wp.sql (0600, exampleuser) loads into a scratch database; the refused restore did not count (2 of 3 today)"
 
 asPanel "restore-run.php $(newId) restore --subscription example.test --unit mail --domain example.test --mailbox alice --snapshot $MAIL1" > "$WORK/r-mail.json"
 grep -q "\"restored_to\":\"INBOX.Restored [0-9-]* $MAIL1\"" "$WORK/r-mail.json" || fail "mail restore: $(cat "$WORK/r-mail.json")"
@@ -272,7 +305,8 @@ px 'M=/var/qmail/mailnames/example.test/alice/Maildir; t=$(mktemp)
     printf "From: bob@example.test\r\nTo: alice@example.test\r\nSubject: second message\r\n\r\nA second message.\r\n" > $t
     f="$M/cur/1761700100.M2P1.plesk.example.test,S=$(stat -c %s $t):2,S"; mv $t "$f"; chown popuser:popuser "$f"; chmod 600 "$f"'
 px 'plesk bin extension --exec relical cli.php backup --subscription example.test' > "$WORK/backup2.json"
-FILES2=$(snap files "$WORK/backup2.json"); MAIL2=$(snap mail "$WORK/backup2.json")
+FILES2=$(snap files "$WORK/backup2.json"); MAIL2=$(snap mail "$WORK/backup2.json"); DB2=$(snap db "$WORK/backup2.json")
+# The customer's third files or database restore today (the limit is 3).
 asPanel "restore-run.php $(newId) restore --subscription example.test --unit files --snapshot $FILES2" > "$WORK/r-whole.json"
 grep -q '"dropped":\["dev/null","dev/random","dev/urandom"\]' "$WORK/r-whole.json" || fail "device nodes not listed as dropped: $(cat "$WORK/r-whole.json")"
 px "test -d $W/restored-*-$FILES2/httpdocs && test -z \"\$(find $W/restored-*-$FILES2 -type c)\"" || fail "whole-webspace restore"
@@ -282,6 +316,21 @@ grep -q '"messages":0' "$WORK/r-inbox.json" && fail "INBOX restore imported noth
 px "doveadm mailbox list -u alice@example.test" | grep -q "^INBOX.Restored [0-9-]* $MAIL2.INBOX\$" || fail "INBOX-only restore folder"
 px "doveadm fetch -u alice@example.test hdr.subject mailbox 'INBOX.Restored * $MAIL2.INBOX' ALL" | grep -q 'second message' || fail "INBOX-only restore content"
 ok "whole webspace $FILES2 lists dev/null, dev/random, dev/urandom as dropped; restored-* not backed up; INBOX only from $MAIL2"
+
+# The daily limit: a fourth customer files or database restore is refused
+# before the core runs; an administrator's is not held to it.
+asPanel "restore-running.php example.test" | grep -q '"recent_restores":3' || fail "restore-running.php does not report 3 restores today"
+ID=$(newId)
+if asPanel "restore-run.php $ID restore --subscription example.test --unit db --database example_wp --snapshot $DB2" > "$WORK/r-fourth.txt" 2>&1; then
+    fail "a fourth customer restore in 24 hours was not refused"
+fi
+asPanel "restore-result.php $ID" | grep -q 'has had 3 website or database restores in the last 24 hours' || fail "the fourth restore's refusal is not in the record"
+px "test -z \"\$(ls -d $W/restored-*-$DB2 2>/dev/null)\"" || fail "the refused fourth restore wrote a restored-* folder"
+asPanel "restore-run.php $(newId) --admin restore --subscription example.test --unit db --database example_wp --snapshot $DB2" > /dev/null \
+    || fail "an administrator's restore past the daily limit was refused"
+px "test -s $W/restored-*-$DB2/example_wp.sql" || fail "the administrator's restore past the limit wrote no dump"
+asPanel "restore-running.php example.test" | grep -q '"recent_restores":3' || fail "the administrator's restore counted towards the customer's limit"
+ok "a fourth customer restore in 24 hours is refused (TOO_MANY_RESTORES, nothing written); an administrator's runs and does not count"
 
 # ---------------------------------------------------------------------------
 say "7. HTTP: admin and customer screens"
@@ -344,7 +393,50 @@ fi
 ok "no PHP fatal, warning or exception from the extension in panel.log"
 
 # ---------------------------------------------------------------------------
-say "8. install edge cases"
+say "8. a stopped run and a timed-out run"
+# relical exits 4 when SIGTERM stops it and the units list SuccessExitStatus=4,
+# so a deliberate stop is a clean end (Result=success): no forget, no notice.
+# A run that hits TimeoutStartSec= is still a failure (Result=timeout).
+# Pausing the SFTP container keeps a run busy (ssh waits for the server).
+notices() { px 'grep -c "relical-notify: relical-backup.service failed" /var/lib/relical/relical.log || true'; }
+invocation() { px "systemctl show -p InvocationID --value $NOTIFY"; }
+unpause() { docker unpause "$SFTP" >/dev/null 2>&1 || true; }
+running() { timeout 60 bash -c "until [ \"\$(docker exec $P systemctl show -p ActiveState --value relical-backup.service)\" = activating ] && docker exec $P pgrep -f 'relical -config /etc/relical/config.json backup' >/dev/null; do sleep 1; done"; }
+N0=$(notices); I0=$(invocation)
+L0=$(px 'wc -l < /var/lib/relical/relical.log')
+docker pause "$SFTP" >/dev/null
+px 'systemctl start --no-block relical-backup.service'
+running || { unpause; fail "the backup did not start"; }
+sleep 3
+T0=$(date +%s)
+timeout 960 docker exec "$P" systemctl stop relical-backup.service || { unpause; fail "systemctl stop relical-backup did not return within 15 minutes"; }
+T1=$(date +%s)
+unpause
+[ $((T1 - T0)) -le 900 ] || fail "systemctl stop relical-backup took $((T1 - T0)) s"
+RESULT=$(px 'systemctl show -p Result --value relical-backup.service')
+[ "$RESULT" = success ] || fail "a deliberate stop ended with Result=$RESULT, not success (SuccessExitStatus=4 and relical's exit 4)"
+px "tail -n +$((L0 + 1)) /var/lib/relical/relical.log" > "$WORK/stopped.log"
+grep -q '"action":"forget"' "$WORK/stopped.log" && fail "a stopped run ran forget: $(cat "$WORK/stopped.log")"
+sleep 5
+[ "$(notices)" = "$N0" ] && [ "$(invocation)" = "$I0" ] || fail "a deliberate stop started $NOTIFY"
+ok "systemctl stop relical-backup returned in $((T1 - T0)) s with Result=success; no forget, no failure notice"
+
+px 'mkdir -p /etc/systemd/system/relical-backup.service.d && printf "%s\n" "[Service]" "TimeoutStartSec=5s" > /etc/systemd/system/relical-backup.service.d/zz-test-timeout.conf && systemctl daemon-reload'
+docker pause "$SFTP" >/dev/null
+if px 'systemctl start relical-backup.service'; then unpause; fail "a run past TimeoutStartSec=5s did not fail"; fi
+unpause
+RESULT=$(px 'systemctl show -p Result --value relical-backup.service')
+px 'rm /etc/systemd/system/relical-backup.service.d/zz-test-timeout.conf && rmdir /etc/systemd/system/relical-backup.service.d && systemctl daemon-reload'
+[ "$RESULT" = timeout ] || fail "a run past TimeoutStartSec= ended with Result=$RESULT, not timeout"
+timeout 120 bash -c "until [ \"\$(docker exec $P grep -c 'relical-notify: relical-backup.service failed' /var/lib/relical/relical.log)\" -gt $N0 ]; do sleep 2; done" \
+    || fail "a timed-out run did not start $NOTIFY"
+[ "$(invocation)" != "$I0" ] || fail "a timed-out run did not start $NOTIFY (same invocation)"
+px 'systemctl reset-failed relical-backup.service'
+px 'systemctl show -p TimeoutStartUSec --value relical-backup.service' | grep -q '^20h$' || fail "the timeout drop-in was not removed"
+ok "a run past TimeoutStartSec= fails with Result=timeout and starts $NOTIFY"
+
+# ---------------------------------------------------------------------------
+say "9. install edge cases"
 px 'printf "%s\n" "<?php" "pm_Context::init(\"relical\");" "pm_Settings::set(\"sftp_port\", \$argv[1]);" > /opt/psa/admin/plib/modules/relical/scripts/zz-test-set.php'
 px '/opt/psa/admin/bin/php -dauto_prepend_file=sdk.php /opt/psa/admin/plib/modules/relical/scripts/zz-test-set.php 0'
 before=$(px 'stat -c %Y /etc/relical/config.json')

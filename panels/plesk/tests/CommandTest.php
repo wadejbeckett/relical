@@ -163,6 +163,8 @@ final class CommandTest extends TestCase
         yield 'backup one' => [['backup', '--subscription', 'example.test'], ['backup', '--subscription', 'example.test']];
         yield 'backup all' => [['backup', '--all'], ['backup', '--all']];
         yield 'backup unit' => [['backup', '--subscription', 'example.test', '--unit', 'db'], ['backup', '--subscription', 'example.test', '--unit', 'db']];
+        yield 'backup all without forget' => [['backup', '--all', '--no-forget'], ['backup', '--all', '--no-forget']];
+        yield 'backup all one unit without forget' => [['backup', '--no-forget', '--unit', 'files', '--all'], ['backup', '--all', '--unit', 'files', '--no-forget']];
         yield 'backup all one unit' => [['backup', '--all', '--unit', 'mail'], ['backup', '--all', '--unit', 'mail']];
         yield 'backup panel config' => [['backup', '--subscription', '_server', '--unit', 'panel-config'], ['backup', '--subscription', '_server', '--unit', 'panel-config']];
         yield 'forget all' => [['forget', '--all'], ['forget', '--all']];
@@ -222,12 +224,20 @@ final class CommandTest extends TestCase
         yield 'duplicate flag' => [['snapshots', '--subscription', 'example.test', '--subscription', 'other.example.test']];
         yield 'missing value' => [['snapshots', '--subscription']];
         yield 'flag as value' => [['snapshots', '--subscription', '--unit']];
-        yield 'dash value for path' => [['ls', '--subscription', 'example.test', '--snapshot', 'latest', '--path', '-osftp.command=id']];
+        yield 'dash value for path' => [['ls', '--subscription', 'example.test', '--snapshot', 'abcdef12', '--path', '-osftp.command=id']];
+        yield 'ls of latest' => [['ls', '--subscription', 'example.test', '--snapshot', 'latest']];
+        yield 'ls of a short id' => [['ls', '--subscription', 'example.test', '--snapshot', 'abcdef1']];
+        yield 'ls of an upper-case id' => [['ls', '--subscription', 'example.test', '--snapshot', 'ABCDEF12']];
         yield 'dash value for folder' => [['restore', '--subscription', 'example.test', '--unit', 'mail', '--domain', 'example.test', '--mailbox', 'info', '--folder', '-x']];
         yield 'dash value for subscription' => [['backup', '--subscription', '-x']];
         yield 'stray positional' => [['status', 'extra']];
         yield 'status takes no flags' => [['status', '--all']];
         yield 'unit on forget' => [['forget', '--all', '--unit', 'mail']];
+        yield 'no-forget on one subscription' => [['backup', '--subscription', 'example.test', '--no-forget']];
+        yield 'no-forget with a value' => [['backup', '--all', '--no-forget', 'true']];
+        yield 'no-forget twice' => [['backup', '--all', '--no-forget', '--no-forget']];
+        yield 'no-forget on forget' => [['forget', '--all', '--no-forget']];
+        yield 'no-forget on check' => [['check', '--all', '--no-forget']];
         yield 'subset on backup' => [['backup', '--all', '--read-data-subset', '5%']];
         yield 'snapshots needs subscription' => [['snapshots', '--all']];
         yield 'ls needs snapshot' => [['ls', '--subscription', 'example.test']];
@@ -284,6 +294,11 @@ final class CommandTest extends TestCase
         yield ['snapshot', str_repeat('a', 65), false];
         yield ['snapshot', 'ABCDEF12', false];
         yield ['snapshot', 'abcdef12 ', false];
+        yield ['snapshotId', 'abcdef12', true];
+        yield ['snapshotId', str_repeat('a', 64), true];
+        yield ['snapshotId', 'latest', false];
+        yield ['snapshotId', 'abcdef1', false];
+        yield ['snapshotId', 'ABCDEF12', false];
         yield ['snapshot', "abcdef12\n", false];
         // unit
         yield ['unit', 'mail', true];

@@ -155,20 +155,6 @@ final class Inventory
                 $databases[] = ['type' => 'mysql', 'name' => $dbName];
             }
 
-            $mailDomains = [];
-            foreach (self::mailDomains($name, self::stringList($webspace['mail_domains'] ?? [])) as $domain) {
-                if (!CoreRules::validDomain($domain)) {
-                    $skipped[] = self::skip($domain, sprintf('mail of %s: the domain name is not lower-case punycode', $name));
-                    continue;
-                }
-                if (isset($mailOwner[$domain])) {
-                    $skipped[] = self::skip($domain, sprintf('mail of %s: the domain is already listed by %s', $name, $mailOwner[$domain]));
-                    continue;
-                }
-                $mailOwner[$domain] = $name;
-                $mailDomains[] = $domain;
-            }
-
             $names[$name] = true;
             $ids[$id] = $name;
             foreach ($databases as $database) {
@@ -183,7 +169,7 @@ final class Inventory
                 'gid' => $gid,
                 'home' => $home,
                 'features' => $features,
-                'mail_domains' => $mailDomains,
+                'mail_domains' => self::mailDomains($name, self::stringList($webspace['mail_domains'] ?? [])),
                 'files' => $home === '' ? [] : [$home],
                 'file_excludes' => self::DEFAULT_FILE_EXCLUDES,
                 'databases' => $databases,
@@ -192,12 +178,53 @@ final class Inventory
             ];
         }
 
+        // Mail domains, once every subscription's name is known. The core
+        // refuses both subscriptions when one lists the other's name as a
+        // mail domain, and both when two list the same mail domain, so such
+        // a mail domain is dropped (the first listing of a shared one stays)
+        // and the subscriptions back up without it.
+        foreach ($subscriptions as $i => $subscription) {
+            $name = $subscription['name'];
+            $mailDomains = [];
+            foreach ($subscription['mail_domains'] as $domain) {
+                if (!CoreRules::validDomain($domain)) {
+                    $skipped[] = self::skip($domain, sprintf('mail of %s: the domain name is not lower-case punycode', $name));
+                    continue;
+                }
+                if ($domain !== $name && isset($names[$domain])) {
+                    $skipped[] = self::skip($domain, sprintf('mail of %s: the domain is the name of another subscription', $name));
+                    continue;
+                }
+                if (isset($mailOwner[$domain])) {
+                    $skipped[] = self::skip($domain, sprintf('mail of %s: the domain is already listed by %s', $name, $mailOwner[$domain]));
+                    continue;
+                }
+                $mailOwner[$domain] = $name;
+                $mailDomains[] = $domain;
+            }
+            $subscriptions[$i]['mail_domains'] = $mailDomains;
+        }
+
         // The core refuses a renamed_from that is not a domain, is the
-        // subscription's own name or still names a subscription: such a
-        // hint is dropped, never allowed to stop the run.
+        // subscription's own name or still names a subscription, and refuses
+        // both subscriptions when two give the same one: such a hint is
+        // dropped, never allowed to stop the run.
+        $hintedBy = [];
         foreach ($subscriptions as $i => $subscription) {
             $from = $subscription['renamed_from'];
             if ($from !== '' && (!CoreRules::validDomain($from) || $from === $subscription['name'] || isset($names[$from]))) {
+                $subscriptions[$i]['renamed_from'] = '';
+            } elseif ($from !== '') {
+                $hintedBy[$from][] = $i;
+            }
+        }
+        foreach ($hintedBy as $from => $indexes) {
+            if (count($indexes) < 2) {
+                continue;
+            }
+            foreach ($indexes as $i) {
+                $others = array_values(array_diff(array_map(static fn (int $j): string => $subscriptions[$j]['name'], $indexes), [$subscriptions[$i]['name']]));
+                $skipped[] = self::skip($subscriptions[$i]['name'], sprintf('renamed_from %s: the old name is also given by %s, so neither hint is kept', $from, implode(', ', $others)));
                 $subscriptions[$i]['renamed_from'] = '';
             }
         }

@@ -44,6 +44,34 @@ final class ConfigFilesTest extends TestCase
         self::assertSame(ConfigWriter::mysqlOptionFile('second-pass'), file_get_contents($cnf));
     }
 
+    public function testLoosePermissionsArePutBackWhenThePasswordIsRight(): void
+    {
+        $shadow = $this->dir . '/shadow';
+        $cnf = $this->dir . '/mysql.cnf';
+        file_put_contents($shadow, "first-pass\n");
+        file_put_contents($cnf, ConfigWriter::mysqlOptionFile('first-pass'));
+        chmod($cnf, 0644);
+
+        self::assertTrue(ConfigFiles::refreshMysqlOptionFile($shadow, $cnf), 'a world-readable file is rewritten');
+        clearstatcache();
+        self::assertSame(0600, fileperms($cnf) & 07777);
+        self::assertSame(ConfigWriter::mysqlOptionFile('first-pass'), file_get_contents($cnf));
+        self::assertSame([], glob($this->dir . '/.*.tmp') ?: [], 'no temporary file is left');
+        self::assertFalse(ConfigFiles::refreshMysqlOptionFile($shadow, $cnf), 'then it is left alone');
+    }
+
+    public function testAFileOwnedBySomeoneElseIsRewritten(): void
+    {
+        $shadow = $this->dir . '/shadow';
+        $cnf = $this->dir . '/mysql.cnf';
+        file_put_contents($shadow, "first-pass\n");
+        self::assertTrue(ConfigFiles::refreshMysqlOptionFile($shadow, $cnf));
+        $mine = (int) fileowner($cnf);
+
+        self::assertFalse(ConfigFiles::refreshMysqlOptionFile($shadow, $cnf, $mine));
+        self::assertTrue(ConfigFiles::refreshMysqlOptionFile($shadow, $cnf, $mine + 1), 'not owned by the expected user: rewritten');
+    }
+
     public function testAnUnreadableShadowOrALinkedTargetIsAnError(): void
     {
         try {

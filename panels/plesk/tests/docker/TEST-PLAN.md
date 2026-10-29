@@ -243,13 +243,21 @@ has not yet seen. Each line is open until the next `run.sh` run.
       has had 3 website or database restores in the last 24 hours", both on
       the form (`restore-running.php` returns `recent_restores`) and in
       `restore-run.php` as root; mail restores and an administrator's
-      (`restore-run.php <id> --admin restore ...`) are not counted or held.
+      (`restore-run.php <id> --admin restore ...`) are not counted or held,
+      and neither is a restore the core refused before restoring anything
+      ("already exists", "is not in snapshot", "not enough free space", a
+      locked repository). `run.sh` step 6: the refused second files restore
+      leaves the count at 2, the whole-webspace restore is the third, a
+      fourth (database) is refused, and an administrator's then runs.
 - [~] Plesk disk quota: a restore is not checked against the
       subscription's Plesk disk quota (whole-branch review finding 4). Not
       done for the pilot; the daily limit and the five-copy cap bound how
       much a customer can add. Revisit with `pm_Domain` limits.
-- [ ] Failure notice: both services carry `OnFailure=relical-notify@%n.service`;
-      `systemctl start relical-notify@relical-backup.service` appends
+- [ ] Failure notice: both services carry `OnFailure=relical-notify@%n.service`,
+      which systemd expands to `relical-notify@relical-backup.service.service`
+      (`systemctl show -p OnFailure relical-backup.service`). A run made to
+      fail by a drop-in (`ExecStart=/bin/false`, removed afterwards) starts
+      that instance, which appends
       "relical-notify: relical-backup.service failed" to the run log, writes
       `/var/lib/relical/last-failure.json` (0600 root) and the settings page
       shows "Last failed run" and "Last successful backup" (`run.sh` step 5).
@@ -260,12 +268,22 @@ has not yet seen. Each line is open until the next `run.sh` run.
 - [ ] Bounded runs: `TimeoutStartSec=20h` (not `RuntimeMaxSec=`, which
       systemd ignores for oneshot units) and `TimeoutStopSec=15min`;
       `systemctl stop relical-backup` during a run returns within the
-      timeout and starts no forget (core finding 5).
+      timeout and starts no forget (core finding 5). relical exits 4
+      ("interrupted") on SIGINT or SIGTERM and both units list
+      `SuccessExitStatus=4`, so the stop ends with `Result=success` and
+      starts no `relical-notify@` instance; a run that hits
+      `TimeoutStartSec=` (a 5 s drop-in on a run kept busy by pausing the
+      SFTP container) still ends with `Result=timeout` and starts the
+      notice (`run.sh` step 8).
 - [ ] `relical-root` starts PHP with `env -i PATH=... LANG=C.UTF-8`: every
       root script, the install hooks and the core's `inventory.php` still
       work with the empty environment (does Plesk's SDK need HOME or
       anything else?), and the panel user's `PHP_INI_SCAN_DIR`/`PHPRC` no
       longer reach PHP (`run.sh` step 3, with a positive control).
+      Plesk's PHP 8.4 reads a scanned ini but does not enforce
+      `disable_functions` from it, so step 3 checks `ini_get('error_log')`
+      and an error logged to a marker file, through a probe that stands in
+      for `running.php` while the check runs.
 - [ ] Reinstall: after `plesk bin extension -u relical` and a fresh install
       (settings empty, old `config.json` kept), the settings page says
       backups still go to the old destination (from `overview.php`'s
@@ -282,4 +300,4 @@ has not yet seen. Each line is open until the next `run.sh` run.
       and each ls folder, five minutes). `post-install.php upgrade 0.2.0`
       still runs; `inventory.php` and `pre-uninstall.php` refuse arguments
       (confirm Plesk passes none to pre-uninstall: `plesk bin extension -u`
-      in step 8).
+      in step 9).

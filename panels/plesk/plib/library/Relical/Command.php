@@ -15,7 +15,8 @@ use InvalidArgumentException;
  *
  *     /usr/local/lib/relical/relical -config /etc/relical/config.json <command> <flags>
  *
- * Flags are written `--name value`; boolean flags (`--all`) take no value.
+ * Flags are written `--name value`; boolean flags (`--all`, and
+ * `--no-forget` on backup --all) take no value.
  */
 final class Command
 {
@@ -41,6 +42,8 @@ final class Command
     public const CUSTOMER_UNITS = ['mail', 'files', 'db'];
 
     private const SNAPSHOT = '/^(latest|[0-9a-f]{8,64})$/D';
+    /** A snapshot id only: what the core's ls needs (it refuses "latest"). */
+    private const SNAPSHOT_ID = '/^[0-9a-f]{8,64}$/D';
     private const MAILBOX = '/^[a-z0-9][a-z0-9._+-]{0,63}$/D';
     private const DATABASE = '/^[A-Za-z0-9_$][A-Za-z0-9_$-]{0,63}$/D';
     private const SUBSET = '/^(100|[1-9][0-9]?)%$/D';
@@ -75,7 +78,14 @@ final class Command
                 $unit = self::optional($flags, 'unit', [self::class, 'unit']);
                 self::unitFitsTarget($flags, $unit);
                 $out = array_merge($out, self::emit('unit', $unit));
-                self::only($flags, ['subscription', 'all', 'unit']);
+                if (array_key_exists('no-forget', $flags)) {
+                    // As the core: retention is only applied after backup --all.
+                    if (!array_key_exists('all', $flags)) {
+                        throw new InvalidArgumentException('--no-forget is for backup --all');
+                    }
+                    $out[] = '--no-forget';
+                }
+                self::only($flags, ['subscription', 'all', 'unit', 'no-forget']);
                 break;
 
             case 'forget':
@@ -107,7 +117,7 @@ final class Command
             case 'ls':
                 $out = array_merge(
                     self::emit('subscription', self::required($flags, 'subscription', [self::class, 'subscription'])),
-                    self::emit('snapshot', self::required($flags, 'snapshot', [self::class, 'snapshot'])),
+                    self::emit('snapshot', self::required($flags, 'snapshot', [self::class, 'snapshotId'])),
                     self::emit('path', self::optional($flags, 'path', [self::class, 'path']))
                 );
                 self::only($flags, ['subscription', 'snapshot', 'path']);
@@ -372,7 +382,7 @@ final class Command
         if (($kind === 'snapshots' || $kind === 'mailboxes') && $count === 2) {
             $cli = [$kind, '--subscription', self::domain($args[1])];
         } elseif ($kind === 'ls' && ($count === 3 || $count === 4)) {
-            if (preg_match('/^[0-9a-f]{8,64}$/D', $args[2]) !== 1) {
+            if (preg_match(self::SNAPSHOT_ID, $args[2]) !== 1) {
                 throw new InvalidArgumentException('ls needs a hexadecimal snapshot id');
             }
             $cli = ['ls', '--subscription', self::domain($args[1]), '--snapshot', $args[2]];
@@ -429,6 +439,15 @@ final class Command
     {
         if (preg_match(self::SNAPSHOT, $value) !== 1) {
             throw new InvalidArgumentException('snapshot must be "latest" or a hexadecimal snapshot id');
+        }
+
+        return $value;
+    }
+
+    public static function snapshotId(string $value): string
+    {
+        if (preg_match(self::SNAPSHOT_ID, $value) !== 1) {
+            throw new InvalidArgumentException('snapshot must be a hexadecimal snapshot id (8 to 64 characters)');
         }
 
         return $value;
@@ -526,7 +545,7 @@ final class Command
             if (array_key_exists($name, $flags)) {
                 throw new InvalidArgumentException(sprintf('--%s given twice', $name));
             }
-            if ($name === 'all') {
+            if ($name === 'all' || $name === 'no-forget') {
                 $flags[$name] = true;
                 continue;
             }

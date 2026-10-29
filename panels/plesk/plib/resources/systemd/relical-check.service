@@ -9,15 +9,20 @@ ConditionPathExists=/etc/relical/config.json
 # A failed run is logged and mailed to the Plesk administrator.
 OnFailure=relical-notify@%n.service
 
-# A check that starts while a backup is still running fails on relical's own
-# lock and is not retried until next week, so the timer runs it twelve hours
-# after the nightly backup time.
+# A check that starts while the backup (or its retention) is still running
+# waits up to 2 hours for relical's run lock, then fails and is not retried
+# until next week, so the timer runs it twelve hours after the nightly
+# backup time to stay clear of that wait.
 
 [Service]
 Type=oneshot
 # "%%" is a literal "%" in a unit file.
 ExecStart=/usr/local/lib/relical/relical -config /etc/relical/config.json check --all --read-data-subset 5%%
 TimeoutStopSec=15min
+# relical exits 4 ("interrupted") when SIGINT or SIGTERM stops it, so a
+# deliberate `systemctl stop` is not a failure and sends no notice. A run
+# stopped by TimeoutStartSec= is still a failure (Result=timeout).
+SuccessExitStatus=4
 # A hung check must not run into the next week's (TimeoutStartSec=, not
 # RuntimeMaxSec=, bounds a oneshot service).
 TimeoutStartSec=20h

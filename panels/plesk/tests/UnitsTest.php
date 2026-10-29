@@ -89,6 +89,18 @@ final class UnitsTest extends TestCase
         self::assertSame(Units::NOTIFY_SERVICE, 'relical-notify@.service');
     }
 
+    public function testADeliberateStopIsNotAFailure(): void
+    {
+        $units = self::rendered();
+
+        foreach (Units::SERVICES as $name) {
+            $service = substr($units[$name], (int) strpos($units[$name], "[Service]\n"));
+            self::assertStringContainsString("\nSuccessExitStatus=4\n", $service, $name . ': exit 4 (interrupted) is a clean stop');
+            self::assertDoesNotMatchRegularExpression('/^SuccessExitStatus=.*\b(1|SIGTERM|SIGINT)\b/m', $service, $name . ': a failed run or a kill must stay a failure');
+        }
+        self::assertDoesNotMatchRegularExpression('/^SuccessExitStatus=/m', $units[Units::NOTIFY_SERVICE]);
+    }
+
     /** @return iterable<array{string}> */
     public static function badRootScripts(): iterable
     {
