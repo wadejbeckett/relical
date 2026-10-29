@@ -11,6 +11,17 @@ use Throwable;
  * counts, failures, stored bytes and per-subscription rows). The command
  * arrives with core Task 5; until then the core answers "unknown command"
  * and the block says the report is not available yet.
+ *
+ * The shape is the one core Task 5 defines (plan
+ * docs/plans/2026-10-23-phase-2-full-backup-plesk-extension.md, Task 5;
+ * Task 8 review finding 8):
+ *
+ *     {generated, subscriptions, ok, failed, skipped, stored_bytes,
+ *      rows: [{subscription, unit, ok, time, error, stored_bytes}],
+ *      renamed: [{name, renamed_from}]}
+ *
+ * `renamed` is the plan's "report also lists the inventory's renamed
+ * entries". Unknown keys are ignored.
  */
 final class Report
 {
@@ -62,10 +73,11 @@ final class Report
             $what = implode(' ', array_filter([
                 is_string($row['subscription'] ?? null) ? $row['subscription'] : '',
                 is_string($row['unit'] ?? null) ? $row['unit'] : '',
-                is_string($row['database'] ?? null) ? $row['database'] : '',
-                is_string($row['action'] ?? null) ? $row['action'] : '',
             ], static fn (string $s): bool => $s !== ''));
             $error = is_string($row['error'] ?? null) && $row['error'] !== '' ? $row['error'] : 'failed';
+            if (is_string($row['time'] ?? null) && $row['time'] !== '') {
+                $error .= ' (' . $row['time'] . ')';
+            }
             $failures[] = ($what !== '' ? $what . ': ' : '') . $error;
         }
 

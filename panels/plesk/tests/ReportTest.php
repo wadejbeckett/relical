@@ -32,8 +32,9 @@ final class ReportTest extends TestCase
             'subscriptions' => 3, 'ok' => 7, 'failed' => 1, 'skipped' => 0,
             'stored_bytes' => 1536,
             'rows' => [
-                ['subscription' => 'example.test', 'unit' => 'mail', 'action' => 'backup', 'ok' => true],
-                ['subscription' => 'example.test', 'unit' => 'db', 'database' => 'example_wp', 'action' => 'backup', 'ok' => false, 'error' => 'mysqldump: exit 2'],
+                ['subscription' => 'example.test', 'unit' => 'mail', 'ok' => true, 'time' => '2026-10-28T01:00:09Z', 'error' => '', 'stored_bytes' => 1024],
+                ['subscription' => 'example.test', 'unit' => 'db:example_wp', 'ok' => false, 'time' => '2026-10-28T01:03:00Z', 'error' => 'mysqldump: exit 2', 'stored_bytes' => 0],
+                ['subscription' => 'other.example.test', 'unit' => 'files', 'ok' => false, 'time' => '', 'error' => ''],
             ],
             'renamed' => [['name' => 'new.example.test', 'renamed_from' => 'old.example.test']],
         ]);
@@ -49,7 +50,7 @@ final class ReportTest extends TestCase
             ['label' => 'Skipped', 'value' => '0'],
             ['label' => 'Stored', 'value' => '1.5 KiB'],
         ], $report['summary']);
-        self::assertSame(['example.test db example_wp backup: mysqldump: exit 2'], $report['failures']);
+        self::assertSame(['example.test db:example_wp: mysqldump: exit 2 (2026-10-28T01:03:00Z)', 'other.example.test files: failed'], $report['failures']);
         self::assertSame(['new.example.test was old.example.test; the old repository is kept'], $report['renamed']);
     }
 
