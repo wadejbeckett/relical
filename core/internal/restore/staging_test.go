@@ -178,26 +178,47 @@ func TestPrepareTreeCapsTheDroppedList(t *testing.T) {
 
 func TestRestoreRefusesWithoutFreeSpace(t *testing.T) {
 	e, _, log := webSetup(t)
+	var fsys syscall.Statfs_t
 	old := statfs
 	statfs = func(path string, st *syscall.Statfs_t) error {
-		st.Bsize, st.Bavail = 4096, 1000 // about 4 MB free
+		*st = fsys
 		return nil
 	}
 	t.Cleanup(func() { statfs = old })
-	_, err := RunFiles(context.Background(), e, FilesRequest{Subscription: "example.test", Snapshot: "latest"})
-	if err == nil || !strings.Contains(err.Error(), "not enough free space for this restore in "+job.RestoreStagingDir(e.Cfg.Roots.Files[0])+" (need 256.0 MiB, free 3.9 MiB)") {
-		t.Fatalf("files: %v", err)
+	refused := func(want string) {
+		t.Helper()
+		_, err := RunFiles(context.Background(), e, FilesRequest{Subscription: "example.test", Snapshot: "latest"})
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("files: %v, want %q", err, want)
+		}
+		_, err = RunDB(context.Background(), e, DBRequest{Subscription: "example.test", Database: "example_wp", Snapshot: "latest"})
+		if err == nil || !strings.Contains(err.Error(), "not enough free") {
+			t.Fatalf("db: %v", err)
+		}
 	}
-	_, err = RunDB(context.Background(), e, DBRequest{Subscription: "example.test", Database: "example_wp", Snapshot: "latest"})
-	if err == nil || !strings.Contains(err.Error(), "not enough free space") {
-		t.Fatalf("db: %v", err)
-	}
+	// A small file system: the reserve is MinSpaceReserve (10 GiB).
+	fsys = syscall.Statfs_t{Bsize: 4096, Frsize: 4096, Blocks: 1 << 20, Bavail: 1000}
+	refused("not enough free space for this restore in " + job.RestoreStagingDir(e.Cfg.Roots.Files[0]) + " (need 10.0 GiB, free 3.9 MiB)")
+	// A large one: 5% of it (25 GiB of 500 GiB).
+	fsys = syscall.Statfs_t{Bsize: 4096, Frsize: 4096, Blocks: 500 << 18, Bavail: 20 << 18}
+	refused("(need 25.0 GiB, free 20.0 GiB)")
+	// Blocks are counted in Frsize, not Bsize: 5 GiB free, not 20 GiB.
+	fsys = syscall.Statfs_t{Bsize: 4096, Frsize: 1024, Blocks: 100 << 20, Bavail: 5 << 20}
+	refused("(need 10.0 GiB, free 5.0 GiB)")
+	// Room for the bytes, but not for the inodes (5% of them reserved).
+	fsys = syscall.Statfs_t{Bsize: 4096, Frsize: 4096, Blocks: 100 << 20, Bavail: 90 << 20, Files: 1000, Ffree: 40}
+	refused("not enough free inodes for this restore")
 	l := log()
 	if strings.Contains(l, "restore ") || strings.Contains(l, "dump ") {
 		t.Errorf("restic restored or dumped:\n%s", l)
 	}
 	if !strings.Contains(l, "stats --mode restore-size --json "+filesSnap) || !strings.Contains(l, "ls --json --recursive "+dbSnap+" /example_wp.sql") {
 		t.Errorf("size estimate:\n%s", l)
+	}
+	// Enough of both: the restore runs.
+	fsys = syscall.Statfs_t{Bsize: 4096, Frsize: 1024, Blocks: 100 << 20, Bavail: 90 << 20, Files: 1000, Ffree: 900}
+	if _, err := RunFiles(context.Background(), e, FilesRequest{Subscription: "example.test", Snapshot: "latest"}); err != nil {
+		t.Fatal(err)
 	}
 }
 

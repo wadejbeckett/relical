@@ -477,11 +477,11 @@ func TestRealRestoreIncludeSiblingsAndEscapes(t *testing.T) {
 		}
 	}
 	// The restore size of the whole snapshot and of one path.
-	if n, err := r.RestoreSize(ctx, sum.SnapshotID, ""); err != nil || n < 8 {
-		t.Errorf("whole snapshot: %d %v", n, err)
+	if n, files, err := r.RestoreSize(ctx, sum.SnapshotID, ""); err != nil || n < 8 || files < 2 {
+		t.Errorf("whole snapshot: %d %d %v", n, files, err)
 	}
-	if n, err := r.RestoreSize(ctx, sum.SnapshotID, home+"/httpdocs2"); err != nil || n != uint64(len("httpdocs2")) {
-		t.Errorf("httpdocs2: %d %v", n, err)
+	if n, files, err := r.RestoreSize(ctx, sum.SnapshotID, home+"/httpdocs2"); err != nil || n != uint64(len("httpdocs2")) || files == 0 {
+		t.Errorf("httpdocs2: %d %d %v", n, files, err)
 	}
 }
 

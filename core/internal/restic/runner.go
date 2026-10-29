@@ -386,37 +386,38 @@ func (r Runner) Stats(ctx context.Context) (uint64, error) {
 	return *s.TotalSize, nil
 }
 
-// RestoreSize estimates the bytes a restore of snapshotID would write:
+// RestoreSize estimates the bytes a restore of snapshotID would write,
+// and the entries (files, directories and the rest; each takes an inode):
 // for the whole snapshot, restic stats --mode restore-size; for a path
 // (restic stats has no subtree filter: its --path selects snapshots), the
-// sum of the file sizes restic ls --recursive lists under it.
-func (r Runner) RestoreSize(ctx context.Context, snapshotID, path string) (uint64, error) {
+// file sizes and nodes restic ls --recursive lists under it.
+func (r Runner) RestoreSize(ctx context.Context, snapshotID, path string) (bytes, entries uint64, err error) {
 	if path == "" {
 		out, err := r.run(ctx, "stats", "--mode", "restore-size", "--json", snapshotID)
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		var s struct {
-			TotalSize *uint64 `json:"total_size"`
+			TotalSize      *uint64 `json:"total_size"`
+			TotalFileCount uint64  `json:"total_file_count"`
 		}
 		if err := json.Unmarshal(out, &s); err != nil || s.TotalSize == nil {
-			return 0, fmt.Errorf("restic stats: no total_size in the output (%v)", err)
+			return 0, 0, fmt.Errorf("restic stats: no total_size in the output (%v)", err)
 		}
-		return *s.TotalSize, nil
+		return *s.TotalSize, s.TotalFileCount, nil
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	cmd := r.command(ctx, "ls", "--json", "--recursive", snapshotID, path)
-	var stderr bytes.Buffer
+	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.StdoutPipe()
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if err := cmd.Start(); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	var total uint64
 	sc := bufio.NewScanner(out)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for sc.Scan() {
@@ -425,8 +426,11 @@ func (r Runner) RestoreSize(ctx context.Context, snapshotID, path string) (uint6
 			Type        string `json:"type"`
 			Size        uint64 `json:"size"`
 		}
-		if json.Unmarshal(sc.Bytes(), &n) == nil && n.MessageType == "node" && n.Type == "file" {
-			total += n.Size
+		if json.Unmarshal(sc.Bytes(), &n) == nil && n.MessageType == "node" {
+			entries++
+			if n.Type == "file" {
+				bytes += n.Size
+			}
 		}
 	}
 	serr := sc.Err()
@@ -435,12 +439,12 @@ func (r Runner) RestoreSize(ctx context.Context, snapshotID, path string) (uint6
 		io.Copy(io.Discard, out)
 	}
 	if err := cmd.Wait(); err != nil && serr == nil {
-		return 0, fmt.Errorf("restic ls: %w: %s", err, strings.TrimSpace(stderr.String()))
+		return 0, 0, r.exitError(ctx, "ls", err, stderr.String())
 	}
 	if serr != nil {
-		return 0, fmt.Errorf("restic ls: %w", serr)
+		return 0, 0, fmt.Errorf("restic ls: %w", serr)
 	}
-	return total, nil
+	return bytes, entries, nil
 }
 
 func (r Runner) Check(ctx context.Context, readDataSubset string) error {

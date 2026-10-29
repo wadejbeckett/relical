@@ -59,7 +59,7 @@ case "$1" in
     cat "$FAKE_BACKUP_OUT"; exit "${FAKE_BACKUP_EXIT:-0}" ;;
   stats)
     if [ -n "$FAKE_STATS_EXIT" ]; then echo "stats failed" >&2; exit "$FAKE_STATS_EXIT"; fi
-    echo "{\"total_size\":${FAKE_STATS_SIZE:-4096},\"total_uncompressed_size\":8192,\"snapshots_count\":2}"
+    echo "{\"total_size\":${FAKE_STATS_SIZE:-4096},\"total_uncompressed_size\":8192,\"total_file_count\":3,\"snapshots_count\":2}"
     exit 0 ;;
   snapshots) cat "$FAKE_SNAPSHOTS_OUT"; exit 0 ;;
   restore)

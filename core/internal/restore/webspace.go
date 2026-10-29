@@ -478,14 +478,22 @@ func prepareTree(root string, uid, gid int) (files int, bytes int64, dropped []s
 // file system.
 var statfs = syscall.Statfs
 
-// SpaceReserve is kept free on top of a restore's size and 10% margin.
-const SpaceReserve = 256 << 20
+// The reserve kept free on top of a restore's size and 10% margin, on
+// each file system the restore writes to: SpaceReservePercent of the file
+// system, at least MinSpaceReserve, so that a restore never fills a file
+// system that the server's sites, mail and databases also need. Free
+// inodes are checked the same way (InodeReservePercent of them).
+const (
+	SpaceReservePercent         = 5
+	MinSpaceReserve      uint64 = 10 << 30
+	InodeReservePercent         = 5
+)
 
 // ensureSpace refuses a restore of path (empty for the whole snapshot)
-// when the restore staging file system, which is home's, has less free
-// space than the restore's estimated size plus 10% plus SpaceReserve.
+// when the restore staging file system, which is home's, has too little
+// free space or too few free inodes (see checkSpace).
 func (w *webspace) ensureSpace(ctx context.Context, r restic.Runner, snapshotID, path string) error {
-	size, err := r.RestoreSize(ctx, snapshotID, path)
+	size, entries, err := r.RestoreSize(ctx, snapshotID, path)
 	if err != nil {
 		return fmt.Errorf("estimating the size of the restore: %w", err)
 	}
@@ -493,18 +501,22 @@ func (w *webspace) ensureSpace(ctx context.Context, r restic.Runner, snapshotID,
 	if err := job.EnsureRestoreStaging(dir); err != nil {
 		return err
 	}
-	return checkSpace(size, dir)
+	return checkSpace(size, entries, dir)
 }
 
 // stat is syscall.Stat; a variable so that tests can put two directories
 // on one file system or on two.
 var stat = syscall.Stat
 
-// checkSpace refuses a restore of size bytes unless each file system that
-// receives a copy has the size plus 10%, for every copy it receives, plus
-// SpaceReserve free. dirs lists one directory per copy written; two on
-// the same file system (by st_dev) need room for both copies there.
-func checkSpace(size uint64, dirs ...string) error {
+// checkSpace refuses a restore of size bytes in entries entries unless
+// each file system that receives a copy has, for every copy it receives,
+// the size plus 10% free, plus the reserve (the larger of
+// SpaceReservePercent of the file system and MinSpaceReserve), and as
+// many free inodes plus 10% plus InodeReservePercent of them (not checked
+// on file systems that report no inode count, such as btrfs). dirs lists
+// one directory per copy written; two on the same file system (by st_dev)
+// need room for both copies there. Disk quotas are not checked.
+func checkSpace(size, entries uint64, dirs ...string) error {
 	type fsys struct {
 		dir    string
 		copies uint64
@@ -529,10 +541,25 @@ func checkSpace(size uint64, dirs ...string) error {
 		if err := statfs(f.dir, &st); err != nil {
 			return fmt.Errorf("free space of %s: %w", f.dir, err)
 		}
-		free := st.Bavail * uint64(st.Bsize)
-		need := f.copies*(size+size/10) + SpaceReserve
+		// Block counts are in units of the fragment size.
+		unit := uint64(st.Frsize)
+		if unit == 0 {
+			unit = uint64(st.Bsize)
+		}
+		reserve := st.Blocks * unit * SpaceReservePercent / 100
+		if reserve < MinSpaceReserve {
+			reserve = MinSpaceReserve
+		}
+		free := st.Bavail * unit
+		need := f.copies*(size+size/10) + reserve
 		if free < need {
 			return fmt.Errorf("not enough free space for this restore in %s (need %s, free %s)", f.dir, humanBytes(need), humanBytes(free))
+		}
+		if st.Files > 0 {
+			needInodes := f.copies*(entries+entries/10) + st.Files*InodeReservePercent/100
+			if st.Ffree < needInodes {
+				return fmt.Errorf("not enough free inodes for this restore in %s (need %d, free %d)", f.dir, needInodes, st.Ffree)
+			}
 		}
 	}
 	return nil

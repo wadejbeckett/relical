@@ -411,7 +411,7 @@ func fakeFileSystems(t *testing.T, devs map[string]uint64, free map[string]uint6
 	}
 	stat = func(p string, st *syscall.Stat_t) error { st.Dev = devOf(p); return nil }
 	statfs = func(p string, st *syscall.Statfs_t) error {
-		st.Bsize, st.Bavail = 1, 1<<50
+		st.Bsize, st.Frsize, st.Bavail = 1, 1, 1<<50
 		for d, n := range devs {
 			if devOf(p) == n {
 				if f, ok := free[d]; ok {
@@ -438,7 +438,8 @@ func TestMailRestoreRefusesWithoutFreeSpace(t *testing.T) {
 	}{
 		"staging full":                  {stageFree: 100 * mib, mailFree: 1 << 40, wantRefuse: "restore"},
 		"mailbox file system full":      {stageFree: 1 << 40, mailFree: 100 * mib, wantRefuse: "mail"},
-		"one file system, room for one": {sameFS: true, stageFree: SpaceReserve + 7, wantRefuse: "restore"},
+		"one file system, room for two": {sameFS: true, stageFree: MinSpaceReserve + 12},
+		"one file system, room for one": {sameFS: true, stageFree: MinSpaceReserve + 7, wantRefuse: "restore"},
 		"room on both":                  {stageFree: 1 << 40, mailFree: 1 << 40},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -448,6 +449,7 @@ func TestMailRestoreRefusesWithoutFreeSpace(t *testing.T) {
 			devs := map[string]uint64{stage: 1, mail: 2}
 			if c.sameFS {
 				devs[mail] = 1
+				c.mailFree = c.stageFree
 			}
 			fakeFileSystems(t, devs, map[string]uint64{stage: c.stageFree, mail: c.mailFree})
 			// The fake ls lists one 6-byte file under the mailbox.
