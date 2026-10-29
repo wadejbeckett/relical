@@ -247,6 +247,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return emit(stdout, nil, err)
 		}
 		defer unlock()
+		if err := env.CleanStaging(); err != nil {
+			return emit(stdout, nil, err)
+		}
 		res := env.Adopt(ctx, sub)
 		if err := env.Record([]job.Result{res}); err != nil {
 			fmt.Fprintln(stderr, "warning: state not saved:", err)
@@ -293,6 +296,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return emit(stdout, nil, err)
 	}
 	defer unlock()
+	// Under the lock no panel configuration backup is running, so whatever
+	// is in staging was left by a killed run.
+	if err := env.CleanStaging(); err != nil {
+		return emit(stdout, nil, err)
+	}
 	results := []job.Result{}
 	switch {
 	case cmd == "backup" && *all:

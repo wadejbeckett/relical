@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wadejbeckett/relical/core/internal/job"
 	"github.com/wadejbeckett/relical/core/internal/testutil"
 )
 
@@ -343,5 +344,49 @@ func TestPanelConfigCommands(t *testing.T) {
 	left, _ := os.ReadDir(filepath.Join(filepath.Dir(cfg), "state", "staging"))
 	if len(left) != 0 {
 		t.Errorf("staging not empty: %v", left)
+	}
+}
+
+func TestAdoptTakesTheRunLock(t *testing.T) {
+	cfg := cliSetup(t)
+	os.MkdirAll(filepath.Join(filepath.Dir(cfg), "state"), 0o711)
+	unlock, err := job.Lock(filepath.Join(filepath.Dir(cfg), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	code, out := runCLI("-config", cfg, "adopt", "--subscription", "example.test")
+	if code != 1 || !strings.Contains(out, "another relical run holds the lock") {
+		t.Fatalf("%d %s", code, out)
+	}
+}
+
+// Stale panel configuration files are removed by every command that
+// takes the run lock, and never by one that does not (a backup may be
+// writing one at that moment).
+func TestLockedCommandsRemoveStaleStaging(t *testing.T) {
+	cfg := cliSetup(t)
+	staging := filepath.Join(filepath.Dir(cfg), "state", "staging")
+	stale := filepath.Join(staging, "panel-config-20261014T020000Z.tar")
+	put := func() {
+		os.MkdirAll(staging, 0o700)
+		os.WriteFile(stale, []byte("old"), 0o600)
+	}
+	put()
+	runCLI("-config", cfg, "snapshots", "--subscription", "example.test")
+	if _, err := os.Stat(stale); err != nil {
+		t.Fatal("an unlocked command removed a staging file")
+	}
+	for _, args := range [][]string{
+		{"forget", "--all"},
+		{"check", "--subscription", "example.test"},
+		{"backup", "--subscription", "example.test", "--unit", "mail"},
+		{"adopt", "--subscription", "example.test"},
+	} {
+		put()
+		runCLI(append([]string{"-config", cfg}, args...)...)
+		if _, err := os.Stat(stale); err == nil {
+			t.Errorf("%q kept the stale staging file", args)
+		}
 	}
 }

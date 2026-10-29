@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -124,8 +125,8 @@ func (e Env) BackupPanelConfig(ctx context.Context) Result {
 }
 
 // checkStaging requires the staging directory to be a real directory with
-// mode 0700, and removes panel configuration files a killed run left
-// behind (a SIGKILL skips the deferred removal).
+// mode 0700 and, when relical runs as root, owned by root, and removes
+// panel configuration files a killed run left behind.
 func (e Env) checkStaging() (string, error) {
 	dir := e.StagingDir()
 	fi, err := os.Lstat(dir)
@@ -135,16 +136,29 @@ func (e Env) checkStaging() (string, error) {
 	if !fi.IsDir() || fi.Mode().Perm() != 0o700 {
 		return "", fmt.Errorf("staging directory %s must be a directory with mode 0700, not a symlink", dir)
 	}
-	old, err := filepath.Glob(filepath.Join(dir, stagingPrefix+"*"))
-	if err != nil {
-		return "", err
-	}
-	for _, p := range old {
-		if err := os.Remove(p); err != nil {
-			return "", fmt.Errorf("removing a staging file left by an earlier run: %w", err)
+	if asRoot() {
+		if st, ok := fi.Sys().(*syscall.Stat_t); !ok || st.Uid != 0 {
+			return "", fmt.Errorf("staging directory %s is not owned by root; chown root %s", dir, dir)
 		}
 	}
-	return dir, nil
+	return dir, e.CleanStaging()
+}
+
+// CleanStaging removes panel configuration files that a killed run left
+// in the staging directory (a SIGKILL skips the deferred removal). Call
+// it only while holding the run lock, so that it never removes the file
+// of a backup in progress.
+func (e Env) CleanStaging() error {
+	old, err := filepath.Glob(filepath.Join(e.StagingDir(), stagingPrefix+"*"))
+	if err != nil {
+		return err
+	}
+	for _, p := range old {
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("removing a staging file left by an earlier run: %w", err)
+		}
+	}
+	return nil
 }
 
 // runConfigCommand runs argv with env only, in its own process group, so
@@ -161,6 +175,11 @@ func runConfigCommand(ctx context.Context, argv, env []string) error {
 	stderr := &tailBuffer{max: maxCommandStderr}
 	cmd.Stdout, cmd.Stderr = stderr, stderr
 	err := cmd.Run()
+	if cmd.Process != nil {
+		// Also after a normal exit: a child left in the group could still
+		// be writing the staging file, or write it again after it is deleted.
+		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	msg := strings.TrimSpace(stderr.String())
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:

@@ -112,6 +112,25 @@ func TestPanelConfigStagingMustBePrivate(t *testing.T) {
 	if log() != "" {
 		t.Errorf("restic ran:\n%s", log())
 	}
+	// Owned by someone other than root while relical runs as root.
+	os.Chmod(e.StagingDir(), 0o700)
+	func() {
+		defer func(f func() bool) { asRoot = f }(asRoot)
+		asRoot = func() bool { return true }
+		if os.Getuid() == 0 {
+			os.Chown(e.StagingDir(), 65534, 65534)
+		}
+		if r := e.BackupPanelConfig(context.Background()); r.OK || !strings.Contains(r.Error, "not owned by root") {
+			t.Errorf("not root's: %+v", r)
+		}
+		if os.Getuid() == 0 {
+			os.Chown(e.StagingDir(), 0, 0)
+		}
+	}()
+	if log() != "" {
+		t.Errorf("restic ran:\n%s", log())
+	}
+	os.Chmod(e.StagingDir(), 0o755)
 	// Prepare restores the mode.
 	if err := e.Prepare(); err != nil {
 		t.Fatal(err)
@@ -156,9 +175,87 @@ func TestPanelConfigCommandTimeout(t *testing.T) {
 	t.Fatalf("grandchild %d survived the timeout", pid)
 }
 
+// pidGone waits briefly for pid to exit; it reports false (and kills it)
+// when it does not.
+func pidGone(t *testing.T, pidFile string) bool {
+	t.Helper()
+	b, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	for i := 0; i < 50; i++ {
+		if syscall.Kill(pid, 0) != nil {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	syscall.Kill(pid, syscall.SIGKILL)
+	return false
+}
+
+func TestPanelConfigLingeringChildIsKilled(t *testing.T) {
+	e, _, _ := setup(t, "local")
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	// The command exits 0 and leaves a child in its process group.
+	withServer(t, &e, writeTar+"\nsleep 30 >/dev/null 2>&1 & echo $! > '"+pidFile+"'; exit 0")
+	if r := e.BackupPanelConfig(context.Background()); !r.OK {
+		t.Fatalf("%+v", r)
+	}
+	if !pidGone(t, pidFile) {
+		t.Fatal("the command's child outlived the run")
+	}
+	stagingEmpty(t, e)
+}
+
+func TestPanelConfigCommandInterrupted(t *testing.T) {
+	e, _, log := setup(t, "local")
+	keysEnsure(t, e)
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	withServer(t, &e, writeTar+"\nsleep 30 >/dev/null 2>&1 & echo $! > '"+pidFile+"'; wait")
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for i := 0; i < 200; i++ {
+			if _, err := os.Stat(pidFile); err == nil {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		cancel()
+	}()
+	r := e.BackupPanelConfig(ctx)
+	if r.OK || !strings.Contains(r.Error, "interrupted") {
+		t.Fatalf("%+v", r)
+	}
+	stagingEmpty(t, e)
+	if strings.Contains(log(), "--tag panel-config") {
+		t.Errorf("restic backup ran after the interruption:\n%s", log())
+	}
+	if !pidGone(t, pidFile) {
+		t.Fatal("the grandchild survived the interruption")
+	}
+}
+
+func TestCleanStagingRemovesStaleFiles(t *testing.T) {
+	e, _, _ := setup(t, "local")
+	stale := filepath.Join(e.StagingDir(), "panel-config-20261014T020000Z.tar")
+	other := filepath.Join(e.StagingDir(), "keep-me")
+	os.WriteFile(stale, []byte("old"), 0o600)
+	os.WriteFile(other, []byte("x"), 0o600)
+	if err := e.CleanStaging(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); err == nil {
+		t.Error("stale panel configuration kept")
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Error("removed a file that is not a panel configuration")
+	}
+}
+
 func TestPanelConfigPasswordEnv(t *testing.T) {
 	t.Setenv("RELICAL_CANARY", "leaked")
-	e, _, _ := setup(t, "local")
+	e, _, log := setup(t, "local")
 	envFile := filepath.Join(t.TempDir(), "env")
 	// The command fails unless it gets the password, and records its
 	// environment.
@@ -183,6 +280,26 @@ func TestPanelConfigPasswordEnv(t *testing.T) {
 	if strings.Contains(string(got), "RELICAL_CANARY") || strings.Contains(string(got), "FAKE_") || strings.Contains(string(got), "RESTIC_") {
 		t.Errorf("the command inherited other variables: %q", got)
 	}
+	// A failing command: its stderr tail is in the error, the key is not
+	// (in argv, the error or the state file).
+	withServer(t, &e, `echo "pleskbackup: cannot connect to the panel database" >&2; exit 3`)
+	r := e.BackupPanelConfig(context.Background())
+	k := strings.TrimSpace(string(key))
+	if r.OK || !strings.Contains(r.Error, "cannot connect") || strings.Contains(r.Error, k) {
+		t.Errorf("%+v", r)
+	}
+	if err := e.Record([]Result{r}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(e.Cfg.StateDir, "state.json")); strings.Contains(string(b), k) {
+		t.Error("the key is in state.json")
+	}
+	if strings.Contains(log(), k) {
+		t.Error("the key reached restic's arguments")
+	}
+	withServer(t, &e, `env > '`+envFile+`'
+[ -n "$PLESK_BACKUP_PASSWORD" ] || { echo 'PLESK_BACKUP_PASSWORD is not set' >&2; exit 1; }
+`+writeTar)
 	// encrypt_with_repo_key false: no password.
 	off := false
 	e.Inv.Server.EncryptWithRepoKey = &off
