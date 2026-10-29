@@ -462,10 +462,7 @@ func (e Env) Forget(ctx context.Context, sub inventory.Subscription) Result {
 		// forget would; restic's default grouping (host, paths) differs.
 		k := e.RetentionFor(sub)
 		res.OK = true
-		repo, ok := config.RedactRepository(dst.Repository)
-		if !ok {
-			repo = "of " + sub.Name
-		}
+		repo, _ := config.RedactRepository(dst.Repository)
 		res.Note = fmt.Sprintf("pruning runs on the destination host (prune: remote); it must run, for the repository %s: "+
 			"restic forget --group-by %s --keep-daily %d --keep-weekly %d --keep-monthly %d --prune",
 			repo, GroupBy, k.Daily, k.Weekly, k.Monthly)

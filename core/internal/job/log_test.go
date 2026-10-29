@@ -46,6 +46,7 @@ func TestLogWritesLinesRedacted(t *testing.T) {
 	l.Result(Result{Subscription: "example.test", Unit: "mail", Action: "backup",
 		Error: `Fatal: unable to open repository at rest:https://u:hunter2pw@backup.example.test/example.test/: password s3cr"et`})
 	l.Error(errors.New("another relical run holds the lock"))
+	l.Result(Result{Note: "rest:https://u:123#hunter2pw@h/x s3:https://hunter2pwtoken@h/y"})
 	l.End(1)
 	if l.Err != nil {
 		t.Fatal(l.Err)
@@ -60,8 +61,8 @@ func TestLogWritesLinesRedacted(t *testing.T) {
 		t.Errorf("secret in the log:\n%s", raw)
 	}
 	lines := readLog(t, p)
-	if len(lines) != 4 || lines[0].Event != "start" || lines[0].PID == 0 || lines[1].Event != "result" ||
-		lines[2].Error != "another relical run holds the lock" || lines[3].Event != "end" || lines[3].Code == nil || *lines[3].Code != 1 {
+	if len(lines) != 5 || lines[0].Event != "start" || lines[0].PID == 0 || lines[1].Event != "result" ||
+		lines[2].Error != "another relical run holds the lock" || lines[4].Event != "end" || lines[4].Code == nil || *lines[4].Code != 1 {
 		t.Fatalf("%s", raw)
 	}
 	for _, ln := range lines {
@@ -69,7 +70,7 @@ func TestLogWritesLinesRedacted(t *testing.T) {
 			t.Errorf("%+v", ln)
 		}
 	}
-	if !strings.Contains(string(raw), "https://u:xxxxx@backup.example.test") {
+	if !strings.Contains(string(raw), "https://***@backup.example.test") {
 		t.Errorf("repository not kept in redacted form:\n%s", raw)
 	}
 }

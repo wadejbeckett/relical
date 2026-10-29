@@ -130,9 +130,16 @@ func TestForgetRemoteNoteRedactsCredentials(t *testing.T) {
 	keysEnsure(t, e)
 	sub := mustSub(t, e, "example.test")
 	for repo, want := range map[string]string{
-		"rest:https://u:secret@backup.example.test:8000/{subscription}/": "rest:https://u:xxxxx@backup.example.test:8000/example.test/",
-		"s3:https://key:secret@s3.example.test/bucket/{subscription}":    "s3:https://key:xxxxx@s3.example.test/bucket/example.test",
-		"rest:https://u:se%zzcret@backup.example.test/{subscription}":    "the repository of example.test:",
+		"rest:https://u:secret@backup.example.test:8000/{subscription}/": "rest:https://***@backup.example.test:8000/example.test/",
+		"s3:https://key:secret@s3.example.test/bucket/{subscription}":    "s3:https://***@s3.example.test/bucket/example.test",
+		"rest:https://u:se%zzcret@backup.example.test/{subscription}":    "rest:https://***@backup.example.test/example.test",
+		// A password a URL parser reads as a port and a fragment or path.
+		"rest:https://u:123#secret@backup.example.test/{subscription}": "rest:https://***@backup.example.test/example.test",
+		"rest:https://u:123/secret@backup.example.test/{subscription}": "rest:https://***@backup.example.test/example.test",
+		"rest:https://u:1?secret@backup.example.test/{subscription}":   "rest:https://***@backup.example.test/example.test",
+		// A token as the user name.
+		"rest:https://secrettoken@backup.example.test/{subscription}": "rest:https://***@backup.example.test/example.test",
+		"rest:https://backup.example.test/{subscription}":             "rest:https://backup.example.test/example.test",
 		"sftp:u000000@box.example.test:/relical/{subscription}":          "sftp:u000000@box.example.test:/relical/example.test",
 	} {
 		e.Cfg.Destinations["d"] = config.Destination{Repository: repo, Prune: "remote"}

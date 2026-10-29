@@ -252,3 +252,24 @@ func TestExamplePackagingConfigLoads(t *testing.T) {
 		t.Errorf("%+v", c)
 	}
 }
+
+func TestRedactRepository(t *testing.T) {
+	for in, want := range map[string]string{
+		"rest:https://u:secret@h:8000/x/":  "rest:https://***@h:8000/x/",
+		"s3:https://key:secret@s3.h/b/x":   "s3:https://***@s3.h/b/x",
+		"rest:https://u:se%zzcret@h/x":     "rest:https://***@h/x",
+		"rest:https://u:123#secret@h/x":    "rest:https://***@h/x",
+		"rest:https://u:123/secret@h/x":    "rest:https://***@h/x",
+		"rest:https://u:1?secret@h/x":      "rest:https://***@h/x",
+		"rest:https://u:a@b@h/x":           "rest:https://***@h/x",
+		"rest:https://secrettoken@h/x":     "rest:https://***@h/x",
+		"rest:https://h/x":                 "rest:https://h/x",
+		"sftp:u1@box.example:relical/x":    "sftp:u1@box.example:relical/x",
+		"sftp://u:secret@box.example:23/x": "sftp://***@box.example:23/x",
+		"/srv/restic/x":                    "/srv/restic/x",
+	} {
+		if got, ok := RedactRepository(in); got != want || !ok {
+			t.Errorf("%s: %s %v, want %s", in, got, ok, want)
+		}
+	}
+}

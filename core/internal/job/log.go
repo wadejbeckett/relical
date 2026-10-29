@@ -78,15 +78,15 @@ func (l *Log) Error(err error) { l.write(LogLine{Event: "result", Error: err.Err
 // End writes the end line with the exit code.
 func (l *Log) End(code int) { l.write(LogLine{Event: "end", Code: &code}) }
 
-// urlPassword matches the password in a URL's user information, as in a
-// rest: or s3: repository (config.RedactRepository does the same for one
-// repository string; the log redacts every one in a line).
-var urlPassword = regexp.MustCompile(`(://[^/\s:@"]*):[^@\s/"]*@`)
+// urlUserinfo matches a URL's user information, as in a rest: or s3:
+// repository: everything from "://" to the last "@" of the word, like
+// config.RedactRepository does for one repository string.
+var urlUserinfo = regexp.MustCompile(`://[^\s"]*@`)
 
 func (l *Log) redact(s string) string {
-	s = urlPassword.ReplaceAllString(s, "${1}:xxxxx@")
+	s = urlUserinfo.ReplaceAllString(s, "://***@")
 	for _, v := range l.secrets {
-		s = strings.ReplaceAll(s, v, "xxxxx")
+		s = strings.ReplaceAll(s, v, "***")
 	}
 	return s
 }

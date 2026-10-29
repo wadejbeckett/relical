@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -330,21 +329,24 @@ func (c *Config) DestinationFor(name, repo string) (string, Destination, error) 
 	return name, d, nil
 }
 
-// RedactRepository returns repo with any password in a URL's user
-// information replaced by xxxxx (url.URL.Redacted), for output, state and
-// reports. ok is false when repo looks like a URL but does not parse;
-// callers then name the repository some other way.
+// RedactRepository returns repo with the whole user information of a
+// URL repository (rest:https://user:password@host/..., s3:https://...)
+// replaced by ***, for output, state, logs and reports. It is deliberately
+// blunt: everything between "://" and the last "@" goes, so a password
+// holding #, ? or / (which a URL parser reads as the end of the
+// authority) or a token given as the user name is never printed. A
+// repository without "://" (a path, or sftp:user@host:path, where SSH
+// takes no password) is returned as it is. ok is always true; it remains
+// for callers that name the repository some other way when it is false.
 func RedactRepository(repo string) (redacted string, ok bool) {
 	i := strings.Index(repo, "://")
 	if i < 0 {
-		return repo, true // a path, or sftp:user@host:/path, which has no password
+		return repo, true
 	}
-	// The URL starts at its scheme, after any restic backend prefix such
-	// as rest: or s3:.
-	start := strings.LastIndex(repo[:i], ":") + 1
-	u, err := url.Parse(repo[start:])
-	if err != nil {
-		return "", false
+	start := i + len("://")
+	at := strings.LastIndex(repo, "@")
+	if at < start {
+		return repo, true
 	}
-	return repo[:start] + u.Redacted(), true
+	return repo[:start] + "***" + repo[at:], true
 }
