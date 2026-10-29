@@ -21,7 +21,7 @@ Phase 2: full backup per hosting subscription, and the core the Plesk extension 
 - `prune: remote` reports the exact `restic forget` command the destination host must run, with credentials redacted.
 - `forget` and `check` report a repository not yet created as a note rather than a failure, and fail on a lost key.
 - File and database restores build the finished `restored-<date>-<id>` folder in root-only staging, `<files root>/.relical/`, and move it into the webspace with one `renameat2(RENAME_NOREPLACE)`, so a customer cannot swap the folder for another directory while it is filled; the fallback for another file system or an old kernel accepts only the empty, root-owned 0700 directory it made.
-- Restores clear set-user-id and set-group-id bits, leave out fifos and sockets and refuse device nodes.
+- Restores clear set-user-id and set-group-id bits and leave out device nodes, fifos and sockets, listing them as `dropped` in the result (a Plesk chroot webspace has some under `dev/`).
 - Restores refuse to start without room for the estimated size plus 10% plus 256 MiB.
 - Staging left by a killed restore is removed after 24 hours, by the next restore or `backup --all`.
 
@@ -33,7 +33,19 @@ Phase 2: full backup per hosting subscription, and the core the Plesk extension 
 - Database names must start with a letter, a digit or `_`, and `mysqldump` gets `--` before the name.
 - Repository URLs are redacted from `://` to the last `@` (`***`), whatever the user information holds.
 - `restored-*` is among the default `file_excludes`.
+- Mail restores pass `doveadm import` a plain `maildir:<path>` source, which Dovecot 2.4 (Plesk 18.0.81) requires, and put the new folder after `mail_folder_prefix` (`INBOX.` on Plesk, whose Dovecot refuses a top-level folder); a `--folder` given with that prefix is found in the restored copy without it.
 - The version is set at build time by the Makefile (`VERSION`, default 0.2.0); a build without it reports `0.2.0-dev`.
+
+### Plesk extension (`panels/plesk/`)
+
+- Tested in the official `plesk/plesk` Docker image (Plesk 18.0.81.4, Ubuntu 24.04, Dovecot 2.4.5) by `panels/plesk/tests/docker/run.sh`; results in `panels/plesk/tests/docker/TEST-PLAN.md`.
+- Root work runs through the package's `sbin/relical-root` and Plesk's `mod_wrapper`, not `plesk bin extension --exec`, which runs scripts as the panel user; root scripts started as the panel user (the install hooks included) hand themselves over to it.
+- Saving the settings reloads systemd again (the steps were collected in a memory stream that `proc_open` could not pass to `systemctl`).
+- Redirects no longer repeat the extension's base URL.
+- `restored-*` is excluded from the files backup, as in the core.
+- The backup and check services run at `Nice=19` and `IOSchedulingClass=idle`.
+- A subdomain without mail service is not reported as skipped in the inventory.
+- The configuration sets `mail_folder_prefix` to `INBOX.`; the status page names the restored mail folder without it.
 
 ### Removed
 
