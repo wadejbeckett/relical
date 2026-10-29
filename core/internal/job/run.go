@@ -295,7 +295,9 @@ func saved(res Result, sum restic.BackupSummary, err error) Result {
 	return res
 }
 
-func globEscape(s string) string {
+// GlobEscape escapes s for a restic --include or --exclude pattern, so that
+// a literal \, *, ? or [ in a path matches itself.
+func GlobEscape(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `*`, `\*`, `?`, `\?`, `[`, `\[`)
 	return r.Replace(s)
 }

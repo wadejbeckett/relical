@@ -53,7 +53,7 @@ func (e Env) BackupMail(ctx context.Context, sub inventory.Subscription) Result 
 	excludes := append([]string{}, CommonExcludes...)
 	for _, b := range boxes {
 		paths = append(paths, b.Path)
-		p := globEscape(b.Path)
+		p := GlobEscape(b.Path)
 		excludes = append(excludes, p+"/tmp/*", p+"/.*/tmp/*")
 	}
 	sum, err := r.Backup(ctx, paths, []string{MailTag}, excludes)

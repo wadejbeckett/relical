@@ -644,3 +644,7 @@ func validate(cfg *config.Config, subs []Subscription, server *Server, requireID
 	}
 	return inv, nil
 }
+
+// ValidDatabaseName reports whether name passes the inventory's database
+// name rule and is not a server or panel database.
+func ValidDatabaseName(name string) bool { return dbNameRE.MatchString(name) && !reservedDB(name) }

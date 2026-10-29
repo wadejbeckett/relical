@@ -64,10 +64,37 @@ case "$1" in
       shift
     done
     [ -n "$FAKE_RESTORE_EMPTY" ] && exit 0
+    if [ "$FAKE_RESTORE_KIND" = files ]; then
+      # A webspace subtree: two files, one in a subdirectory.
+      mkdir -p "$t$i/sub"
+      printf 'hello\n' > "$t$i/index.html"
+      printf 'deep\n' > "$t$i/sub/deep.txt"
+      chmod 640 "$t$i/index.html"
+      exit "${FAKE_RESTORE_EXIT:-0}"
+    fi
     mkdir -p "$t$i/cur" "$t$i/.Sent/cur"
     printf 'Subject: one\n\nx\n' > "$t$i/cur/1.host:2,S"
     printf 'Subject: sent\n\nx\n' > "$t$i/.Sent/cur/2.host:2,S"
     exit "${FAKE_RESTORE_EXIT:-0}" ;;
+  ls)
+    # Like restic 0.19 ls --json: the snapshot, then one node per line. By
+    # default the path is a directory with one file in it; FAKE_LS_OUT
+    # replaces the nodes, FAKE_LS_EMPTY gives none (a path not in the
+    # snapshot).
+    for a in "$@"; do p="$a"; done
+    echo '{"time":"2026-10-15T02:00:00Z","paths":["/x"],"id":"fedcba98","message_type":"snapshot","struct_type":"snapshot"}'
+    [ -n "$FAKE_LS_EMPTY" ] && exit 0
+    if [ -n "$FAKE_LS_OUT" ]; then cat "$FAKE_LS_OUT"; exit 0; fi
+    echo "{\"name\":\"$(basename "$p")\",\"type\":\"dir\",\"path\":\"$p\",\"mtime\":\"2026-10-14T01:00:00Z\",\"message_type\":\"node\",\"struct_type\":\"node\"}"
+    echo "{\"name\":\"index.html\",\"type\":\"file\",\"path\":\"${p%/}/index.html\",\"size\":6,\"mtime\":\"2026-10-14T01:00:00Z\",\"message_type\":\"node\",\"struct_type\":\"node\"}"
+    exit 0 ;;
+  dump)
+    # Prints a small dump of the requested file; with FAKE_DUMP_EXIT, a
+    # partial one and then an error.
+    for a in "$@"; do p="$a"; done
+    printf -- '-- dump of %s\nCREATE TABLE t (id int);\n' "$p"
+    if [ -n "$FAKE_DUMP_EXIT" ]; then echo "Fatal: cannot dump file: connection lost" >&2; exit "$FAKE_DUMP_EXIT"; fi
+    exit 0 ;;
   unlock) exit "${FAKE_UNLOCK_EXIT:-0}" ;;
   forget|check|init) exit "${FAKE_OTHER_EXIT:-0}" ;;
 esac

@@ -13,7 +13,7 @@ import (
 func FileExcludes(sub inventory.Subscription) []string {
 	excludes := []string{}
 	for _, p := range sub.Files {
-		ep := globEscape(p)
+		ep := GlobEscape(p)
 		for _, x := range sub.FileExcludes {
 			excludes = append(excludes, ep+"/"+x)
 		}
