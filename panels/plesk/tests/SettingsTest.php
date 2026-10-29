@@ -62,6 +62,16 @@ final class SettingsTest extends TestCase
         ], Settings::validated(self::form()));
     }
 
+    public function testABlankPathAndTimeTakeTheirDefaults(): void
+    {
+        $form = ['sftp_path' => ' ', 'backup_time' => ''] + self::form();
+
+        self::assertSame([], Settings::errors($form));
+        $stored = Settings::validated($form);
+        self::assertSame('relical', $stored['sftp_path']);
+        self::assertSame('01:00', $stored['backup_time']);
+    }
+
     /** @return iterable<string, array{array<string, mixed>, string, string}> */
     public static function badForms(): iterable
     {

@@ -168,7 +168,7 @@ final class Settings
 
     public function sftpPath(): string
     {
-        return $this->string(self::SFTP_PATH, 'relical');
+        return $this->stringOrDefault(self::SFTP_PATH, 'relical');
     }
 
     /** @return array{daily: int, weekly: int, monthly: int} */
@@ -184,7 +184,7 @@ final class Settings
     /** Local time of the nightly backup, HH:MM (used for the timer). */
     public function backupTime(): string
     {
-        return $this->string(self::BACKUP_TIME, '01:00');
+        return $this->stringOrDefault(self::BACKUP_TIME, '01:00');
     }
 
     /** Upload limit in KiB/s; 0 means no limit. */
@@ -216,6 +216,18 @@ final class Settings
         $value = ($this->get)($name, $default);
 
         return $value === null ? $default : trim((string) $value);
+    }
+
+    /**
+     * Like string(), but a blank value also takes the default, as a blank
+     * number does (int()). For fields whose default is a sensible answer to
+     * leaving them empty: the path and the backup time.
+     */
+    private function stringOrDefault(string $name, string $default): string
+    {
+        $value = $this->string($name, $default);
+
+        return $value === '' ? $default : $value;
     }
 
     /**
