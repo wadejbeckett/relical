@@ -266,6 +266,10 @@ has not yet seen. Each line is open until the next `run.sh` run.
       work with the empty environment (does Plesk's SDK need HOME or
       anything else?), and the panel user's `PHP_INI_SCAN_DIR`/`PHPRC` no
       longer reach PHP (`run.sh` step 3, with a positive control).
+      Plesk's PHP 8.4 reads a scanned ini but does not enforce
+      `disable_functions` from it, so step 3 checks `ini_get('error_log')`
+      and an error logged to a marker file, through a probe that stands in
+      for `running.php` while the check runs.
 - [ ] Reinstall: after `plesk bin extension -u relical` and a fresh install
       (settings empty, old `config.json` kept), the settings page says
       backups still go to the old destination (from `overview.php`'s
