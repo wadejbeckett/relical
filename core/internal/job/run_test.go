@@ -125,6 +125,30 @@ func TestForgetRemoteSkips(t *testing.T) {
 	}
 }
 
+func TestForgetRemoteNoteRedactsCredentials(t *testing.T) {
+	e, _, _ := setup(t, "remote")
+	keysEnsure(t, e)
+	sub := mustSub(t, e, "example.test")
+	for repo, want := range map[string]string{
+		"rest:https://u:secret@backup.example.test:8000/{subscription}/": "rest:https://u:xxxxx@backup.example.test:8000/example.test/",
+		"s3:https://key:secret@s3.example.test/bucket/{subscription}":    "s3:https://key:xxxxx@s3.example.test/bucket/example.test",
+		"rest:https://u:se%zzcret@backup.example.test/{subscription}":    "the repository of example.test:",
+		"sftp:u000000@box.example.test:/relical/{subscription}":          "sftp:u000000@box.example.test:/relical/example.test",
+	} {
+		e.Cfg.Destinations["d"] = config.Destination{Repository: repo, Prune: "remote"}
+		r := e.Forget(context.Background(), sub)
+		if !r.OK || strings.Contains(r.Note, "secret") || strings.Contains(r.Note, "cret") || !strings.Contains(r.Note, want) {
+			t.Errorf("%s: %+v", repo, r)
+		}
+		if err := e.Record([]Result{r}); err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := os.ReadFile(filepath.Join(e.Cfg.StateDir, "state.json")); strings.Contains(string(b), "secret") {
+			t.Errorf("%s: state holds the password", repo)
+		}
+	}
+}
+
 func TestForgetLocalRunsPrune(t *testing.T) {
 	e, _, log := setup(t, "local")
 	keysEnsure(t, e)
@@ -155,6 +179,14 @@ func TestForgetWithoutRepositoryIsANote(t *testing.T) {
 	os.WriteFile(filepath.Join(e.Cfg.KeysDir, "example.test.id"), []byte("17\n"), 0o600)
 	if r := e.Forget(context.Background(), sub); r.OK || !strings.Contains(r.Error, `id "17"`) {
 		t.Errorf("owner mismatch: %+v", r)
+	}
+	// A matching owner file without a key: the repository was created and
+	// its key is lost, which fails.
+	os.WriteFile(filepath.Join(e.Cfg.KeysDir, "example.test.id"), []byte("42\n"), 0o600)
+	for _, r := range []Result{e.Forget(context.Background(), sub), e.Check(context.Background(), sub, "")} {
+		if r.OK || !strings.Contains(r.Error, "key for example.test is missing but its owner file exists") {
+			t.Errorf("lost key: %+v", r)
+		}
 	}
 	os.Remove(filepath.Join(e.Cfg.KeysDir, "example.test.id"))
 	// A key with the wrong mode fails.
@@ -510,6 +542,11 @@ func TestKeyWithoutOwnerIsRefusedUnderInventoryCommand(t *testing.T) {
 	sub.ID = "17"
 	rs := e.BackupSubscription(context.Background(), sub, "")
 	rs = append(rs, e.Forget(context.Background(), sub), e.Check(context.Background(), sub, ""))
+	// Stats, like snapshots, ls and every restore, opens the repository
+	// through Runner.
+	if r := e.Stats(context.Background(), sub); !strings.Contains(r.Note+r.Error, "no owner file") {
+		t.Errorf("stats: %+v", r)
+	}
 	for _, r := range rs {
 		if r.OK || !strings.Contains(r.Error, "no owner file") || !strings.Contains(r.Error, "relical adopt --subscription example.test") {
 			t.Errorf("%+v", r)
@@ -518,6 +555,16 @@ func TestKeyWithoutOwnerIsRefusedUnderInventoryCommand(t *testing.T) {
 	if _, _, err := e.Runner(sub); err == nil {
 		t.Error("Runner accepted a key without an owner")
 	}
+	// The panel configuration's repository falls under the same rule.
+	os.WriteFile(filepath.Join(e.Cfg.KeysDir, "_server.key"), []byte("k\n"), 0o600)
+	srv := ServerSubscription()
+	if _, _, err := e.Runner(srv); err == nil || !strings.Contains(err.Error(), "relical adopt --subscription _server") {
+		t.Errorf("_server: %v", err)
+	}
+	if r := e.Forget(context.Background(), srv); r.OK || !strings.Contains(r.Error, "no owner file") {
+		t.Errorf("_server forget: %+v", r)
+	}
+	os.Remove(filepath.Join(e.Cfg.KeysDir, "_server.key"))
 	if log() != "" {
 		t.Errorf("restic ran:\n%s", log())
 	}

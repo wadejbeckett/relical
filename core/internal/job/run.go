@@ -462,9 +462,13 @@ func (e Env) Forget(ctx context.Context, sub inventory.Subscription) Result {
 		// forget would; restic's default grouping (host, paths) differs.
 		k := e.RetentionFor(sub)
 		res.OK = true
+		repo, ok := config.RedactRepository(dst.Repository)
+		if !ok {
+			repo = "of " + sub.Name
+		}
 		res.Note = fmt.Sprintf("pruning runs on the destination host (prune: remote); it must run, for the repository %s: "+
 			"restic forget --group-by %s --keep-daily %d --keep-weekly %d --keep-monthly %d --prune",
-			dst.Repository, GroupBy, k.Daily, k.Weekly, k.Monthly)
+			repo, GroupBy, k.Daily, k.Weekly, k.Monthly)
 		return res
 	}
 	// A restic killed mid-run (SIGKILL, OOM, power loss) leaves a stale lock
@@ -489,6 +493,14 @@ func (e Env) noRepository(res Result, sub inventory.Subscription, err error) Res
 		return failed(res, err)
 	}
 	if oerr := keys.CheckOwner(e.Cfg.KeysDir, sub.Name, sub.ID); oerr != nil {
+		return failed(res, oerr)
+	}
+	// An owner file is written before the repository is created, so with
+	// one the repository may exist and its key is what is missing.
+	if has, oerr := keys.HasOwner(e.Cfg.KeysDir, sub.Name); oerr != nil || has {
+		if oerr == nil {
+			oerr = fmt.Errorf("the key for %s is missing but its owner file exists, so its repository may exist and cannot be opened: %w", sub.Name, err)
+		}
 		return failed(res, oerr)
 	}
 	res.OK = true

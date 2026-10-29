@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -125,6 +126,19 @@ func Load(path string) (*Config, error) {
 		}
 		return nil, fmt.Errorf("%s: unsupported config version %d (this build reads version %d)", path, c.Version, Version)
 	}
+	// A configured binary must be an absolute path: relical runs them as
+	// root (mysqldump with the administrator's credentials), so a PATH
+	// lookup must not choose them. restic and doveadm keep their PATH
+	// defaults; mysqldump defaults to /usr/bin/mysqldump.
+	var binErrs []error
+	for _, b := range []struct{ field, v string }{{"restic_bin", c.ResticBin}, {"doveadm_bin", c.DoveadmBin}, {"mysqldump_bin", c.MysqldumpBin}} {
+		if b.v != "" && !CleanAbs(b.v) {
+			binErrs = append(binErrs, fmt.Errorf("%s %q must be a clean absolute path", b.field, b.v))
+		}
+	}
+	if err := errors.Join(binErrs...); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	c.applyDefaults()
 	if err := c.Validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
@@ -140,7 +154,7 @@ func (c *Config) applyDefaults() {
 		c.DoveadmBin = "doveadm"
 	}
 	if c.MysqldumpBin == "" {
-		c.MysqldumpBin = "mysqldump"
+		c.MysqldumpBin = "/usr/bin/mysqldump"
 	}
 	if c.Retention == (Retention{}) {
 		c.Retention = Retention{Daily: 14, Weekly: 8, Monthly: 12}
@@ -314,4 +328,23 @@ func (c *Config) DestinationFor(name, repo string) (string, Destination, error) 
 	}
 	d.Repository = strings.ReplaceAll(d.Repository, "{subscription}", repo)
 	return name, d, nil
+}
+
+// RedactRepository returns repo with any password in a URL's user
+// information replaced by xxxxx (url.URL.Redacted), for output, state and
+// reports. ok is false when repo looks like a URL but does not parse;
+// callers then name the repository some other way.
+func RedactRepository(repo string) (redacted string, ok bool) {
+	i := strings.Index(repo, "://")
+	if i < 0 {
+		return repo, true // a path, or sftp:user@host:/path, which has no password
+	}
+	// The URL starts at its scheme, after any restic backend prefix such
+	// as rest: or s3:.
+	start := strings.LastIndex(repo[:i], ":") + 1
+	u, err := url.Parse(repo[start:])
+	if err != nil {
+		return "", false
+	}
+	return repo[:start] + u.Redacted(), true
 }

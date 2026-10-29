@@ -37,7 +37,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ResticBin != "restic" || c.DoveadmBin != "doveadm" || c.MysqldumpBin != "mysqldump" {
+	if c.ResticBin != "restic" || c.DoveadmBin != "doveadm" || c.MysqldumpBin != "/usr/bin/mysqldump" {
 		t.Errorf("binaries = %q, %q, %q", c.ResticBin, c.DoveadmBin, c.MysqldumpBin)
 	}
 	if c.Retention != (Retention{Daily: 14, Weekly: 8, Monthly: 12}) {
@@ -134,6 +134,9 @@ func TestLoadRejectsBadRootsAndPattern(t *testing.T) {
 		`"mailbox_pattern": "/var/qmail/mailnames/../x/{domain}/{mailbox}",`,
 		`"mailbox_pattern": "/var/qmail/mailnames/{domain}/Maildir",`,
 		`"mysql": {"defaults_file": "mysql.cnf"},`,
+		`"mysqldump_bin": "mysqldump",`,
+		`"restic_bin": "bin/restic",`,
+		`"doveadm_bin": "/usr/bin/../bin/doveadm",`,
 	} {
 		body := strings.Replace(validJSON, `"server_id"`, extra+` "server_id"`, 1)
 		if _, err := Load(write(t, body, 0o600)); err == nil {
