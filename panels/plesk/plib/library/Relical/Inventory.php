@@ -206,11 +206,25 @@ final class Inventory
         }
 
         // The core refuses a renamed_from that is not a domain, is the
-        // subscription's own name or still names a subscription: such a
-        // hint is dropped, never allowed to stop the run.
+        // subscription's own name or still names a subscription, and refuses
+        // both subscriptions when two give the same one: such a hint is
+        // dropped, never allowed to stop the run.
+        $hintedBy = [];
         foreach ($subscriptions as $i => $subscription) {
             $from = $subscription['renamed_from'];
             if ($from !== '' && (!CoreRules::validDomain($from) || $from === $subscription['name'] || isset($names[$from]))) {
+                $subscriptions[$i]['renamed_from'] = '';
+            } elseif ($from !== '') {
+                $hintedBy[$from][] = $i;
+            }
+        }
+        foreach ($hintedBy as $from => $indexes) {
+            if (count($indexes) < 2) {
+                continue;
+            }
+            foreach ($indexes as $i) {
+                $others = array_values(array_diff(array_map(static fn (int $j): string => $subscriptions[$j]['name'], $indexes), [$subscriptions[$i]['name']]));
+                $skipped[] = self::skip($subscriptions[$i]['name'], sprintf('renamed_from %s: the old name is also given by %s, so neither hint is kept', $from, implode(', ', $others)));
                 $subscriptions[$i]['renamed_from'] = '';
             }
         }

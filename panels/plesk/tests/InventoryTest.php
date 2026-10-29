@@ -394,6 +394,22 @@ final class InventoryTest extends TestCase
         self::assertSame(['c.example.test', 'd.example.test'], $inventory['subscriptions'][0]['mail_domains']);
     }
 
+    public function testARenamedFromGivenByTwoSubscriptionsIsDroppedOnBoth(): void
+    {
+        $inventory = Inventory::build([
+            self::webspace(['id' => 1, 'name' => 'a.example.test', 'renamed_from' => 'old.example.test', 'mail_domains' => []]),
+            self::webspace(['id' => 2, 'name' => 'b.example.test', 'renamed_from' => 'old.example.test', 'mail_domains' => []]),
+            self::webspace(['id' => 3, 'name' => 'c.example.test', 'renamed_from' => 'older.example.test', 'mail_domains' => []]),
+        ], 'all');
+
+        self::assertSame(['a.example.test', 'b.example.test', 'c.example.test'], array_column($inventory['subscriptions'], 'name'));
+        self::assertSame(['', '', 'older.example.test'], array_column($inventory['subscriptions'], 'renamed_from'));
+        self::assertSame([
+            ['name' => 'a.example.test', 'reason' => 'renamed_from old.example.test: the old name is also given by b.example.test, so neither hint is kept'],
+            ['name' => 'b.example.test', 'reason' => 'renamed_from old.example.test: the old name is also given by a.example.test, so neither hint is kept'],
+        ], $inventory['skipped']);
+    }
+
     public function testMailDomainsAreDeduplicatedWithTheWebspaceFirst(): void
     {
         $inventory = Inventory::build([self::webspace(['mail_domains' => ['b.example.test', 'example.test', 'b.example.test']])], 'all');
