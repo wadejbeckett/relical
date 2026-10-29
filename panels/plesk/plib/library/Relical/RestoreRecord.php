@@ -35,6 +35,23 @@ final class RestoreRecord
     public const TOO_MANY_FOLDERS = 'There are already %d restored copies (restored-...) in the home directory. Delete the ones you no longer need in the File Manager, then restore again.';
 
     /**
+     * Core refusals that come before anything is restored: the target is
+     * there already, the request is not in the backup, the disk is too
+     * full, the repository is locked, or another run holds relical's lock.
+     * A restore refused like this does not count towards
+     * MAX_RESTORES_PER_DAY.
+     */
+    private const NOTHING_RESTORED = [
+        '/already exists/',
+        '/is not in snapshot/',
+        '/^no backup snapshots/',
+        '/^snapshot [0-9a-f]+ not found/',
+        '/has no backup of database/',
+        '/not enough free space/',
+        '/another relical run holds the lock/',
+    ];
+
+    /**
      * The core's words for a repository locked by a check or prune
      * (core/internal/restic LockedMessage). The rest of that error is
      * restic's lock notice, which names the repository and the host, so a
@@ -209,9 +226,10 @@ final class RestoreRecord
     /**
      * How many files or database restores customers started for the
      * subscription in the DAILY_WINDOW seconds before $now, from its
-     * restore records. Restores started by an administrator, and starts that
-     * were refused before anything ran (busy, server busy, over the limit),
-     * do not count.
+     * restore records. Only restores that ran count: restores started by an
+     * administrator, starts refused before the core ran (busy, server busy,
+     * over the limit) and restores the core refused before restoring
+     * anything (NOTHING_RESTORED, a locked repository) do not.
      *
      * @param iterable<mixed> $records
      */
@@ -221,7 +239,7 @@ final class RestoreRecord
         foreach ($records as $record) {
             if (!is_array($record) || ($record['subscription'] ?? null) !== $subscription
                 || !in_array($record['unit'] ?? null, ['files', 'db'], true) || ($record['by_admin'] ?? false) === true
-                || in_array($record['error'] ?? '', [self::BUSY, self::SERVER_BUSY, self::TOO_MANY_RESTORES], true)) {
+                || (($record['state'] ?? '') === 'failed' && self::nothingRestored(is_string($record['error'] ?? null) ? $record['error'] : ''))) {
                 continue;
             }
             $started = is_string($record['started'] ?? null) ? strtotime($record['started']) : false;
@@ -231,6 +249,21 @@ final class RestoreRecord
         }
 
         return $count;
+    }
+
+    /** Whether a failed restore's error says it was refused before anything was restored. */
+    private static function nothingRestored(string $error): bool
+    {
+        if (in_array($error, [self::BUSY, self::SERVER_BUSY, self::TOO_MANY_RESTORES], true) || str_contains($error, self::CORE_LOCKED)) {
+            return true;
+        }
+        foreach (self::NOTHING_RESTORED as $pattern) {
+            if (preg_match($pattern, $error) === 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
