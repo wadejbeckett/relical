@@ -148,6 +148,10 @@ ok "plesk bin extension --exec relical <script> reaches root"
 # what it does honour: error_log, read back with ini_get(), and an error
 # logged to the marker. (auto_append_file, the review's proof, does not run
 # after exit(), which every root script calls.)
+# The probe below calls trigger_error on purpose, and as root that warning
+# lands in panel.log. Step 7 skips exactly the lines written while it ran.
+plog_lines() { px 'if [ -f /var/log/plesk/panel.log ]; then wc -l < /var/log/plesk/panel.log; else echo 0; fi'; }
+PROBE_FROM=$(plog_lines)
 px 'mkdir -p /tmp/relical-ini && printf "%s\n" "log_errors=1" "display_errors=0" "error_log=/tmp/relical-ini/marker" > /tmp/relical-ini/zz.ini && cp /tmp/relical-ini/zz.ini /tmp/relical-ini/php.ini && chmod -R a+rX /tmp/relical-ini && chmod 1777 /tmp/relical-ini'
 OUT=$(docker exec "$P" su -s /bin/sh psaadm -c "PHP_INI_SCAN_DIR=/tmp/relical-ini PHPRC=/tmp/relical-ini $RR running.php" 2>&1 || true)
 [ "$OUT" = '{"running":false}' ] || fail "running.php with the panel user's PHP_INI_SCAN_DIR: $OUT"
@@ -173,6 +177,7 @@ case $ROOTOUT in *relical-ini*) fail "PHP_INI_SCAN_DIR or PHPRC from the panel u
 px 'test ! -e /tmp/relical-ini/marker' || fail "PHP_INI_SCAN_DIR from the panel user reached PHP as root: the root script logged to the marker"
 [ "$(px 'plesk bin extension --exec relical running.php')" = '{"running":false}' ] || fail "running.php was not put back"
 px 'rm -rf /tmp/relical-ini'
+PROBE_TO=$(plog_lines)
 ok "relical-root clears the environment: PHP_INI_SCAN_DIR and PHPRC do not reach PHP"
 
 # ---------------------------------------------------------------------------
@@ -387,7 +392,9 @@ timeout 600 bash -c "while docker exec $P pgrep -f 'relical -config /etc/relical
 px 'journalctl -u relical-backup.service --no-pager | grep -q "Relical nightly backup"' || fail "Run everything now did not start relical-backup.service"
 ok "Run everything now starts relical-backup.service (run-all.php); a second click says a run is already in progress"
 
-if px 'grep -i "fatal\|warning\|exception" /var/log/plesk/panel.log | grep -i relical | grep -v "Permission denied"' > "$WORK/panel-errors.txt"; then
+# Every line except those step 3's deliberate ini probe wrote (lines
+# PROBE_FROM+1 to PROBE_TO), so a real error before or after it still counts.
+if px "awk -v a=$PROBE_FROM -v b=$PROBE_TO 'NR <= a || NR > b' /var/log/plesk/panel.log | grep -i 'fatal\|warning\|exception' | grep -i relical | grep -v 'Permission denied'" > "$WORK/panel-errors.txt"; then
     cat "$WORK/panel-errors.txt"; fail "panel.log has PHP errors from the extension"
 fi
 ok "no PHP fatal, warning or exception from the extension in panel.log"
