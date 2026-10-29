@@ -142,6 +142,18 @@ ok "binaries match SHA256SUMS; /etc/relical, keys, ssh, mysql.cnf modes; timers 
 # Plesk runs the hooks and `extension --exec` as psaadm; the scripts hand themselves to relical-root.
 [ "$(px 'plesk bin extension --exec relical running.php')" = '{"running":false}' ] || fail "running.php through extension --exec"
 ok "plesk bin extension --exec relical <script> reaches root"
+# The panel user's environment must not reach PHP as root (whole-branch review finding 7).
+# The ini disables json_encode and logs errors to a marker file: if it is
+# read, running.php fails and the marker appears. (auto_append_file, the
+# review's proof, does not run after exit(), which every root script calls.)
+px 'mkdir -p /tmp/relical-ini && printf "%s\n" "disable_functions=json_encode" "log_errors=1" "error_log=/tmp/relical-ini/marker" > /tmp/relical-ini/zz.ini && chmod -R a+rX /tmp/relical-ini && chmod 1777 /tmp/relical-ini'
+OUT=$(docker exec "$P" su -s /bin/sh psaadm -c "PHP_INI_SCAN_DIR=/tmp/relical-ini PHPRC=/tmp/relical-ini $RR running.php" 2>&1 || true)
+[ "$OUT" = '{"running":false}' ] || fail "running.php with the panel user's PHP_INI_SCAN_DIR: $OUT"
+px 'test ! -e /tmp/relical-ini/marker' || fail "PHP_INI_SCAN_DIR from the panel user reached PHP as root through relical-root"
+px 'PHP_INI_SCAN_DIR=/tmp/relical-ini /opt/psa/admin/bin/php -r "echo json_encode(1);" >/dev/null 2>&1; test -e /tmp/relical-ini/marker' \
+    || fail "the ini trick itself did not work, so the check above proves nothing"
+px 'rm -rf /tmp/relical-ini'
+ok "relical-root clears the environment: PHP_INI_SCAN_DIR and PHPRC do not reach PHP"
 
 # ---------------------------------------------------------------------------
 say "4. settings, host key, probe"

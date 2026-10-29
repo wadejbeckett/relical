@@ -261,3 +261,8 @@ has not yet seen. Each line is open until the next `run.sh` run.
       systemd ignores for oneshot units) and `TimeoutStopSec=15min`;
       `systemctl stop relical-backup` during a run returns within the
       timeout and starts no forget (core finding 5).
+- [ ] `relical-root` starts PHP with `env -i PATH=... LANG=C.UTF-8`: every
+      root script, the install hooks and the core's `inventory.php` still
+      work with the empty environment (does Plesk's SDK need HOME or
+      anything else?), and the panel user's `PHP_INI_SCAN_DIR`/`PHPRC` no
+      longer reach PHP (`run.sh` step 3, with a positive control).

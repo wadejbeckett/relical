@@ -80,6 +80,22 @@ final class CommandTest extends TestCase
         self::assertTrue(is_executable(__DIR__ . '/../sbin/relical-root'), 'sbin/relical-root must be executable');
     }
 
+    public function testTheRootEntryPointStartsPhpWithAnEmptyEnvironment(): void
+    {
+        $sbin = (string) file_get_contents(__DIR__ . '/../sbin/relical-root');
+        $code = array_values(array_filter(
+            array_map('trim', explode("\n", $sbin)),
+            static fn (string $line): bool => $line !== '' && $line[0] !== '#'
+        ));
+
+        self::assertSame(
+            'exec env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 "$php" -dauto_prepend_file=sdk.php "$file" "$@"',
+            end($code),
+            'PHPRC, PHP_INI_SCAN_DIR and the rest of the caller\'s environment must not reach PHP as root'
+        );
+        self::assertSame(1, preg_match_all('/^\s*exec\b/m', $sbin), 'one exec only');
+    }
+
     public function testTheRootEntryPointRefusesOtherScripts(): void
     {
         foreach (['', 'zz.php', '../scripts/cli.php', 'cli.php/../x', '-x'] as $script) {
