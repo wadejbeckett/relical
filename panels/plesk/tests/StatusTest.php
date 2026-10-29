@@ -104,10 +104,58 @@ JSON;
             . "2: FLOCK  ADVISORY  WRITE 4242 08:01:524301 0 EOF\n"
             . "2: -> FLOCK  ADVISORY  WRITE 4250 08:01:524302 0 EOF\n";
 
-        self::assertTrue(Status::lockHeld($locks, 524301));
-        self::assertTrue(Status::lockHeld($locks, 524302), 'a waiter also means a run is there');
-        self::assertFalse(Status::lockHeld($locks, 131074), 'a POSIX lock is not the run lock');
-        self::assertFalse(Status::lockHeld($locks, 52430));
-        self::assertFalse(Status::lockHeld('', 524301));
+        $sda1 = 0x0801; // stat() dev of 08:01
+        self::assertTrue(Status::lockHeld($locks, $sda1, 524301));
+        self::assertTrue(Status::lockHeld($locks, $sda1, 524302), 'a waiter also means a run is there');
+        self::assertFalse(Status::lockHeld($locks, 0x001a, 131074), 'a POSIX lock is not the run lock');
+        self::assertFalse(Status::lockHeld($locks, $sda1, 52430));
+        self::assertFalse(Status::lockHeld('', $sda1, 524301));
+    }
+
+    public function testLockHeldComparesTheDevice(): void
+    {
+        $locks = "2: FLOCK  ADVISORY  WRITE 4242 fd:01:131074 0 EOF\n";
+
+        self::assertTrue(Status::lockHeld($locks, 0xfd01, 131074));
+        self::assertFalse(Status::lockHeld($locks, 0x0801, 131074), 'the same inode on another filesystem');
+        self::assertFalse(Status::lockHeld($locks, 0xfd02, 131074));
+    }
+
+    public function testLockHeldSeesARealFlock(): void
+    {
+        if (!is_readable('/proc/locks')) {
+            self::markTestSkipped('needs Linux /proc/locks');
+        }
+        $file = (string) tempnam(sys_get_temp_dir(), 'relical-lock-');
+        $handle = fopen($file, 'c');
+        self::assertIsResource($handle);
+        try {
+            $stat = (array) stat($file);
+            self::assertFalse(Status::lockHeld((string) file_get_contents('/proc/locks'), (int) $stat['dev'], (int) $stat['ino']));
+            flock($handle, LOCK_EX);
+            self::assertTrue(Status::lockHeld((string) file_get_contents('/proc/locks'), (int) $stat['dev'], (int) $stat['ino']));
+        } finally {
+            fclose($handle);
+            unlink($file);
+        }
+    }
+
+    public function testDeviceNumbersFollowGlibcsEncoding(): void
+    {
+        self::assertSame([8, 1], Status::deviceNumbers(0x0801));
+        self::assertSame([0xfd, 1], Status::deviceNumbers(0xfd01));
+        // major 259, minor 300: minor's high bits sit above bit 20
+        self::assertSame([259, 300], Status::deviceNumbers((259 << 8) | (300 & 0xff) | ((300 & ~0xff) << 12)));
+    }
+
+    public function testARowAsksForAdoptOnlyOnTheCoresAdoptRefusal(): void
+    {
+        $state = Status::parse((string) json_encode([
+            'example.test' => ['mail' => ['backup' => ['ok' => false, 'time' => '2026-10-29T01:00:00Z', 'error' => 'repository key /etc/relical/keys/example.test.key has no recorded owner; if it is this subscription\'s (id "17"), run relical adopt --subscription example.test once to record the id']]],
+            'other.example.test' => ['mail' => ['backup' => ['ok' => false, 'time' => '2026-10-29T01:00:00Z', 'error' => 'doveadm failed']]],
+        ]));
+        $rows = Status::rows($state);
+
+        self::assertSame([true, false], array_column($rows, 'needs_adopt'));
     }
 }

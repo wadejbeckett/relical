@@ -47,7 +47,7 @@ try {
     if ($locks === false) {
         throw new RuntimeException('could not read /proc/locks');
     }
-    ScriptIO::ok(['running' => Status::lockHeld($locks, (int) $stat['ino'])]);
+    ScriptIO::ok(['running' => Status::lockHeld($locks, (int) $stat['dev'], (int) $stat['ino'])]);
 } catch (Throwable $e) {
     ScriptIO::fail('running: ' . $e->getMessage());
 }

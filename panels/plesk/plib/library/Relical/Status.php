@@ -20,6 +20,15 @@ final class Status
     public const REPOSITORY_KEY = 'repository';
 
     /**
+     * What the core says when a repository key has no recorded owner
+     * (core/internal/job/run.go: "... run relical adopt --subscription S
+     * once ..."). Matching the text is fragile; a structured flag in the
+     * core's result (`needs_adopt: true`) would be better and should replace
+     * this when the core has one.
+     */
+    public const ADOPT_HINT = 'relical adopt';
+
+    /**
      * @return array<string, array<string, array<string, array<string, mixed>>>> the state
      * @throws RuntimeException with the core's error, or when the output is not a state
      */
@@ -60,7 +69,10 @@ final class Status
      * One row per subscription, sorted by name with `_server` last.
      *
      * @param array<string, array<string, array<string, array<string, mixed>>>> $state
-     * @return list<array{subscription: string, units: list<array{unit: string, ok: bool, time: string}>, last_success: string, last_error: string, stored_bytes: ?int}>
+     * `needs_adopt` is set when a failed result asks the administrator to
+     * adopt the repository (ADOPT_HINT).
+     *
+     * @return list<array{subscription: string, units: list<array{unit: string, ok: bool, time: string}>, last_success: string, last_error: string, stored_bytes: ?int, needs_adopt: bool}>
      */
     public static function rows(array $state, ?DateTimeZone $zone = null): array
     {
@@ -74,6 +86,7 @@ final class Status
             $lastSuccess = null;
             $errors = [];
             $stored = null;
+            $needsAdopt = false;
             $keys = array_keys($state[$subscription]);
             usort($keys, [self::class, 'unitOrder']);
             foreach ($keys as $unit) {
@@ -92,6 +105,7 @@ final class Status
                     if (!$ok) {
                         $what = $unit === self::REPOSITORY_KEY ? $action : $unit . ' ' . $action;
                         $error = trim((string) ($result['error'] ?? '')) ?: 'failed';
+                        $needsAdopt = $needsAdopt || str_contains($error, self::ADOPT_HINT);
                         $errors[] = [$time, sprintf('%s: %s (%s)', $what, $error, self::show($time, $zone))];
                     }
                 }
@@ -103,6 +117,7 @@ final class Status
                 'last_success' => self::show($lastSuccess, $zone),
                 'last_error' => implode('; ', array_column($errors, 1)),
                 'stored_bytes' => $stored,
+                'needs_adopt' => $needsAdopt && $subscription !== Paths::SERVER_REPO,
             ];
         }
 
@@ -127,20 +142,38 @@ final class Status
     }
 
     /**
-     * Whether a process holds an flock on the file with inode $inode,
-     * from the contents of /proc/locks. Reading /proc/locks takes no lock
-     * itself, so asking never gets in the way of a run that is starting.
+     * Whether a process holds an flock on the file with device $device and
+     * inode $inode (both from stat()), from the contents of /proc/locks,
+     * which prints them as `MAJ:MIN:INODE` with the device numbers in hex.
+     * Reading /proc/locks takes no lock itself, so asking never gets in the
+     * way of a run that is starting.
      */
-    public static function lockHeld(string $procLocks, int $inode): bool
+    public static function lockHeld(string $procLocks, int $device, int $inode): bool
     {
+        [$major, $minor] = self::deviceNumbers($device);
         foreach (preg_split('/\R/', $procLocks) ?: [] as $line) {
             // "1: FLOCK  ADVISORY  WRITE 4242 08:01:131074 0 EOF"
-            if (preg_match('/^\d+:\s+(?:->\s+)?FLOCK\s+\S+\s+\S+\s+\d+\s+[0-9a-f]+:[0-9a-f]+:(\d+)\s/i', $line, $m) === 1 && (int) $m[1] === $inode) {
+            if (preg_match('/^\d+:\s+(?:->\s+)?FLOCK\s+\S+\s+\S+\s+\d+\s+([0-9a-f]+):([0-9a-f]+):(\d+)\s/i', $line, $m) === 1
+                && (int) $m[3] === $inode && hexdec($m[1]) === $major && hexdec($m[2]) === $minor) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /**
+     * The major and minor numbers of a stat() `dev` (glibc's encoding:
+     * major in bits 8-19 and 32-43, minor in bits 0-7 and 20-31).
+     *
+     * @return array{int, int}
+     */
+    public static function deviceNumbers(int $device): array
+    {
+        $major = (($device >> 8) & 0xfff) | (($device >> 32) & ~0xfff);
+        $minor = ($device & 0xff) | (($device >> 12) & ~0xff);
+
+        return [$major, $minor & 0xfffff];
     }
 
     private static function unitOrder(string $a, string $b): int
