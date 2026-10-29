@@ -1,0 +1,115 @@
+<?php
+/** @var pm_View $this */
+$e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+?>
+<style type="text/css">
+.relical-section { margin-top: 24px; }
+.relical-key { font-family: monospace; word-break: break-all; background: #f6f6f6; border: 1px solid #e0e0e0; padding: 8px 10px; }
+.relical-table { border-collapse: collapse; margin: 6px 0 12px; }
+.relical-table th { padding: 4px 18px 6px 0; text-align: left; font-size: 0.85em; color: #777; font-weight: 600; border-bottom: 1px solid #ddd; }
+.relical-table td { padding: 8px 18px 8px 0; border-bottom: 1px solid #ececec; vertical-align: top; }
+.relical-ok { color: #3a9c3a; }
+.relical-error { color: #d44; }
+.relical-muted { color: #999; }
+.relical-unit { display: inline-block; margin-right: 10px; white-space: nowrap; }
+.relical-button { display: inline-block; padding: 6px 12px; border: 1px solid #c0c0c0; background: #fafafa; border-radius: 4px; text-decoration: none; color: #333; }
+.relical-button:hover { background: #f0f0f0; text-decoration: none; }
+</style>
+
+<p>
+    Relical backs up each subscription's mail, website files and databases,
+    and the Plesk configuration, into encrypted repositories on the Storage
+    Box every night. Restores go beside the live data and never overwrite it.
+</p>
+
+<h3 class="relical-section">Settings</h3>
+<?php echo $this->form; ?>
+
+<h3 class="relical-section">Storage Box access</h3>
+<?php if ($this->publicKey['key'] !== ''): ?>
+<p>Add this public key to the Storage Box's <code>authorized_keys</code> (for the user above):</p>
+<p class="relical-key"><?php echo $e($this->publicKey['key']); ?></p>
+<?php else: ?>
+<p class="relical-error">The public key could not be shown: <?php echo $e($this->publicKey['error']); ?></p>
+<?php endif; ?>
+
+<?php if ($this->destination !== null): ?>
+<p>Destination: <code><?php echo $e($this->destination); ?></code></p>
+<p>
+    <a class="relical-button" href="<?php echo $e($this->connectionUrl); ?>">Check connection</a>
+    <a class="relical-button" href="<?php echo $e($this->probeUrl); ?>">Test connection</a>
+</p>
+<p class="relical-muted">
+    "Check connection" reads the Storage Box's host key so you can compare
+    its fingerprint and trust it. "Test connection" logs in with the key
+    above and the trusted host key, and changes nothing.
+</p>
+<?php else: ?>
+<p class="relical-muted">Save the Storage Box host, user and path above to check the connection.</p>
+<?php endif; ?>
+
+<h3 class="relical-section">Status</h3>
+<?php if ($this->status['error'] !== ''): ?>
+<p class="relical-muted">No status yet: <?php echo $e($this->status['error']); ?></p>
+<?php elseif ($this->status['rows'] === []): ?>
+<p class="relical-muted">No backup has run yet.</p>
+<?php else: ?>
+<table class="relical-table">
+    <thead>
+        <tr>
+            <th>Subscription</th>
+            <th>Units</th>
+            <th>Last success</th>
+            <th>Last error</th>
+            <th>Stored</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+    <?php foreach ($this->status['rows'] as $row): ?>
+        <tr>
+            <td><?php echo $e($row['subscription'] === '_server' ? 'Plesk configuration' : $row['subscription']); ?></td>
+            <td>
+                <?php foreach ($row['units'] as $unit): ?>
+                <span class="relical-unit <?php echo $unit['ok'] ? 'relical-ok' : 'relical-error'; ?>" title="<?php echo $e($unit['time']); ?>"><?php echo $e($unit['unit']); ?> <?php echo $unit['ok'] ? 'OK' : 'failed'; ?></span>
+                <?php endforeach; ?>
+            </td>
+            <td><?php echo $e($row['last_success'] !== '' ? $row['last_success'] : 'never'); ?></td>
+            <td class="<?php echo $row['last_error'] !== '' ? 'relical-error' : ''; ?>"><?php echo $e($row['last_error']); ?></td>
+            <td><?php echo $e($row['stored']); ?></td>
+            <td><?php if ($row['backup_url'] !== ''): ?><a href="<?php echo $e($row['backup_url']); ?>">Back up now</a><?php endif; ?></td>
+        </tr>
+    <?php endforeach; ?>
+    </tbody>
+</table>
+<?php endif; ?>
+<p>
+    <a class="relical-button" href="<?php echo $e($this->backupUrl . '?all=1'); ?>">Run everything now</a>
+    <a class="relical-button" href="<?php echo $e($this->logUrl); ?>">Show the log</a>
+</p>
+
+<h3 class="relical-section">Last report</h3>
+<?php if (!$this->report['available']): ?>
+<p class="relical-muted"><?php echo $e($this->report['message']); ?></p>
+<?php else: ?>
+<?php if ($this->report['generated'] !== ''): ?><p class="relical-muted">Made <?php echo $e($this->report['generated']); ?></p><?php endif; ?>
+<table class="relical-table">
+    <tbody>
+    <?php foreach ($this->report['summary'] as $item): ?>
+        <tr><td><?php echo $e($item['label']); ?></td><td><?php echo $e($item['value']); ?></td></tr>
+    <?php endforeach; ?>
+    </tbody>
+</table>
+<?php if ($this->report['failures'] !== []): ?>
+<p>Failures:</p>
+<ul>
+    <?php foreach ($this->report['failures'] as $failure): ?><li class="relical-error"><?php echo $e($failure); ?></li><?php endforeach; ?>
+</ul>
+<?php endif; ?>
+<?php if ($this->report['renamed'] !== []): ?>
+<p>Renamed subscriptions:</p>
+<ul>
+    <?php foreach ($this->report['renamed'] as $renamed): ?><li><?php echo $e($renamed); ?></li><?php endforeach; ?>
+</ul>
+<?php endif; ?>
+<?php endif; ?>

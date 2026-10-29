@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Noiz\Relical;
 
+use Throwable;
+
 /**
  * How the administrator screens run the root scripts: through
  * `plesk bin extension --exec relical <script> [args]` (Command::rootArgv,
@@ -15,12 +17,19 @@ namespace Noiz\Relical;
 final class RootScripts
 {
     /**
+     * Never throws: a script that cannot be started or arguments that are
+     * refused come back as a failed result whose stderr says why.
+     *
      * @param list<string> $args validated by Command::scriptArgs
      * @return array{code: int, data: ?array<mixed>, stdout: string, stderr: string, timed_out: bool}
      */
     public static function run(string $script, array $args = [], float $timeout = 60.0): array
     {
-        $result = Process::capture(Command::rootArgv($script, $args), $timeout);
+        try {
+            $result = Process::capture(Command::rootArgv($script, $args), $timeout);
+        } catch (Throwable $e) {
+            return ['code' => -1, 'data' => null, 'stdout' => '', 'stderr' => $e->getMessage(), 'timed_out' => false];
+        }
         $data = json_decode(trim($result['stdout']), true);
 
         return $result + ['data' => is_array($data) ? $data : null];

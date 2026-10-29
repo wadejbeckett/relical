@@ -50,7 +50,7 @@ final class Process
     {
         self::checkArgv($argv);
 
-        $process = proc_open(
+        $process = @proc_open(
             array_values($argv),
             [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
             $pipes

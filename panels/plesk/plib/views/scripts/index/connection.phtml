@@ -1,0 +1,24 @@
+<?php
+/** @var pm_View $this */
+$e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+?>
+<?php if ($this->scan === null): ?>
+<p>The Storage Box's host key could not be read: <?php echo $e($this->scanError); ?></p>
+<p><a href="<?php echo $e($this->backUrl); ?>">Back to the settings</a></p>
+<?php else: ?>
+<p>
+    <code><?php echo $e($this->scan['host']); ?></code>, port <?php echo $e($this->scan['port']); ?>,
+    offers this ed25519 host key:
+</p>
+<p><code><?php echo $e($this->scan['fingerprint']); ?></code></p>
+<?php if ($this->scan['pinned']): ?>
+<p>This key is already trusted. Trusting it again changes nothing.</p>
+<?php else: ?>
+<p>
+    Compare it with the fingerprint your Storage Box provider publishes for
+    this host. Trust it only if the two are the same: from then on Relical
+    connects only to a server with this key.
+</p>
+<?php endif; ?>
+<?php echo $this->form; ?>
+<?php endif; ?>

@@ -1,0 +1,396 @@
+<?php
+
+declare(strict_types=1);
+
+use Noiz\Relical\Command;
+use Noiz\Relical\Coverage;
+use Noiz\Relical\Destination;
+use Noiz\Relical\HostKey;
+use Noiz\Relical\Paths;
+use Noiz\Relical\Report;
+use Noiz\Relical\RootScripts;
+use Noiz\Relical\Settings;
+use Noiz\Relical\Status;
+
+/**
+ * The administrator's screens: settings, the Storage Box connection, the
+ * status of every subscription's backups, "Back up now", and the log.
+ *
+ * Administrators only. The controller never runs relical, restic or ssh
+ * itself: every privileged step goes through a root script
+ * (`plesk bin extension --exec relical <script>`, argv, validated by
+ * Command), and backups start detached in the background. Every change is a
+ * POST through a pm_Form (with Plesk's forgery token); GET pages only read.
+ */
+class IndexController extends pm_Controller_Action
+{
+    /** How long the screens wait for a root script (keyscan 15 s, probe 20 s inside). */
+    private const SCRIPT_TIMEOUT = 60.0;
+
+    public function init()
+    {
+        parent::init();
+
+        if (!pm_Session::getClient()->isAdmin()) {
+            throw new pm_Exception('Permission denied');
+        }
+
+        require_once __DIR__ . '/../library/autoload.php';
+
+        $this->view->pageTitle = 'Relical Backup';
+    }
+
+    /** Settings, the public key, the connection, the status table and the last report. */
+    public function indexAction()
+    {
+        $form = $this->settingsForm();
+
+        if ($this->getRequest()->isPost()) {
+            if ($form->isValid($this->getRequest()->getPost()) && $this->saveSettings($form)) {
+                $this->_helper->json(['redirect' => pm_Context::getBaseUrl()]);
+                return;
+            }
+            // Invalid: the form is shown again with its errors.
+        }
+
+        $settings = Settings::fromPlesk();
+        try {
+            $destination = Destination::fromInput($settings->configInput());
+        } catch (InvalidArgumentException $e) {
+            $destination = null;
+        }
+
+        $this->view->form = $form;
+        $this->view->destination = $destination?->display();
+        $this->view->publicKey = $this->publicKey();
+        $this->view->status = $this->statusRows();
+        $this->view->report = $this->report();
+        $this->view->connectionUrl = pm_Context::getActionUrl('index', 'connection');
+        $this->view->probeUrl = pm_Context::getActionUrl('index', 'probe');
+        $this->view->backupUrl = pm_Context::getActionUrl('index', 'backup');
+        $this->view->logUrl = pm_Context::getActionUrl('index', 'log');
+    }
+
+    /**
+     * GET: scans the Storage Box's host key and shows its fingerprint with a
+     * "Trust this host key" form. POST: pins the key only if a fresh scan
+     * still has the fingerprint shown, then tests the connection.
+     */
+    public function connectionAction()
+    {
+        $form = new pm_Form_Simple();
+        $form->setAction(pm_Context::getActionUrl('index', 'connection'));
+        $form->addElement('hidden', 'fingerprint', ['required' => true]);
+        $form->addControlButtons([
+            'sendTitle' => 'Trust this host key',
+            'cancelLink' => pm_Context::getBaseUrl(),
+        ]);
+
+        if ($this->getRequest()->isPost()) {
+            if ($form->isValid($this->getRequest()->getPost())) {
+                $this->trustHostKey((string) $form->getValue('fingerprint'));
+            }
+            $this->_helper->json(['redirect' => pm_Context::getBaseUrl()]);
+            return;
+        }
+
+        $this->view->pageTitle = 'Relical Backup: Storage Box connection';
+        $this->view->backUrl = pm_Context::getBaseUrl();
+        $this->view->scan = null;
+        $this->view->scanError = '';
+        $this->view->form = null;
+
+        $result = RootScripts::run('hostkey.php', ['scan'], self::SCRIPT_TIMEOUT);
+        $data = $result['data'];
+        if ($result['code'] !== 0 || !is_array($data) || !is_string($data['fingerprint'] ?? null)) {
+            $this->view->scanError = RootScripts::error($result);
+            return;
+        }
+        try {
+            $fingerprint = HostKey::fingerprintArg($data['fingerprint']);
+        } catch (InvalidArgumentException $e) {
+            $this->view->scanError = $e->getMessage();
+            return;
+        }
+        $this->view->scan = [
+            'host' => (string) ($data['host'] ?? ''),
+            'port' => (int) ($data['port'] ?? 0),
+            'fingerprint' => $fingerprint,
+            'pinned' => ($data['pinned'] ?? false) === true,
+        ];
+        $form->getElement('fingerprint')->setValue($fingerprint);
+        $this->view->form = $form;
+    }
+
+    /** GET: tests the connection (an sftp session that changes nothing) and returns to the settings. */
+    public function probeAction()
+    {
+        $this->reportProbe();
+        $this->_helper->viewRenderer->setNoRender(true);
+        $this->_redirect(pm_Context::getBaseUrl());
+    }
+
+    /**
+     * GET: asks to confirm a backup of one subscription (`?subscription=S`)
+     * or of everything (`?all=1`). POST: starts it in the background, unless
+     * a run already holds the lock.
+     */
+    public function backupAction()
+    {
+        $request = $this->getRequest();
+        $all = (string) $request->getParam('all') === '1';
+        $subscription = trim((string) $request->getParam('subscription'));
+        try {
+            $args = $all ? ['backup', '--all'] : ['backup', '--subscription', Command::subscription($subscription)];
+            Command::parse($args);
+        } catch (InvalidArgumentException $e) {
+            $this->_status->addMessage('error', 'Back up now: ' . $e->getMessage());
+            $this->_helper->viewRenderer->setNoRender(true);
+            $this->_redirect(pm_Context::getBaseUrl());
+            return;
+        }
+
+        $form = new pm_Form_Simple();
+        $form->setAction(pm_Context::getActionUrl('index', 'backup'));
+        if ($all) {
+            $form->addElement('hidden', 'all', ['value' => '1']);
+        } else {
+            $form->addElement('hidden', 'subscription', ['value' => $subscription]);
+        }
+        $form->addControlButtons([
+            'sendTitle' => $all ? 'Run everything now' : 'Back up now',
+            'cancelLink' => pm_Context::getBaseUrl(),
+        ]);
+
+        if ($request->isPost()) {
+            if ($form->isValid($request->getPost())) {
+                if ($this->runInProgress()) {
+                    $this->_status->addMessage('warning', 'A backup run is already in progress (from the nightly timer or an earlier "Back up now"). Start this one when it has finished; the status table shows when it is done.');
+                } else {
+                    RootScripts::startInBackground($args);
+                    $this->_status->addMessage('info', ($all ? 'A backup of every subscription' : sprintf('A backup of %s', $subscription))
+                        . ' has started in the background. The status table shows the result when it has finished.');
+                }
+            }
+            $this->_helper->json(['redirect' => pm_Context::getBaseUrl()]);
+            return;
+        }
+
+        $this->view->pageTitle = 'Relical Backup: back up now';
+        $this->view->what = $all ? 'every subscription, then the Plesk configuration' : $subscription;
+        $this->view->running = $this->runInProgress();
+        $this->view->form = $form;
+        $this->view->backUrl = pm_Context::getBaseUrl();
+    }
+
+    /** GET: the last 200 lines of the core's log. */
+    public function logAction()
+    {
+        $this->view->pageTitle = 'Relical Backup: log';
+        $this->view->backUrl = pm_Context::getBaseUrl();
+        $this->view->logPath = Paths::LOG;
+        $this->view->lines = [];
+        $this->view->logError = '';
+        $this->view->logExists = false;
+
+        $result = RootScripts::run('log-tail.php', [], self::SCRIPT_TIMEOUT);
+        $data = $result['data'];
+        if ($result['code'] !== 0 || !is_array($data) || !is_array($data['lines'] ?? null)) {
+            $this->view->logError = RootScripts::error($result);
+            return;
+        }
+        $this->view->logExists = ($data['exists'] ?? false) === true;
+        $this->view->lines = array_values(array_filter($data['lines'], 'is_string'));
+    }
+
+    // ----- settings -----
+
+    private function settingsForm(): pm_Form_Simple
+    {
+        $settings = Settings::fromPlesk();
+        $retention = $settings->retention();
+
+        $form = new pm_Form_Simple();
+        $form->addElement('radio', Settings::SCOPE, [
+            'label' => 'Back up',
+            'multiOptions' => [
+                Coverage::SCOPE_ALL => 'Every subscription',
+                Coverage::SCOPE_PLAN_ITEMS => 'Subscriptions whose plan includes a Relical item',
+            ],
+            'value' => $settings->scope(),
+            'required' => true,
+        ]);
+        $form->addElement('text', Settings::SFTP_HOST, [
+            'label' => 'Storage Box host',
+            'value' => $settings->sftpHost(),
+            'required' => true,
+            'description' => 'For example u000000-sub1.your-storagebox.de.',
+        ]);
+        $form->addElement('text', Settings::SFTP_PORT, [
+            'label' => 'SFTP port',
+            'value' => (string) $settings->sftpPort(),
+            'description' => 'A Storage Box takes SFTP with keys on port 23.',
+        ]);
+        $form->addElement('text', Settings::SFTP_USER, [
+            'label' => 'Storage Box user',
+            'value' => $settings->sftpUser(),
+            'required' => true,
+        ]);
+        $form->addElement('text', Settings::SFTP_PATH, [
+            'label' => 'Path on the Storage Box',
+            'value' => $settings->sftpPath(),
+            'description' => 'Each subscription gets its own encrypted repository under this directory.',
+        ]);
+        $form->addElement('text', Settings::RETENTION_DAILY, ['label' => 'Daily backups kept', 'value' => (string) $retention['daily']]);
+        $form->addElement('text', Settings::RETENTION_WEEKLY, ['label' => 'Weekly backups kept', 'value' => (string) $retention['weekly']]);
+        $form->addElement('text', Settings::RETENTION_MONTHLY, ['label' => 'Monthly backups kept', 'value' => (string) $retention['monthly']]);
+        $form->addElement('text', Settings::BACKUP_TIME, [
+            'label' => 'Backup time',
+            'value' => $settings->backupTime(),
+            'description' => 'HH:MM, server time. The weekly check runs on Sundays twelve hours later.',
+        ]);
+        $form->addElement('text', Settings::LIMIT_UPLOAD_KIB, [
+            'label' => 'Upload limit (KiB/s)',
+            'value' => (string) $settings->limitUploadKib(),
+            'description' => '0 for no limit.',
+        ]);
+        $form->addControlButtons([
+            'sendTitle' => 'Save',
+            'cancelLink' => pm_Context::getModulesListUrl(),
+        ]);
+
+        return $form;
+    }
+
+    /**
+     * Stores the settings, then has root write the configuration and, when
+     * the backup time changed, re-install the timers.
+     *
+     * @return bool false when a value was refused (the form then carries the errors)
+     */
+    private function saveSettings(pm_Form_Simple $form): bool
+    {
+        $values = [];
+        foreach (Settings::KEYS as $key) {
+            $values[$key] = $form->getValue($key);
+        }
+        $errors = Settings::errors($values);
+        if ($errors !== []) {
+            foreach ($errors as $key => $message) {
+                $form->getElement($key)->addError(ucfirst($message) . '.');
+            }
+            return false;
+        }
+
+        $previousTime = Settings::fromPlesk()->backupTime();
+        $previousHost = Settings::fromPlesk()->sftpHost() . ':' . Settings::fromPlesk()->sftpPort();
+        $store = Settings::validated($values);
+        foreach ($store as $key => $value) {
+            pm_Settings::set($key, $value);
+        }
+        $this->_status->addMessage('info', 'Settings saved.');
+
+        $result = RootScripts::run('write-config.php', [], self::SCRIPT_TIMEOUT);
+        if ($result['code'] !== 0) {
+            $this->_status->addMessage('error', 'The configuration could not be written: ' . RootScripts::error($result));
+        }
+
+        if ($store[Settings::BACKUP_TIME] !== $previousTime) {
+            $result = RootScripts::run('install-timers.php', [], self::SCRIPT_TIMEOUT);
+            if ($result['code'] === 0) {
+                $this->_status->addMessage('info', sprintf('The nightly backup now starts at %s.', $store[Settings::BACKUP_TIME]));
+            } else {
+                $this->_status->addMessage('error', 'The timers could not be updated: ' . RootScripts::error($result));
+            }
+        }
+
+        if ($store[Settings::SFTP_HOST] . ':' . $store[Settings::SFTP_PORT] !== $previousHost) {
+            $this->_status->addMessage('warning', 'The Storage Box changed: check the connection and trust its host key before the next backup.');
+        }
+
+        return true;
+    }
+
+    // ----- connection -----
+
+    private function publicKey(): array
+    {
+        $result = RootScripts::run('show-pubkey.php', [], self::SCRIPT_TIMEOUT);
+        if ($result['code'] === 0 && is_string($result['data']['public_key'] ?? null)) {
+            try {
+                return ['key' => HostKey::publicKeyLine($result['data']['public_key']), 'error' => ''];
+            } catch (InvalidArgumentException $e) {
+                return ['key' => '', 'error' => $e->getMessage()];
+            }
+        }
+
+        return ['key' => '', 'error' => RootScripts::error($result)];
+    }
+
+    private function trustHostKey(string $fingerprint): void
+    {
+        try {
+            HostKey::fingerprintArg($fingerprint);
+        } catch (InvalidArgumentException $e) {
+            $this->_status->addMessage('error', $e->getMessage());
+            return;
+        }
+        $result = RootScripts::run('hostkey.php', ['trust', $fingerprint], self::SCRIPT_TIMEOUT);
+        if ($result['code'] !== 0) {
+            $this->_status->addMessage('error', 'The host key was not pinned: ' . RootScripts::error($result));
+            return;
+        }
+        $this->_status->addMessage('info', sprintf('The host key %s is pinned.', $fingerprint));
+        $this->reportProbe();
+    }
+
+    private function reportProbe(): void
+    {
+        $result = RootScripts::run('probe.php', [], self::SCRIPT_TIMEOUT);
+        $data = $result['data'];
+        if ($result['code'] !== 0 || !is_array($data) || !is_string($data['message'] ?? null)) {
+            $this->_status->addMessage('error', 'The connection test could not run: ' . RootScripts::error($result));
+            return;
+        }
+        $ok = ($data['ok'] ?? false) === true;
+        $this->_status->addMessage($ok ? 'info' : 'error', $data['message'] . ($ok ? '' : ' Is the public key in the Storage Box\'s authorized_keys?'));
+    }
+
+    // ----- status -----
+
+    /** @return array{rows: list<array<string, mixed>>, error: string} */
+    private function statusRows(): array
+    {
+        $result = RootScripts::run('cli.php', ['status'], self::SCRIPT_TIMEOUT);
+        try {
+            $rows = Status::rows(Status::parse($result['stdout']));
+        } catch (RuntimeException $e) {
+            // The core's own error when it printed one, else why cli.php failed.
+            return ['rows' => [], 'error' => $result['data'] !== null ? $e->getMessage() : RootScripts::error($result)];
+        }
+        foreach ($rows as &$row) {
+            $row['stored'] = Status::bytes($row['stored_bytes']);
+            $row['backup_url'] = $row['subscription'] === Paths::SERVER_REPO
+                ? ''
+                : pm_Context::getActionUrl('index', 'backup') . '?subscription=' . rawurlencode($row['subscription']);
+        }
+        unset($row);
+
+        return ['rows' => $rows, 'error' => ''];
+    }
+
+    /** @return array<string, mixed> Report::fromCli() */
+    private function report(): array
+    {
+        $result = RootScripts::run('cli.php', ['report'], self::SCRIPT_TIMEOUT);
+
+        return Report::fromCli($result['code'], $result['stdout'], $result['stderr']);
+    }
+
+    private function runInProgress(): bool
+    {
+        $result = RootScripts::run('running.php', [], self::SCRIPT_TIMEOUT);
+
+        return ($result['data']['running'] ?? false) === true;
+    }
+}
