@@ -22,9 +22,10 @@ final class Command
     public const UNITS = ['mail', 'files', 'db', 'panel-config'];
 
     /**
-     * The root scripts the screens run through
-     * `plesk bin extension --exec relical <script>`, and the arguments each
-     * takes. cli.php takes what parse() accepts.
+     * The root scripts the screens run through sbin/relical-root
+     * (Paths::rootCommand()), and the arguments each takes. cli.php takes
+     * what parse() accepts. relical-root also runs inventory.php,
+     * post-install.php and pre-uninstall.php, which the screens never do.
      */
     public const SCRIPTS = [
         'cli.php', 'write-config.php', 'install-timers.php', 'overview.php',
@@ -207,7 +208,8 @@ final class Command
 
     /**
      * The argv that runs a root script as root, for Process (no shell),
-     * through the `extension` utility Paths::extensionCommand() resolves.
+     * through Plesk's mod_wrapper link to sbin/relical-root
+     * (Paths::rootCommand()).
      *
      * @param list<string> $args
      * @return list<string>
@@ -215,8 +217,8 @@ final class Command
     public static function rootArgv(string $script, array $args = []): array
     {
         return array_merge(
-            Paths::extensionCommand(),
-            ['--exec', Paths::EXTENSION_ID, $script],
+            Paths::rootCommand(),
+            [$script],
             self::scriptArgs($script, $args)
         );
     }

@@ -6,6 +6,7 @@ namespace Noiz\Relical\Tests;
 
 use InvalidArgumentException;
 use Noiz\Relical\ConfigWriter;
+use Noiz\Relical\Paths;
 use PHPUnit\Framework\TestCase;
 
 final class ConfigWriterTest extends TestCase
@@ -40,7 +41,7 @@ final class ConfigWriterTest extends TestCase
         self::assertSame('/etc/relical/keys', $config['keys_dir']);
         self::assertSame(['defaults_file' => '/etc/relical/mysql.cnf'], $config['mysql']);
         self::assertSame(
-            ['/usr/sbin/plesk', 'bin', 'extension', '--exec', 'relical', 'inventory.php'],
+            Paths::inventoryCommand(),
             $config['inventory_command']
         );
         self::assertSame('storagebox', $config['default_destination']);

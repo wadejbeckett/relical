@@ -74,10 +74,17 @@ META_VERSION="$(sed -n 's:[[:space:]]*<version>\(.*\)</version>.*:\1:p' "$PANEL_
     || die "meta.xml says version '$META_VERSION' but building '$VERSION'; bump meta.xml first"
 
 # 2) The package layout. Tests, composer files and the phpunit config live
-#    outside these four paths and are not shipped.
+#    outside these paths and are not shipped. sbin/ is optional: Plesk
+#    installs it as the extension's root utilities (mod_wrapper), each 0755.
 PKG="$STAGE/pkg"
 mkdir -p "$PKG"
 cp -R "$PANEL_DIR/meta.xml" "$PANEL_DIR/plib" "$PANEL_DIR/htdocs" "$PANEL_DIR/_meta" "$PKG/"
+PKG_DIRS="meta.xml plib htdocs _meta"
+if [ -d "$PANEL_DIR/sbin" ]; then
+    cp -R "$PANEL_DIR/sbin" "$PKG/"
+    chmod 0755 "$PKG"/sbin/*
+    PKG_DIRS="$PKG_DIRS sbin"
+fi
 BIN="$PKG/plib/bin"
 mkdir -p "$BIN"
 rm -f "$BIN/.gitkeep" "$BIN/relical" "$BIN/restic" "$BIN/SHA256SUMS"
@@ -108,7 +115,8 @@ OUT="$DIST/$ID-$VERSION.zip"   # versioned, one per release
 ALIAS="$DIST/$ID.zip"          # stable name for the latest build
 mkdir -p "$DIST"
 rm -f "$OUT" "$ALIAS"
-( cd "$PKG" && zip -rqX "$OUT" meta.xml plib htdocs _meta )
+# shellcheck disable=SC2086
+( cd "$PKG" && zip -rqX "$OUT" $PKG_DIRS )
 cp "$OUT" "$ALIAS"
 
 SIZE="$(stat -c %s "$OUT")"

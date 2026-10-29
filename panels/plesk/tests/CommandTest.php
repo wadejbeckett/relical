@@ -15,47 +15,77 @@ final class CommandTest extends TestCase
 {
     private const PREFIX = ['/usr/local/lib/relical/relical', '-config', '/etc/relical/config.json'];
 
-    /** The resolved `extension` utility, quoted as the detached command quotes it. */
+    /** The resolved root command, quoted as the detached command quotes it. */
     private static function utility(): string
     {
-        return implode(' ', array_map([Command::class, 'shellQuote'], Paths::extensionCommand()));
+        return implode(' ', array_map([Command::class, 'shellQuote'], Paths::rootCommand()));
     }
 
     /**
      * @param list<string> $existing
      * @return callable(string): bool
      */
-    private static function executable(array $existing): callable
+    private static function existing(array $existing): callable
     {
         return static fn (string $path): bool => in_array($path, $existing, true);
     }
 
-    public function testTheExtensionUtilityPrefersProductRoot(): void
+    public function testTheProductRootPrefersProductRootD(): void
     {
-        self::assertSame(['/opt/psa/bin/extension'], Paths::extensionUtility('/opt/psa', self::executable(['/opt/psa/bin/extension', '/usr/sbin/plesk'])));
-        self::assertSame(['/usr/local/psa/bin/extension'], Paths::extensionUtility('/usr/local/psa/', self::executable(['/usr/local/psa/bin/extension'])));
+        self::assertSame('/opt/psa', Paths::productRootOf('/opt/psa', self::existing(['/opt/psa/admin/sbin/mod_wrapper', '/usr/local/psa/admin/sbin/mod_wrapper'])));
+        self::assertSame('/usr/local/psa', Paths::productRootOf('/usr/local/psa/', self::existing(['/usr/local/psa/admin/sbin/mod_wrapper', '/opt/psa/admin/sbin/mod_wrapper'])));
+        self::assertSame('/srv/psa', Paths::productRootOf('/srv/psa', self::existing(['/srv/psa/admin/sbin/mod_wrapper'])));
     }
 
-    public function testTheExtensionUtilityFallsBackToThePleskWrapper(): void
+    public function testTheProductRootFallsBackToTheKnownRoots(): void
     {
-        self::assertSame(['/usr/sbin/plesk', 'bin', 'extension'], Paths::extensionUtility('/opt/psa', self::executable(['/usr/sbin/plesk', '/opt/psa/bin/plesk'])));
-        self::assertSame(['/usr/sbin/plesk', 'bin', 'extension'], Paths::extensionUtility(null, self::executable(['/usr/sbin/plesk', '/opt/psa/bin/extension'])));
-        self::assertSame(['/usr/local/psa/bin/extension'], Paths::extensionUtility(null, self::executable(['/usr/local/psa/bin/extension'])));
-        self::assertSame(['/opt/psa/bin/extension'], Paths::extensionUtility(null, self::executable([])));
+        self::assertSame('/usr/local/psa', Paths::productRootOf('/srv/psa', self::existing(['/usr/local/psa/admin/sbin/mod_wrapper'])));
+        self::assertSame('/usr/local/psa', Paths::productRootOf(null, self::existing(['/usr/local/psa/admin/sbin/mod_wrapper'])));
+        self::assertSame('/opt/psa', Paths::productRootOf(null, self::existing([])));
     }
 
-    public function testTheExtensionUtilityIgnoresAnOddProductRoot(): void
+    public function testTheProductRootIgnoresAnOddProductRootD(): void
     {
         $seen = [];
-        $isExecutable = static function (string $path) use (&$seen): bool {
+        $exists = static function (string $path) use (&$seen): bool {
             $seen[] = $path;
             return true;
         };
-        foreach (['/opt/psa; id', 'opt/psa', '/opt/$(id)', "/opt/psa
-", '/opt/../tmp/x', ''] as $root) {
+        foreach (['/opt/psa; id', 'opt/psa', '/opt/$(id)', "/opt/psa\n", '/opt/../tmp/x', ''] as $root) {
             $seen = [];
-            self::assertSame(['/usr/sbin/plesk', 'bin', 'extension'], Paths::extensionUtility($root, $isExecutable), var_export($root, true));
-            self::assertSame(['/usr/sbin/plesk'], $seen, 'the odd root was never even checked');
+            self::assertSame('/opt/psa', Paths::productRootOf($root, $exists), var_export($root, true));
+            self::assertSame(['/opt/psa/admin/sbin/mod_wrapper'], $seen, 'the odd root was never even checked');
+        }
+    }
+
+    public function testRootScriptsRunThroughThePleskModWrapperLink(): void
+    {
+        self::assertSame(['/opt/psa/admin/bin/modules/relical/relical-root'], Paths::rootCommand('/opt/psa'));
+        self::assertSame('/usr/local/psa/admin/sbin/modules/relical/relical-root', Paths::rootScript('/usr/local/psa'));
+        self::assertSame(['/opt/psa/admin/sbin/modules/relical/relical-root', 'inventory.php'], Paths::inventoryCommand('/opt/psa'));
+    }
+
+    public function testTheRootEntryPointAllowsExactlyTheRootScripts(): void
+    {
+        $sbin = (string) file_get_contents(__DIR__ . '/../sbin/relical-root');
+        self::assertSame(1, preg_match('/case "\$script" in\n(.*?)\)\n/s', $sbin, $m));
+        $allowed = preg_split('/[|\\\\\s]+/', trim($m[1]), -1, PREG_SPLIT_NO_EMPTY);
+        $expected = array_merge(Command::SCRIPTS, ['inventory.php', 'post-install.php', 'pre-uninstall.php']);
+        sort($allowed);
+        sort($expected);
+        self::assertSame($expected, $allowed);
+        foreach ($expected as $script) {
+            self::assertFileExists(__DIR__ . '/../plib/scripts/' . $script);
+        }
+        self::assertTrue(is_executable(__DIR__ . '/../sbin/relical-root'), 'sbin/relical-root must be executable');
+    }
+
+    public function testTheRootEntryPointRefusesOtherScripts(): void
+    {
+        foreach (['', 'zz.php', '../scripts/cli.php', 'cli.php/../x', '-x'] as $script) {
+            $result = Process::capture(['/bin/sh', __DIR__ . '/../sbin/relical-root', $script], 5);
+            self::assertSame(2, $result['code'], $script);
+            self::assertStringContainsString('is not allowed', $result['stderr'], $script);
         }
     }
 
@@ -340,10 +370,10 @@ final class CommandTest extends TestCase
      * @dataProvider allowedScripts
      * @param list<string> $args
      */
-    public function testRootScriptsRunThroughPleskAsArgv(string $script, array $args): void
+    public function testRootScriptsRunThroughRelicalRootAsArgv(string $script, array $args): void
     {
         self::assertSame(
-            array_merge(Paths::extensionCommand(), ['--exec', 'relical', $script], $args),
+            array_merge(Paths::rootCommand(), [$script], $args),
             Command::rootArgv($script, $args)
         );
     }
@@ -411,11 +441,11 @@ final class CommandTest extends TestCase
     public function testBackgroundRunIsFullyEscapedAndDetached(): void
     {
         self::assertSame(
-            self::utility() . " '--exec' 'relical' 'cli.php' 'backup' '--subscription' 'example.test' < /dev/null > /dev/null 2>&1 &",
+            self::utility() . " 'cli.php' 'backup' '--subscription' 'example.test' < /dev/null > /dev/null 2>&1 &",
             Command::detached(['backup', '--subscription', 'example.test'])
         );
         self::assertSame(
-            self::utility() . " '--exec' 'relical' 'cli.php' 'backup' '--all' < /dev/null > /dev/null 2>&1 &",
+            self::utility() . " 'cli.php' 'backup' '--all' < /dev/null > /dev/null 2>&1 &",
             Command::detached(['backup', '--all'])
         );
     }
@@ -423,7 +453,7 @@ final class CommandTest extends TestCase
     public function testBackgroundRestoreIsFullyEscapedAndDetached(): void
     {
         self::assertSame(
-            self::utility() . " '--exec' 'relical' 'restore-run.php' '" . self::RESTORE_ID . "' 'restore' '--subscription' 'example.test' '--unit' 'files' '--path' 'my '\\''file'\\''' < /dev/null > /dev/null 2>&1 &",
+            self::utility() . " 'restore-run.php' '" . self::RESTORE_ID . "' 'restore' '--subscription' 'example.test' '--unit' 'files' '--path' 'my '\\''file'\\''' < /dev/null > /dev/null 2>&1 &",
             Command::detachedScript('restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'files', '--path', "my 'file'"])
         );
     }
@@ -441,7 +471,7 @@ final class CommandTest extends TestCase
                 // What sh hands the program, one NUL-terminated word each.
                 $result = Process::capture(['/bin/sh', '-c', 'printf "%s\0" ' . $words], 5);
                 self::assertSame(
-                    implode("\0", array_merge(Paths::extensionCommand(), ['--exec', 'relical', 'restore-run.php'], $args)) . "\0",
+                    implode("\0", array_merge(Paths::rootCommand(), ['restore-run.php'], $args)) . "\0",
                     $result['stdout']
                 );
             }

@@ -21,6 +21,7 @@ use Noiz\Relical\InstallRunner;
 use Noiz\Relical\Installer;
 use Noiz\Relical\LocalProbe;
 use Noiz\Relical\Paths;
+use Noiz\Relical\ScriptIO;
 
 // Plesk runs every plib/scripts/* file (install hooks, `plesk bin extension
 // --exec`, scheduled tasks) with its SDK prepended (`php
@@ -42,10 +43,14 @@ if (class_exists('pm_Context')) {
 
 require_once __DIR__ . '/../library/autoload.php';
 
+// Plesk runs the install hooks as its panel user (psaadm), not root, so the
+// work is handed to sbin/relical-root through Plesk's mod_wrapper, with the
+// same arguments; its output is this script's output.
+if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
+    exit(ScriptIO::runAsRoot('pre-uninstall.php', array_values(array_map('strval', array_slice($argv, 1)))));
+}
+
 try {
-    if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
-        throw new RuntimeException('pre-uninstall must run as root');
-    }
 
     $probe = new LocalProbe();
     $installer = new Installer(

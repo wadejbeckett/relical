@@ -26,10 +26,47 @@ final class ScriptIO
         exit($code);
     }
 
+    /**
+     * Makes sure the rest of the script runs as root. Plesk runs scripts as
+     * its panel user (psaadm): `plesk bin extension --exec`, even when root
+     * starts it, and the install hooks. Such a run is handed to
+     * sbin/relical-root through Plesk's mod_wrapper, with the same
+     * arguments, stdin, stdout and stderr, and this process exits with its
+     * exit code. Call it after the script has checked its arguments.
+     */
     public static function requireRoot(string $script): void
     {
-        if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
-            self::fail($script . ' must run as root (plesk bin extension --exec relical ' . $script . ')');
+        if (!function_exists('posix_geteuid') || posix_geteuid() === 0) {
+            return;
         }
+        $args = array_slice(is_array($_SERVER['argv'] ?? null) ? $_SERVER['argv'] : [], 1);
+        exit(self::runAsRoot($script, array_values(array_map('strval', $args))));
+    }
+
+    /**
+     * Runs a root script through relical-root, sharing this process's
+     * stdin, stdout and stderr, and returns its exit code. Fails (exit 1)
+     * when relical-root is not installed or cannot start.
+     *
+     * @param list<string> $args
+     */
+    public static function runAsRoot(string $script, array $args): int
+    {
+        $argv = array_merge(Paths::rootCommand(), [$script], $args);
+        if (!is_executable($argv[0])) {
+            self::fail(sprintf(
+                '%s must run as root, and %s is missing: reinstall the extension, or run %s %s as root',
+                $script,
+                $argv[0],
+                Paths::rootScript(),
+                $script
+            ));
+        }
+        $process = @proc_open($argv, [0 => STDIN, 1 => STDOUT, 2 => STDERR], $pipes);
+        if (!is_resource($process)) {
+            self::fail(sprintf('%s must run as root, and %s could not be started', $script, $argv[0]));
+        }
+
+        return proc_close($process);
     }
 }

@@ -1,0 +1,56 @@
+#!/bin/sh
+#
+# Runs one of the Relical extension's root scripts as root, with Plesk's
+# PHP SDK loaded.
+#
+# `plesk bin extension --exec relical <script>` runs a script as Plesk's
+# panel user (psaadm), even when root starts it, and so do the install
+# hooks. Plesk installs this file from the package's sbin/ into
+# <PRODUCT_ROOT_D>/admin/sbin/modules/relical/ and links
+# <PRODUCT_ROOT_D>/admin/bin/modules/relical/relical-root to its setuid
+# mod_wrapper, which runs it as root for the panel user (the path
+# pm_ApiCli::callSbin('relical-root', ...) uses). This script then starts
+# the PHP script the same way `extension --exec` does
+# (<PRODUCT_ROOT_D>/admin/bin/php -dauto_prepend_file=sdk.php <script>),
+# without dropping to the panel user.
+#
+# Usage: relical-root <script.php> [arguments]
+# Only the scripts named below run; each checks its own arguments again.
+set -eu
+
+script="${1:-}"
+case "$script" in
+    cli.php|write-config.php|install-timers.php|overview.php|hostkey.php|\
+    probe.php|log-tail.php|running.php|restore-run.php|restore-result.php|\
+    restore-running.php|restore-read.php|cache-clear.php|inventory.php|\
+    post-install.php|pre-uninstall.php)
+        shift
+        ;;
+    *)
+        echo "relical-root: script \"$script\" is not allowed" >&2
+        exit 2
+        ;;
+esac
+
+if [ "$(id -u)" != 0 ]; then
+    echo "relical-root: must run as root" >&2
+    exit 2
+fi
+
+# PRODUCT_ROOT_D from Plesk's own configuration: /opt/psa on Debian and
+# Ubuntu, /usr/local/psa on RHEL-like systems.
+root=$(sed -n 's/^PRODUCT_ROOT_D[[:space:]][[:space:]]*\([^[:space:]]*\)[[:space:]]*$/\1/p' /etc/psa/psa.conf 2>/dev/null | head -n 1)
+case "$root" in
+    /opt/psa|/usr/local/psa) ;;
+    *) root=/opt/psa ;;
+esac
+
+php="$root/admin/bin/php"
+file="$root/admin/plib/modules/relical/scripts/$script"
+if [ ! -x "$php" ] || [ ! -f "$file" ]; then
+    echo "relical-root: $php or $file is missing" >&2
+    exit 1
+fi
+
+cd /
+exec "$php" -dauto_prepend_file=sdk.php "$file" "$@"

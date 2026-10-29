@@ -32,6 +32,7 @@ declare(strict_types=1);
 use Noiz\Relical\InstallRunner;
 use Noiz\Relical\Installer;
 use Noiz\Relical\LocalProbe;
+use Noiz\Relical\ScriptIO;
 use Noiz\Relical\Settings;
 use Noiz\Relical\Units;
 
@@ -55,15 +56,19 @@ if (class_exists('pm_Context')) {
 
 require_once __DIR__ . '/../library/autoload.php';
 
+// Plesk runs the install hooks as its panel user (psaadm), not root, so the
+// work is handed to sbin/relical-root through Plesk's mod_wrapper, with the
+// same arguments; its output is this script's output.
+if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
+    exit(ScriptIO::runAsRoot('post-install.php', array_values(array_map('strval', array_slice($argv, 1)))));
+}
+
 // Plesk passes `upgrade <previous-version>` on an upgrade; older builds pass
 // nothing. Install and upgrade run the same steps.
 $isUpgrade = isset($argv[1]) && (string) $argv[1] === 'upgrade';
 $previousVersion = $isUpgrade && isset($argv[2]) ? trim((string) $argv[2]) : '';
 
 try {
-    if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
-        throw new RuntimeException('post-install must run as root');
-    }
     if ($isUpgrade) {
         echo 'Relical: upgrading' . ($previousVersion !== '' ? ' from ' . $previousVersion : '') . "\n";
     }
