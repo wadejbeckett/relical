@@ -119,7 +119,7 @@ final class Installer
     /**
      * Writes the units that differ from what is installed, reloads systemd,
      * enables and starts both timers, and restarts an installed timer whose
-     * schedule changed. Also what a settings save needs when the backup time changes.
+     * schedule changed. Also what every settings save runs (install-timers.php).
      *
      * @param array<string, string> $units Units::renderAll()
      * @return list<Action>

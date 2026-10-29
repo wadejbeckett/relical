@@ -159,6 +159,18 @@ final class InstallerTest extends TestCase
         ], self::summary($plan));
     }
 
+    public function testInstallingTheSameUnitsAgainOnlyReloadsAndEnables(): void
+    {
+        // What a settings save without a new backup time does (Task 8 review, finding 4).
+        $plan = self::installer(new FakeProbe(self::installedServer()))->unitActions(self::units());
+
+        self::assertSame([
+            'note', 'note', 'note', 'note',
+            'run /usr/bin/systemctl daemon-reload',
+            'run /usr/bin/systemctl enable --now relical-backup.timer relical-check.timer',
+        ], self::summary($plan));
+    }
+
     public function testUpgradeReplacesChangedBinariesAndRestartsAChangedTimer(): void
     {
         $server = array_merge(self::installedServer(), self::package('relical-v2', 'restic-binary'));

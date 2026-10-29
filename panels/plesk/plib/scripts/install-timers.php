@@ -6,8 +6,8 @@ declare(strict_types=1);
  * Re-renders the systemd units from the saved backup time and installs the
  * ones that changed (the same steps as post-install's last part): writes
  * them, reloads systemd, enables both timers and restarts a timer whose
- * schedule changed. The settings screen runs it after the backup time is
- * saved:
+ * schedule changed. The settings screen runs it on every save (a run with
+ * nothing changed only reloads systemd and enables the timers):
  *
  *     plesk bin extension --exec relical install-timers.php
  *

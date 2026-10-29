@@ -313,8 +313,8 @@ class IndexController extends pm_Controller_Action
     }
 
     /**
-     * Stores the settings, then has root write the configuration and, when
-     * the backup time changed, re-install the timers.
+     * Stores the settings, then has root write the configuration and
+     * re-install the timers.
      *
      * @return bool false when a value was refused (the form then carries the errors)
      */
@@ -345,13 +345,14 @@ class IndexController extends pm_Controller_Action
             $this->_status->addMessage('error', 'The configuration could not be written: ' . RootScripts::error($result));
         }
 
-        if ($store[Settings::BACKUP_TIME] !== $previousTime) {
-            $result = RootScripts::run('install-timers.php', [], self::SCRIPT_TIMEOUT);
-            if ($result['code'] === 0) {
-                $this->_status->addMessage('info', sprintf('The nightly backup now starts at %s.', $store[Settings::BACKUP_TIME]));
-            } else {
-                $this->_status->addMessage('error', 'The timers could not be updated: ' . RootScripts::error($result));
-            }
+        // Every save, not only a changed time: installing is idempotent
+        // (only a changed unit is restarted), and a failed install is
+        // retried by the next save instead of waiting for an upgrade.
+        $result = RootScripts::run('install-timers.php', [], self::SCRIPT_TIMEOUT);
+        if ($result['code'] !== 0) {
+            $this->_status->addMessage('error', 'The timers could not be updated: ' . RootScripts::error($result));
+        } elseif ($store[Settings::BACKUP_TIME] !== $previousTime) {
+            $this->_status->addMessage('info', sprintf('The nightly backup now starts at %s.', $store[Settings::BACKUP_TIME]));
         }
 
         if ($store[Settings::SFTP_HOST] . ':' . $store[Settings::SFTP_PORT] !== $previousHost) {
