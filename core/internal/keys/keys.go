@@ -158,7 +158,8 @@ func HasOwner(dir, name string) (bool, error) {
 
 // RecordOwner records id as the repository's owner if no owner is recorded
 // yet, and otherwise checks it. An empty id (a static inventory without
-// ids, or the panel configuration) records nothing.
+// ids) records nothing; the panel configuration's repository records the
+// id _server.
 func RecordOwner(dir, name, id string) error {
 	if err := CheckOwner(dir, name, id); err != nil || id == "" {
 		return err
