@@ -11,12 +11,15 @@ declare(strict_types=1);
  * atomically. The MySQL option file carries Plesk's database admin password
  * from /etc/psa/.psa.shadow; the password is never printed.
  *
- * Exit 0 with `{"ok": true, ...}`, or exit 1 with `{"error": "..."}` (the
- * message also goes to stderr).
+ * Takes no arguments. Exit 0 with `{"ok": true, ...}`, exit 1 with
+ * `{"error": "..."}` (the message also goes to stderr), or exit 2 when
+ * arguments were given.
  */
 
+use Noiz\Relical\Command;
 use Noiz\Relical\ConfigFiles;
 use Noiz\Relical\Paths;
+use Noiz\Relical\ScriptIO;
 use Noiz\Relical\Settings;
 
 // Plesk runs every plib/scripts/* file (install hooks, `plesk bin extension
@@ -38,6 +41,12 @@ if (class_exists('pm_Context')) {
 }
 
 require_once __DIR__ . '/../library/autoload.php';
+
+try {
+    Command::scriptArgs('write-config.php', array_slice($argv, 1));
+} catch (InvalidArgumentException $e) {
+    ScriptIO::fail('refused: ' . $e->getMessage(), 2);
+}
 
 try {
     ConfigFiles::write(Settings::fromPlesk()->configInput(), (string) gethostname());
