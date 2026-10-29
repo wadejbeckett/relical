@@ -243,6 +243,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (code int
 	if cmd == "inventory" {
 		return emit(stdout, env.Inv, nil)
 	}
+	if lg != nil && *all && len(env.Inv.Skipped) > 0 {
+		lg.Skipped(env.Inv.Skipped)
+	}
 	if err := env.Prepare(); err != nil {
 		return emit(stdout, nil, err)
 	}

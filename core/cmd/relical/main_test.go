@@ -526,6 +526,14 @@ func TestInvalidSubscriptionIsLeftOutOfTheRun(t *testing.T) {
 	if !found {
 		t.Errorf("no failed inventory row: %s", out)
 	}
+	// The run log names what the inventory left out.
+	var c map[string]any
+	b, _ := os.ReadFile(cfg)
+	json.Unmarshal(b, &c)
+	raw, _ := os.ReadFile(filepath.Join(c["state_dir"].(string), job.LogName))
+	if !strings.Contains(string(raw), `"event":"skipped","command":"backup","result":[{"name":"bad.example.test","reason":"invalid inventory entry: `) {
+		t.Errorf("no skipped line in the run log:\n%s", raw)
+	}
 	// Restores and listings of the valid subscription still work.
 	if code, out := runCLI("-config", cfg, "snapshots", "--subscription", "example.test"); code != 0 {
 		t.Errorf("%d %s", code, out)

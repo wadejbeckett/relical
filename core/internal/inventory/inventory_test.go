@@ -567,3 +567,16 @@ func TestInventoryInvalidSubscriptionIsSkipped(t *testing.T) {
 		t.Errorf("server error: %v", err)
 	}
 }
+
+// System user names may hold a dot (Plesk allows john.smith), but never
+// start with one or with -.
+func TestSysUserWithADot(t *testing.T) {
+	if _, err := load(context.Background(), cfgWith(list(sub(map[string]any{"sys_user": "john.smith"})))); err != nil {
+		t.Errorf("john.smith refused: %v", err)
+	}
+	for _, u := range []string{".john", "-john", "John.Smith", "a b"} {
+		if _, err := load(context.Background(), cfgWith(list(sub(map[string]any{"sys_user": u})))); err == nil || !strings.Contains(err.Error(), "sys_user") {
+			t.Errorf("%s: %v", u, err)
+		}
+	}
+}

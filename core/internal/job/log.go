@@ -33,7 +33,7 @@ type Log struct {
 // LogLine is one line of the run log.
 type LogLine struct {
 	Time    string   `json:"time"`
-	Event   string   `json:"event"` // start, result or end
+	Event   string   `json:"event"` // start, skipped, result or end
 	Command string   `json:"command"`
 	Args    []string `json:"args,omitempty"`
 	PID     int      `json:"pid,omitempty"`
@@ -71,6 +71,10 @@ func secretVar(name string) bool {
 
 // Result logs one result (a job.Result, or a restore's result).
 func (l *Log) Result(v any) { l.write(LogLine{Event: "result", Result: v}) }
+
+// Skipped logs the subscriptions the inventory left out (see
+// inventory.Skip), as one line, when there are any.
+func (l *Log) Skipped(skipped any) { l.write(LogLine{Event: "skipped", Result: skipped}) }
 
 // Error logs an error that stopped the command before it had results.
 func (l *Log) Error(err error) { l.write(LogLine{Event: "result", Error: err.Error()}) }

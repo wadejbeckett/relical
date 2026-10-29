@@ -238,7 +238,8 @@ Result fields: `subscription`; `unit` (`mail`, `files`, `db`, `panel-config`; ab
 
 - `generated`: when the report was made (RFC 3339, UTC).
 - `rows`: the latest `backup` of each subscription's unit, sorted by subscription and then unit, with `ok`, `time`, `error` and `stored_bytes`: the subscription repository's size from its last `stats`, repeated on each of its rows.
-- `ok`, `failed`, `skipped`: those rows counted. A row is skipped when it is OK with a note that starts with "skipped" (a database of an unsupported type); skipped rows are not counted as OK.
+- `ok`, `failed`, `skipped_rows`: those rows counted. A row is skipped when it is OK with a note that starts with "skipped" (a database of an unsupported type); skipped rows are not counted as OK.
+- `skipped`: the subscriptions the inventory left out, as `{"name", "reason"}`: those the panel adapter skipped (informational), and those whose entry is invalid, which also have a failed row with unit `inventory` (see The inventory).
 - `subscriptions`: the subscriptions with at least one row, not counting `_server`.
 - `stored_bytes`: every repository's size from its last `stats`, each counted once.
 - `renamed`: the inventory's renames (`name`, `renamed_from`, `note`). A rename starts a new repository under the new name and leaves the old one in place, untouched; `status` does not show this, because it reads only the state file.
@@ -253,7 +254,7 @@ Sample `relical report` (one database failed, one of an unsupported type, one su
       "subscriptions": 3,
       "ok": 5,
       "failed": 1,
-      "skipped": 1,
+      "skipped_rows": 1,
       "stored_bytes": 1684013056,
       "rows": [
         {"subscription": "_server", "unit": "panel-config", "ok": true, "time": "2026-10-29T01:25:00Z", "error": "", "stored_bytes": 20971520},
@@ -267,6 +268,9 @@ Sample `relical report` (one database failed, one of an unsupported type, one su
       "renamed": [
         {"name": "shop.test", "renamed_from": "oldshop.test", "note": "renamed from oldshop.test: backups now go to a new repository for shop.test; the repository for oldshop.test is kept as it is and is no longer backed up, pruned or checked"}
       ],
+      "skipped": [
+        {"name": "parked.test", "reason": "no hosting and no mail"}
+      ],
       "warnings": [
         "closed.test: in the state file but no longer in the inventory; its repository is kept",
         "example.test: the last check (2026-10-12T03:10:00Z) is older than 10 days",
@@ -274,7 +278,7 @@ Sample `relical report` (one database failed, one of an unsupported type, one su
       ]
     }
 
-`backup`, `forget`, `check`, `adopt` and `restore` also append to the run log, `<state_dir>/relical.log` (mode 0600): one JSON line when the command starts (`"event": "start"`, with its arguments and process id), one per result (`"event": "result"`, the result as the command prints it, or `"error"` when the command stopped before it had results) and one when it ends (`"event": "end"`, with the exit code). Every line has `time` (UTC) and `command`. The user information of repository URLs (everything between `://` and the last `@` of the word), and the values of destination `env` variables whose names contain `PASSWORD`, `SECRET`, `KEY`, `TOKEN` or `CREDENTIAL`, are replaced by `***`. When the log would grow past 10 MiB it is renamed to `relical.log.1`, replacing the previous one, and a new log is started. A log that cannot be written is a warning on stderr, never a failure.
+`backup`, `forget`, `check`, `adopt` and `restore` also append to the run log, `<state_dir>/relical.log` (mode 0600): one JSON line when the command starts (`"event": "start"`, with its arguments and process id), for an `--all` run one line with the subscriptions the inventory left out (`"event": "skipped"`, the inventory's `skipped` list) when there are any, one per result (`"event": "result"`, the result as the command prints it, or `"error"` when the command stopped before it had results) and one when it ends (`"event": "end"`, with the exit code). Every line has `time` (UTC) and `command`. The user information of repository URLs (everything between `://` and the last `@` of the word), and the values of destination `env` variables whose names contain `PASSWORD`, `SECRET`, `KEY`, `TOKEN` or `CREDENTIAL`, are replaced by `***`. When the log would grow past 10 MiB it is renamed to `relical.log.1`, replacing the previous one, and a new log is started. A log that cannot be written is a warning on stderr, never a failure.
 
 ## Restores
 
@@ -346,14 +350,14 @@ Each subscription has:
 - `renamed_from`: the subscription's previous name, when the panel renamed it (two subscriptions cannot give the same one). Backups then go to a new repository under the new name; the old repository is left as it is, and `relical inventory` lists the rename under `renamed`.
 - `features`: which units are backed up: `mail`, `files`, `db`.
 - `mail_domains`: the domains whose mailboxes belong to the subscription. A mail domain belongs to one subscription only, and may not be another subscription's name.
-- `sys_user`, `uid`, `gid`, `home`: the system user and webspace root, which file and database restores write into. They may be left empty (uid and gid 0) only when `features` contains neither `files` nor `db`. `home` must be `<files root>/<name>`; no two subscriptions' homes may be equal or nested. `uid` and `gid` must be those of `sys_user` on the system: they are not checked against it here; file and database restores check them before writing.
+- `sys_user`, `uid`, `gid`, `home`: the system user (lower case, digits, `_`, `-` and `.`, not starting with `-` or `.`, at most 32 characters) and webspace root, which file and database restores write into. They may be left empty (uid and gid 0) only when `features` contains neither `files` nor `db`. `home` must be `<files root>/<name>`; no two subscriptions' homes may be equal or nested. `uid` and `gid` must be those of `sys_user` on the system: they are not checked against it here; file and database restores check them before writing.
 - `files`: the backed-up directories (usually `[home]`), each equal to `home` or under it; `file_excludes`: patterns relative to each of them (default `logs/**`, `statistics/logs/**`, `tmp/**`, `.cagefs/**`, `restored-*`). `restored-*` keeps restored copies, which are earlier backups, out of the next backups; a list given by the inventory replaces the default, so an adapter that sends its own should include it. The restore staging directory `<files root>/.relical/` is outside every home, so no files backup ever includes it.
 - `databases`: `{"type": "mysql", "name": "..."}` entries. A name is 1 to 64 of `A-Z a-z 0-9 _ $ -` and starts with a letter, a digit or `_`, so that it can never be read as a `mysqldump` option. A database (type and name) may be listed by one subscription only, and MySQL's and the panel's own databases are refused: `mysql`, `information_schema`, `performance_schema`, `sys`, `psa`, `apsc`, `horde`, `roundcubemail`, `atmail`, `sitebuilder5` and any name starting with `phpmyadmin` (compared without regard to case). Dumps run with the administrator's credentials, so either mistake would put another customer's, or every customer's, data into one subscription's repository.
 - `destination` and `retention`: overrides of the defaults, or empty and `null`.
 
 A subscription that breaks any of these rules is left out of the inventory, with the reasons, and the others still load: it is listed under `skipped` with `"invalid": true` and a `reason` that starts with "invalid inventory entry", is not backed up, restored or listed, fails each `--all` run (exit `1`, without a state file entry), and has a failed row (unit `inventory`) in `report` until the entry is fixed. A conflict between two subscriptions (the same name, id, mail domain or database, a mail domain that is another subscription's name, equal or nested homes, or the same `renamed_from`) leaves both out. So one wrong entry, such as a database whose name is reserved, never stops the backups and restores of every other subscription. Only a `server` that fails validation, or output that is not the inventory's JSON shape, stops the command.
 
-`server` describes the panel's own configuration backup: `features` (`["panel-config"]`), `config_command` (first element an absolute path, `{output}` exactly once, where the command must write the file), `config_ext` (the file's extension, 1-8 lower-case letters or digits) and `encrypt_with_repo_key` (default `true`; see the `panel-config` unit under Commands). `skipped`, from an adapter, lists subscriptions it left out (names, or objects with `name` and `reason`); it is informational.
+`server` describes the panel's own configuration backup: `features` (`["panel-config"]`), `config_command` (first element an absolute path, `{output}` exactly once, where the command must write the file), `config_ext` (the file's extension, 1-8 lower-case letters or digits) and `encrypt_with_repo_key` (default `true`; see the `panel-config` unit under Commands). `skipped`, from an adapter, lists subscriptions it left out (names, or objects with `name` and `reason`); it is informational, and `report` and the run log list it.
 
 ## Scheduling
 

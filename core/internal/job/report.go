@@ -14,15 +14,26 @@ import (
 // adapters render. Its keys are a contract with the adapters (the Plesk
 // extension's Relical\Report); TestReportShape pins them.
 type Report struct {
-	Generated     string          `json:"generated"`
-	Subscriptions int             `json:"subscriptions"`
-	OK            int             `json:"ok"`
-	Failed        int             `json:"failed"`
-	Skipped       int             `json:"skipped"`
-	StoredBytes   uint64          `json:"stored_bytes"`
-	Rows          []ReportRow     `json:"rows"`
-	Renamed       []ReportRenamed `json:"renamed"`
-	Warnings      []string        `json:"warnings"`
+	Generated     string `json:"generated"`
+	Subscriptions int    `json:"subscriptions"`
+	OK            int    `json:"ok"`
+	Failed        int    `json:"failed"`
+	// SkippedRows counts the rows that are OK with a note starting with
+	// "skipped" (a database of an unsupported type).
+	SkippedRows int             `json:"skipped_rows"`
+	StoredBytes uint64          `json:"stored_bytes"`
+	Rows        []ReportRow     `json:"rows"`
+	Renamed     []ReportRenamed `json:"renamed"`
+	// Skipped are the subscriptions the inventory left out: by the
+	// adapter, or by validation (those also have a failed row).
+	Skipped  []ReportSkipped `json:"skipped"`
+	Warnings []string        `json:"warnings"`
+}
+
+// ReportSkipped is a subscription the inventory left out, with the reason.
+type ReportSkipped struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
 }
 
 // ReportRow is the latest backup of one subscription's unit (the state
@@ -61,7 +72,7 @@ const (
 // invErr when it could not be loaded: that is a warning, so the report
 // always renders. It never runs restic.
 func BuildReport(st State, inv *inventory.Inventory, invErr error, now time.Time) Report {
-	rep := Report{Generated: now.UTC().Format(time.RFC3339), Rows: []ReportRow{}, Renamed: []ReportRenamed{}, Warnings: []string{}}
+	rep := Report{Generated: now.UTC().Format(time.RFC3339), Rows: []ReportRow{}, Renamed: []ReportRenamed{}, Skipped: []ReportSkipped{}, Warnings: []string{}}
 	subs := make([]string, 0, len(st))
 	for s := range st {
 		subs = append(subs, s)
@@ -93,7 +104,7 @@ func BuildReport(st State, inv *inventory.Inventory, invErr error, now time.Time
 			case !r.OK:
 				rep.Failed++
 			case strings.HasPrefix(r.Note, "skipped"):
-				rep.Skipped++
+				rep.SkippedRows++
 			default:
 				rep.OK++
 			}
@@ -126,6 +137,9 @@ func BuildReport(st State, inv *inventory.Inventory, invErr error, now time.Time
 	if inv != nil {
 		// A subscription whose inventory entry is invalid is not backed
 		// up at all: a failed row, until the entry is fixed.
+		for _, s := range inv.Skipped {
+			rep.Skipped = append(rep.Skipped, ReportSkipped{Name: s.Name, Reason: s.Reason})
+		}
 		for _, s := range inv.Invalid() {
 			rep.Rows = append(rep.Rows, ReportRow{Subscription: s.Name, Unit: InventoryUnit, OK: false, Time: rep.Generated, Error: s.Reason})
 			rep.Failed++

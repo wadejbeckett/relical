@@ -178,7 +178,7 @@ var (
 )
 
 var (
-	sysUserRE  = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+	sysUserRE  = regexp.MustCompile(`^[a-z_][a-z0-9_.-]{0,31}$`)          // Plesk allows john.smith
 	dbNameRE   = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_$-]{0,63}$`) // never a leading - (mysqldump would read an option)
 	dbTypeRE   = regexp.MustCompile(`^[a-z0-9]{1,16}$`)
 	idRE       = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)

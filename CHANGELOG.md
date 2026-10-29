@@ -27,6 +27,8 @@ Phase 2: full backup per hosting subscription, and the core the Plesk extension 
 - Every `sftp:` destination gets `-o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes` unless its `sftp_args` set those options, so a destination that accepts the connection and never answers cannot hang the run.
 - A `mail` backup of a subscription without mailboxes is OK with the note "no mailboxes" instead of failing every night.
 - A subscription whose inventory entry is invalid, or that conflicts with another (both are left out), is listed under `skipped` with `"invalid": true` and its reasons instead of failing the whole inventory; `--all` runs report it as a failed result and exit 1, and `report` gives it a failed `inventory` row. Only `server` errors and malformed output stay fatal.
+- `report` lists the inventory's `skipped` subscriptions (`skipped: [{"name", "reason"}]`), and `--all` runs write them to the run log (`"event": "skipped"`). The count of rows skipped for an unsupported database type moves from `skipped` to `skipped_rows`.
+- System user names may contain `.` (Plesk allows `john.smith`), still never as the first character.
 - In `--all` runs, a destination that three subscriptions in a row could not connect to is given up on: the rest fail at once with "destination NAME unreachable; not tried". `relical-backup.service` has `RuntimeMaxSec=20h` as a last resort.
 
 ### Changed

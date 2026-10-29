@@ -17,7 +17,8 @@ import (
 func TestReportShape(t *testing.T) {
 	now := time.Date(2026, 10, 29, 6, 0, 0, 0, time.UTC)
 	st := State{"example.test": {"mail": {"backup": {Subscription: "example.test", Unit: "mail", Action: "backup", OK: true, Time: now}}}}
-	inv := &inventory.Inventory{Renamed: []inventory.Rename{{Subscription: "new.test", RenamedFrom: "old.test", Note: "n"}}}
+	inv := &inventory.Inventory{Renamed: []inventory.Rename{{Subscription: "new.test", RenamedFrom: "old.test", Note: "n"}},
+		Skipped: []inventory.Skip{{Name: "nohosting.test", Reason: "no hosting"}, {Name: "bad.test", Reason: "invalid inventory entry: sys_user: is empty", Invalid: true}}}
 	b, err := json.Marshal(BuildReport(st, inv, nil, now))
 	if err != nil {
 		t.Fatal(err)
@@ -34,14 +35,24 @@ func TestReportShape(t *testing.T) {
 		sort.Strings(ks)
 		return ks
 	}
-	want := []string{"failed", "generated", "ok", "renamed", "rows", "skipped", "stored_bytes", "subscriptions", "warnings"}
+	want := []string{"failed", "generated", "ok", "renamed", "rows", "skipped", "skipped_rows", "stored_bytes", "subscriptions", "warnings"}
 	if got := keySet(top); !reflect.DeepEqual(got, want) {
 		t.Errorf("report keys %v, want %v", got, want)
 	}
-	var rows, renamed []map[string]json.RawMessage
+	var rows, renamed, skipped []map[string]json.RawMessage
 	json.Unmarshal(top["rows"], &rows)
 	json.Unmarshal(top["renamed"], &renamed)
-	if len(rows) != 1 || !reflect.DeepEqual(keySet(rows[0]), []string{"error", "ok", "stored_bytes", "subscription", "time", "unit"}) {
+	json.Unmarshal(top["skipped"], &skipped)
+	// The inventory's skipped list, adapter and validation alike, with
+	// name and reason; the invalid entry also has a failed row.
+	if len(skipped) != 2 || !reflect.DeepEqual(keySet(skipped[0]), []string{"name", "reason"}) ||
+		string(skipped[0]["name"]) != `"nohosting.test"` || string(skipped[1]["reason"]) != `"invalid inventory entry: sys_user: is empty"` {
+		t.Errorf("skipped: %s", top["skipped"])
+	}
+	if string(top["failed"]) != "1" || len(rows) != 2 || string(rows[1]["unit"]) != `"inventory"` || string(rows[1]["ok"]) != "false" {
+		t.Errorf("no failed row for the invalid entry: %s", top["rows"])
+	}
+	if len(rows) < 1 || !reflect.DeepEqual(keySet(rows[0]), []string{"error", "ok", "stored_bytes", "subscription", "time", "unit"}) {
 		t.Errorf("row keys: %s", top["rows"])
 	}
 	if len(renamed) != 1 || !reflect.DeepEqual(keySet(renamed[0]), []string{"name", "note", "renamed_from"}) {
@@ -49,7 +60,7 @@ func TestReportShape(t *testing.T) {
 	}
 	// Empty lists are [], never null, so an adapter can iterate them.
 	b, _ = json.Marshal(BuildReport(State{}, nil, nil, now))
-	for _, k := range []string{`"rows":[]`, `"renamed":[]`, `"warnings":[]`} {
+	for _, k := range []string{`"rows":[]`, `"renamed":[]`, `"skipped":[]`, `"warnings":[]`} {
 		if !strings.Contains(string(b), k) {
 			t.Errorf("empty report lacks %s: %s", k, b)
 		}
@@ -98,7 +109,7 @@ func TestReportCountsAndWarnings(t *testing.T) {
 		Renamed: []inventory.Rename{{Subscription: "b.test", RenamedFrom: "bee.test", Note: "the old repository is kept"}}}
 
 	rep := BuildReport(st, inv, nil, now)
-	if rep.Subscriptions != 3 || rep.OK != 5 || rep.Failed != 1 || rep.Skipped != 1 || rep.StoredBytes != 1524 {
+	if rep.Subscriptions != 3 || rep.OK != 5 || rep.Failed != 1 || rep.SkippedRows != 1 || rep.StoredBytes != 1524 {
 		t.Errorf("counts: %+v", rep)
 	}
 	var order []string
