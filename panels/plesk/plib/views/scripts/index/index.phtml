@@ -16,6 +16,16 @@ $e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES 
 .relical-button:hover { background: #f0f0f0; text-decoration: none; }
 </style>
 
+<?php $h = $this->headline; ?>
+<table class="relical-table">
+    <tbody>
+        <tr><td>Last successful backup</td><td class="<?php echo $h['last_success'] === '' ? 'relical-error' : ''; ?>"><?php echo $e($h['last_success'] !== '' ? $h['last_success'] : 'none yet'); ?></td></tr>
+        <?php if ($h['failed'] !== null): ?><tr><td>Failed in the last report</td><td class="<?php echo $h['failed'] > 0 ? 'relical-error' : ''; ?>"><?php echo $e($h['failed']); ?></td></tr><?php endif; ?>
+        <?php if ($h['skipped'] !== null): ?><tr><td>Skipped in the last report</td><td class="<?php echo $h['skipped'] > 0 ? 'relical-error' : ''; ?>"><?php echo $e($h['skipped']); ?></td></tr><?php endif; ?>
+        <?php if ($h['last_failure'] !== ''): ?><tr><td>Last failed run</td><td class="relical-error"><?php echo $e($h['last_failure']); ?></td></tr><?php endif; ?>
+    </tbody>
+</table>
+
 <p>
     Relical backs up each subscription's mail, website files and databases,
     and the Plesk configuration, into encrypted repositories on the Storage
@@ -23,6 +33,7 @@ $e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES 
 </p>
 
 <h3 class="relical-section">Settings</h3>
+<p class="relical-muted">Start with a few subscriptions or an upload limit; the first run copies everything.</p>
 <?php echo $this->form; ?>
 
 <h3 class="relical-section">Storage Box access</h3>
@@ -44,6 +55,13 @@ $e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES 
     its fingerprint and trust it. "Test connection" logs in with the key
     above and the trusted host key, lists the backup path, and changes
     nothing.
+</p>
+<?php elseif ($this->configDestination !== ''): ?>
+<p class="relical-error">
+    The settings above are empty, but backups still go to
+    <code><?php echo $e($this->configDestination); ?></code>, from the
+    configuration written before (for example before the extension was
+    reinstalled). Save the settings to keep that destination or change it.
 </p>
 <?php else: ?>
 <p class="relical-muted">Save the Storage Box host, user and path above to check the connection.</p>
@@ -92,7 +110,7 @@ $e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES 
     <a class="relical-button" href="<?php echo $e($this->logUrl); ?>">Show the log</a>
 </p>
 
-<h3 class="relical-section">Last report</h3>
+<h3 class="relical-section">Last report<?php if ($this->report['skipped_count'] > 0): ?> <span class="relical-error">(<?php echo $e($this->report['skipped_count']); ?> skipped)</span><?php endif; ?></h3>
 <?php if (!$this->report['available']): ?>
 <p class="relical-muted"><?php echo $e($this->report['message']); ?></p>
 <?php else: ?>
@@ -114,6 +132,12 @@ $e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES 
 <p>Failures:</p>
 <ul>
     <?php foreach ($this->report['failures'] as $failure): ?><li class="relical-error"><?php echo $e($failure); ?></li><?php endforeach; ?>
+</ul>
+<?php endif; ?>
+<?php if ($this->report['skipped'] !== []): ?>
+<p>Left out of the backup (<?php echo $e(count($this->report['skipped'])); ?>):</p>
+<ul>
+    <?php foreach ($this->report['skipped'] as $skipped): ?><li class="relical-error"><?php echo $e($skipped); ?></li><?php endforeach; ?>
 </ul>
 <?php endif; ?>
 <?php if ($this->report['renamed'] !== []): ?>

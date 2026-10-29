@@ -12,7 +12,8 @@
 # pm_ApiCli::callSbin('relical-root', ...) uses). This script then starts
 # the PHP script the same way `extension --exec` does
 # (<PRODUCT_ROOT_D>/admin/bin/php -dauto_prepend_file=sdk.php <script>),
-# without dropping to the panel user.
+# without dropping to the panel user and with an empty environment apart
+# from PATH and LANG.
 #
 # Usage: relical-root <script.php> [arguments]
 # Only the scripts named below run; each checks its own arguments again.
@@ -22,8 +23,8 @@ script="${1:-}"
 case "$script" in
     cli.php|write-config.php|install-timers.php|overview.php|hostkey.php|\
     probe.php|log-tail.php|running.php|restore-run.php|restore-result.php|\
-    restore-running.php|restore-read.php|cache-clear.php|inventory.php|\
-    post-install.php|pre-uninstall.php)
+    restore-running.php|restore-read.php|cache-clear.php|run-all.php|inventory.php|\
+    post-install.php|pre-uninstall.php|notify.php)
         shift
         ;;
     *)
@@ -53,4 +54,7 @@ if [ ! -x "$php" ] || [ ! -f "$file" ]; then
 fi
 
 cd /
-exec "$php" -dauto_prepend_file=sdk.php "$file" "$@"
+# A clean environment: the panel user's PHPRC, PHP_INI_SCAN_DIR and the like
+# would otherwise reach a PHP that runs as root (an ini with
+# auto_append_file runs any file as root). mod_wrapper resets PATH only.
+exec env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 "$php" -dauto_prepend_file=sdk.php "$file" "$@"

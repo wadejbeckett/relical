@@ -76,7 +76,9 @@ final class RestoreAccess
         if (!is_array($webspace) || (int) ($webspace['id'] ?? 0) <= 0) {
             return self::refuse(self::NO_DOMAIN, $isAdmin);
         }
-        if (!$isAdmin && $hasAccess((int) $webspace['id']) !== true) {
+        // The permission is checked on the subscription too: asked of a
+        // subdomain's domain object, Plesk may answer its default.
+        if (!$isAdmin && ($hasAccess((int) $webspace['id']) !== true || $hasPermission((int) $webspace['id']) !== true)) {
             return self::refuse(self::NO_ACCESS, $isAdmin);
         }
         $name = (string) ($webspace['name'] ?? '');

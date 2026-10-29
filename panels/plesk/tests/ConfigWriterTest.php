@@ -69,7 +69,8 @@ final class ConfigWriterTest extends TestCase
     public function testSftpArgsPinTheHostKey(): void
     {
         self::assertSame(
-            '-p 2222 -i /etc/relical/ssh/id_ed25519 -o UserKnownHostsFile=/etc/relical/ssh/known_hosts -o StrictHostKeyChecking=yes',
+            '-p 2222 -i /etc/relical/ssh/id_ed25519 -o UserKnownHostsFile=/etc/relical/ssh/known_hosts -o StrictHostKeyChecking=yes'
+            . ' -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes',
             self::render(['sftp_port' => 2222])['destinations']['storagebox']['sftp_args']
         );
     }

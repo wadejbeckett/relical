@@ -17,6 +17,7 @@ declare(strict_types=1);
 
 use Noiz\Relical\Command;
 use Noiz\Relical\Paths;
+use Noiz\Relical\RestoreRecord;
 use Noiz\Relical\RestoreStore;
 use Noiz\Relical\ScriptIO;
 
@@ -43,6 +44,7 @@ try {
         'running' => $store->isRunning($args[0]),
         'server_busy' => $store->serverBusy(),
         'restored_folders' => RestoreStore::restoredFolders(Paths::FILES_ROOT . '/' . $args[0]),
+        'recent_restores' => RestoreRecord::recentCustomerRestores($store->records(), $args[0], time()),
     ]);
 } catch (Throwable $e) {
     ScriptIO::fail('restore-running: ' . $e->getMessage());

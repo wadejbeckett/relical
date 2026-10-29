@@ -57,6 +57,7 @@ final class Inventory
         $names = [];
         $ids = [];
         $mailOwner = [];
+        $dbOwner = [];
 
         foreach ($webspaces as $webspace) {
             $name = (string) ($webspace['name'] ?? '');
@@ -96,7 +97,7 @@ final class Inventory
             $gid = $webspace['gid'] ?? null;
             $home = (string) ($webspace['home'] ?? '');
             $rawDatabases = is_array($webspace['databases'] ?? null) ? $webspace['databases'] : [];
-            $webProblem = self::webProblem($sysUser, $uid, $gid, $home, $filesRoots);
+            $webProblem = self::webProblem($name, $sysUser, $uid, $gid, $home, $filesRoots);
             $hasWeb = in_array(Coverage::FEATURE_FILES, $features, true) || in_array(Coverage::FEATURE_DB, $features, true);
 
             if ($webProblem !== null) {
@@ -135,11 +136,19 @@ final class Inventory
                     $skipped[] = self::skip($name, $label . ': the name has characters Relical does not accept');
                     continue;
                 }
+                if (CoreRules::reservedDb($dbName)) {
+                    $skipped[] = self::skip($name, $label . ': the name is reserved for a server or panel database');
+                    continue;
+                }
                 if (($database['local'] ?? false) !== true) {
                     $skipped[] = self::skip($name, $label . ': it is on a remote database server');
                     continue;
                 }
                 if (isset($seen[$dbName])) {
+                    continue;
+                }
+                if (isset($dbOwner[$dbName])) {
+                    $skipped[] = self::skip($name, sprintf('%s: the database is already listed by %s', $label, $dbOwner[$dbName]));
                     continue;
                 }
                 $seen[$dbName] = true;
@@ -162,6 +171,9 @@ final class Inventory
 
             $names[$name] = true;
             $ids[$id] = $name;
+            foreach ($databases as $database) {
+                $dbOwner[$database['name']] = $name;
+            }
             $subscriptions[] = [
                 'id' => $id,
                 'name' => $name,
@@ -256,7 +268,7 @@ final class Inventory
      * @param mixed        $gid
      * @param list<string> $filesRoots
      */
-    private static function webProblem(string $sysUser, $uid, $gid, string $home, array $filesRoots): ?string
+    private static function webProblem(string $name, string $sysUser, $uid, $gid, string $home, array $filesRoots): ?string
     {
         if ($sysUser === '') {
             return 'the subscription has no system user (no web hosting)';
@@ -267,8 +279,8 @@ final class Inventory
         if (!is_int($uid) || !is_int($gid) || $uid <= 0 || $gid <= 0) {
             return sprintf('the system user "%s" has no usable uid and gid', $sysUser);
         }
-        if (!CoreRules::cleanAbs($home) || !CoreRules::under($home, $filesRoots)) {
-            return sprintf('the home directory "%s" is not inside %s', $home, implode(', ', $filesRoots));
+        if (!CoreRules::cleanAbs($home) || !CoreRules::webspaceOf($home, $name, $filesRoots)) {
+            return sprintf('the home directory "%s" is not %s/%s', $home, implode(' or ', $filesRoots), $name);
         }
 
         return null;

@@ -177,10 +177,65 @@ final class RestoreStoreTest extends TestCase
         self::assertNull($store->cached('other.example.test', 'snapshots', $now));
     }
 
-    public function testOnlySnapshotsAndMailboxesAreCached(): void
+    public function testOnlySnapshotsMailboxesAndLsAreCached(): void
     {
-        $this->expectException(InvalidArgumentException::class);
-        (new RestoreStore($this->dir))->cachePath('example.test', 'ls');
+        $store = new RestoreStore($this->dir);
+        foreach ([['restore', ''], ['ls', ''], ['snapshots', 'x']] as [$kind, $key]) {
+            try {
+                $store->cachePath('example.test', $kind, $key);
+                self::fail(sprintf('%s with key "%s" was accepted', $kind, $key));
+            } catch (InvalidArgumentException $e) {
+                self::assertNotSame('', $e->getMessage());
+            }
+        }
+    }
+
+    public function testLsIsCachedPerRestorePointAndFolder(): void
+    {
+        $store = new RestoreStore($this->dir);
+        $store->ensure();
+        $now = 1793275200;
+        $top = 'abcdef12';
+        $docs = "abcdef12\0httpdocs";
+
+        $store->cache('example.test', 'ls', '["top"]', $now, $top);
+        $store->cache('example.test', 'ls', '["docs"]', $now, $docs);
+
+        self::assertSame('["top"]', $store->cached('example.test', 'ls', $now + 299, $top));
+        self::assertSame('["docs"]', $store->cached('example.test', 'ls', $now + 299, $docs));
+        self::assertNull($store->cached('example.test', 'ls', $now + 300, $top), 'stale after five minutes');
+        self::assertNull($store->cached('example.test', 'ls', $now, "abcdef12\0other"));
+        self::assertNull($store->cached('example.test', 'ls', $now, '99999999'));
+        self::assertNull($store->cached('other.example.test', 'ls', $now, $top));
+
+        // A file copied under another key is not returned for it.
+        copy($store->cachePath('example.test', 'ls', $top), $store->cachePath('example.test', 'ls', '99999999'));
+        self::assertNull($store->cached('example.test', 'ls', $now, '99999999'));
+    }
+
+    public function testAtMostFourReadsRunOnTheServer(): void
+    {
+        $store = new RestoreStore($this->dir);
+        $store->ensure();
+
+        $held = [];
+        for ($i = 0; $i < RestoreStore::READ_SLOTS; $i++) {
+            $slot = $store->readSlot();
+            self::assertNotNull($slot);
+            $held[] = $slot;
+        }
+        self::assertSame(4, RestoreStore::READ_SLOTS);
+        self::assertNull($store->readSlot());
+        self::assertNotNull($restore = $store->slot(), 'reads do not take restore slots');
+        RestoreStore::unlock($restore);
+
+        RestoreStore::unlock(array_pop($held));
+        $again = $store->readSlot();
+        self::assertNotNull($again);
+        RestoreStore::unlock($again);
+        foreach ($held as $slot) {
+            RestoreStore::unlock($slot);
+        }
     }
 
     public function testClearingTheCache(): void
@@ -189,11 +244,40 @@ final class RestoreStoreTest extends TestCase
         $store->ensure();
         $store->cache('example.test', 'snapshots', '[]', 1);
         $store->cache('example.test', 'mailboxes', '[]', 1);
+        $store->cache('example.test', 'ls', '[]', 1, 'abcdef12');
         $store->cache('other.example.test', 'snapshots', '[]', 1);
+        $store->cache('example.test.example', 'snapshots', '[]', 1);
 
-        self::assertSame(2, $store->clearCache('example.test'));
-        self::assertSame(1, $store->clearCache());
+        self::assertSame(3, $store->clearCache('example.test'));
+        self::assertSame(2, $store->clearCache());
         self::assertSame([], glob($this->dir . '/*.cache'));
+    }
+
+    public function testRunAndReadLocksNeverShareAFile(): void
+    {
+        $store = new RestoreStore($this->dir);
+
+        self::assertSame($this->dir . '/run-example.test.lock', $store->lockPath('example.test'));
+        self::assertSame($this->dir . '/read-example.test.lock', $store->readLockPath('example.test'));
+        // The old names made x.example.read's restore lock the read lock of x.example.
+        self::assertNotSame($store->lockPath('x.example.read'), $store->readLockPath('x.example'));
+        self::assertNotSame($store->lockPath('read-x.example'), $store->readLockPath('x.example'));
+    }
+
+    public function testRecordsAreReadForTheDailyCount(): void
+    {
+        $store = new RestoreStore($this->dir);
+        $store->ensure();
+        $args = ['restore', '--subscription', 'example.test', '--unit', 'files', '--snapshot', 'abcdef12'];
+        $now = strtotime('2026-10-29T12:00:00Z');
+        foreach (['20261029110000-000000000000000000000001', '20261029110100-000000000000000000000002', '20261029110200-000000000000000000000003'] as $id) {
+            $store->write(RestoreRecord::running($id, $args, $now - 600));
+        }
+        file_put_contents($this->dir . '/20261029110300-000000000000000000000004.json', 'not json');
+        symlink($this->dir . '/20261029110000-000000000000000000000001.json', $this->dir . '/20261029110400-000000000000000000000005.json');
+
+        self::assertCount(3, $store->records(), 'malformed records and links are left out');
+        self::assertSame(3, RestoreRecord::recentCustomerRestores($store->records(), 'example.test', $now));
     }
 
     public function testRestoredFoldersAreCountedByName(): void

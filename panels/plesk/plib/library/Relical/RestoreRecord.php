@@ -23,6 +23,11 @@ final class RestoreRecord
     public const SERVER_BUSY = 'The server is busy with other restores. Try again later.';
     public const CANNOT_START = 'The restore could not be started just now. Try again later; if it keeps happening, contact your hosting provider.';
     public const READ_BUSY = 'The backups of this subscription are being read for another page. Try again in a moment.';
+    /** Files and database restores a customer may start per subscription in DAILY_WINDOW seconds. */
+    public const MAX_RESTORES_PER_DAY = 3;
+    public const DAILY_WINDOW = 86400;
+    public const TOO_MANY_RESTORES = 'This subscription has had 3 website or database restores in the last 24 hours. Try again later, or ask your hosting provider.';
+    public const READ_SERVER_BUSY = 'The server is busy reading backups for other customers. Try again in a moment.';
 
     /** A customer may not start a files or database restore while this many `restored-*` copies are in the home directory. */
     public const MAX_RESTORED_FOLDERS = 5;
@@ -41,7 +46,7 @@ final class RestoreRecord
      * @param list<string> $cliArgs a customer restore (Command::customerRestore)
      * @return array<string, mixed>
      */
-    public static function running(string $id, array $cliArgs, int $now): array
+    public static function running(string $id, array $cliArgs, int $now, bool $admin = false): array
     {
         Command::restoreId($id);
         Command::customerRestore($cliArgs);
@@ -59,6 +64,7 @@ final class RestoreRecord
             'unit' => $unit,
             'request' => $request,
             'state' => 'running',
+            'by_admin' => $admin,
             'started' => gmdate(DATE_ATOM, $now),
             'finished' => '',
             'result' => null,
@@ -166,7 +172,7 @@ final class RestoreRecord
      * or null when it may. A missing or unreadable answer refuses (fails
      * closed). Administrators are not held to the count of restored copies.
      *
-     * @param ?array<mixed> $state {running, server_busy, restored_folders}
+     * @param ?array<mixed> $state {running, server_busy, restored_folders, recent_restores}
      */
     public static function startRefusal(?array $state, string $unit, bool $admin): ?string
     {
@@ -182,14 +188,45 @@ final class RestoreRecord
         if (!$admin && $unit !== 'mail' && $state['restored_folders'] >= self::MAX_RESTORED_FOLDERS) {
             return sprintf(self::TOO_MANY_FOLDERS, $state['restored_folders']);
         }
+        // restore-run.php enforces this as root; checked here too so the customer is told before a record is made.
+        if (!$admin && $unit !== 'mail' && is_int($state['recent_restores'] ?? null) && $state['recent_restores'] >= self::MAX_RESTORES_PER_DAY) {
+            return self::TOO_MANY_RESTORES;
+        }
 
         return null;
+    }
+
+    /**
+     * How many files or database restores customers started for the
+     * subscription in the DAILY_WINDOW seconds before $now, from its
+     * restore records. Restores started by an administrator, and starts that
+     * were refused before anything ran (busy, server busy, over the limit),
+     * do not count.
+     *
+     * @param iterable<mixed> $records
+     */
+    public static function recentCustomerRestores(iterable $records, string $subscription, int $now): int
+    {
+        $count = 0;
+        foreach ($records as $record) {
+            if (!is_array($record) || ($record['subscription'] ?? null) !== $subscription
+                || !in_array($record['unit'] ?? null, ['files', 'db'], true) || ($record['by_admin'] ?? false) === true
+                || in_array($record['error'] ?? '', [self::BUSY, self::SERVER_BUSY, self::TOO_MANY_RESTORES], true)) {
+                continue;
+            }
+            $started = is_string($record['started'] ?? null) ? strtotime($record['started']) : false;
+            if ($started !== false && $started <= $now && $now - $started < self::DAILY_WINDOW) {
+                $count++;
+            }
+        }
+
+        return $count;
     }
 
     /** The error a customer may see. */
     public static function customerError(string $error): string
     {
-        if (in_array($error, [self::BUSY, self::STOPPED, self::SERVER_BUSY], true)) {
+        if (in_array($error, [self::BUSY, self::STOPPED, self::SERVER_BUSY, self::TOO_MANY_RESTORES], true)) {
             return $error;
         }
         foreach (self::CUSTOMER_SAFE as $pattern) {
@@ -212,7 +249,7 @@ final class RestoreRecord
      */
     public static function customerReadError(string $message): string
     {
-        if ($message === self::READ_BUSY) {
+        if ($message === self::READ_BUSY || $message === self::READ_SERVER_BUSY) {
             return $message;
         }
         if (preg_match('/repository does not exist|no backup snapshots|no key for|no key file/i', $message) === 1) {

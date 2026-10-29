@@ -86,12 +86,17 @@ final class ConfigWriter
 
     /**
      * The ssh options restic passes to sftp: key auth with the extension's
-     * key, and only the host key the administrator confirmed.
+     * key, only the host key the administrator confirmed, and timeouts, so
+     * an unreachable or stalled Storage Box fails the call instead of
+     * hanging the night (core review finding 3; the core's runner adds the
+     * same options when they are missing, and ssh keeps the first of a
+     * repeated option).
      */
     public static function sftpArgs(int $port): string
     {
         return sprintf(
-            '-p %d -i %s -o UserKnownHostsFile=%s -o StrictHostKeyChecking=yes',
+            '-p %d -i %s -o UserKnownHostsFile=%s -o StrictHostKeyChecking=yes'
+            . ' -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes',
             $port,
             Paths::SSH_KEY,
             Paths::KNOWN_HOSTS

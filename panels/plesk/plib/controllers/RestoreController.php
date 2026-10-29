@@ -331,7 +331,8 @@ class RestoreController extends pm_Controller_Action
             return;
         }
         $id = RestoreRequest::newId(time(), random_bytes(12));
-        if (!RootScripts::startScriptInBackground('restore-run.php', array_merge([$id], $args))) {
+        $marker = $this->access->isAdmin() ? [Command::ADMIN_FLAG] : [];
+        if (!RootScripts::startScriptInBackground('restore-run.php', array_merge([$id], $marker, $args))) {
             $this->_status->addMessage('error', RestoreRecord::CANNOT_START);
             $this->_helper->json(['redirect' => $this->url('index')]);
             return;

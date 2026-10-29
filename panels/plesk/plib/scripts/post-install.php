@@ -29,10 +29,12 @@ declare(strict_types=1);
  * completed, the steps not done, and the command to run it all again.
  */
 
+use Noiz\Relical\Command;
 use Noiz\Relical\InstallRunner;
 use Noiz\Relical\Installer;
 use Noiz\Relical\LocalProbe;
 use Noiz\Relical\ScriptIO;
+use Noiz\Relical\Paths;
 use Noiz\Relical\Settings;
 use Noiz\Relical\Units;
 
@@ -55,6 +57,12 @@ if (class_exists('pm_Context')) {
 }
 
 require_once __DIR__ . '/../library/autoload.php';
+
+try {
+    Command::hookArgs('post-install.php', array_slice($argv, 1));
+} catch (InvalidArgumentException $e) {
+    ScriptIO::fail('refused: ' . $e->getMessage(), 2);
+}
 
 // Plesk runs the install hooks as its panel user (psaadm), not root, so the
 // work is handed to sbin/relical-root through Plesk's mod_wrapper, with the
@@ -82,7 +90,7 @@ try {
     );
 
     $settings = Settings::fromPlesk();
-    $units = Units::renderAll(Units::loadTemplates(__DIR__ . '/../resources/systemd'), $settings->backupTime());
+    $units = Units::renderAll(Units::loadTemplates(__DIR__ . '/../resources/systemd'), $settings->backupTime(), Paths::rootScript());
 
     // Plans every step, verifies both binaries and renders the configuration
     // before changing anything.

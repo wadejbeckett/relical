@@ -18,7 +18,7 @@ final class SettingsTest extends TestCase
         self::assertSame('relical', $settings->sftpPath());
         self::assertSame(['daily' => 14, 'weekly' => 8, 'monthly' => 12], $settings->retention());
         self::assertSame('01:00', $settings->backupTime());
-        self::assertSame(0, $settings->limitUploadKib());
+        self::assertSame(20480, $settings->limitUploadKib());
     }
 
     public function testANonNumericNumberReadsAsInvalidRatherThanZero(): void
@@ -58,8 +58,19 @@ final class SettingsTest extends TestCase
             'retention_weekly' => '4',
             'retention_monthly' => '0',
             'backup_time' => '03:15',
-            'limit_upload_kib' => '0',
+            'limit_upload_kib' => '20480',
         ], Settings::validated(self::form()));
+    }
+
+    public function testUploadLimitDefaultsTo20MiBAndZeroMeansNone(): void
+    {
+        $with = static fn (?string $limit): Settings => new Settings(
+            static fn (string $name, ?string $default): ?string => $name === 'limit_upload_kib' && $limit !== null ? $limit : $default
+        );
+        self::assertSame(20480, $with(null)->limitUploadKib());
+        self::assertSame(20480, $with('')->limitUploadKib());
+        self::assertSame(0, $with('0')->limitUploadKib());
+        self::assertSame('0', Settings::validated(['limit_upload_kib' => '0'] + self::form())['limit_upload_kib']);
     }
 
     public function testABlankPathAndTimeTakeTheirDefaults(): void

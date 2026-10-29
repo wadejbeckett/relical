@@ -18,13 +18,16 @@ use Throwable;
  *
  *     {generated, subscriptions, ok, failed, skipped, stored_bytes,
  *      rows: [{subscription, unit, ok, time, error, stored_bytes}],
+ *      skipped: [{name, reason}],
  *      renamed: [{name, renamed_from, note}],
  *      warnings: [string]}
  *
  * as core/internal/job/report.go builds it (TestReportShape pins the keys
  * there; tests/fixtures/report.json is a copy of that shape). Warnings are
  * a stale backup or check, or an inventory that could not be loaded.
- * Unknown keys are ignored.
+ * `skipped` is the inventory's list of what was left out and why (core
+ * review findings 2 and 7); an older core sends a count there instead, and
+ * both are read. Unknown keys are ignored.
  */
 final class Report
 {
@@ -37,11 +40,11 @@ final class Report
     ];
 
     /**
-     * @return array{available: bool, message: string, generated: string, summary: list<array{label: string, value: string}>, warnings: list<string>, failures: list<string>, renamed: list<string>}
+     * @return array{available: bool, message: string, generated: string, summary: list<array{label: string, value: string}>, warnings: list<string>, failures: list<string>, renamed: list<string>, skipped: list<string>, skipped_count: int, failed_count: int}
      */
     public static function fromCli(int $code, string $stdout, string $stderr): array
     {
-        $empty = ['available' => false, 'message' => '', 'generated' => '', 'summary' => [], 'warnings' => [], 'failures' => [], 'renamed' => []];
+        $empty = ['available' => false, 'message' => '', 'generated' => '', 'summary' => [], 'warnings' => [], 'failures' => [], 'renamed' => [], 'skipped' => [], 'skipped_count' => 0, 'failed_count' => 0];
 
         if ($code === 2 && str_contains($stderr, 'unknown command')) {
             return ['message' => 'This version of the Relical core has no report yet.'] + $empty;
@@ -56,6 +59,16 @@ final class Report
         }
         if (isset($data['error']) && is_string($data['error'])) {
             return ['message' => 'The report could not be made: ' . $data['error']] + $empty;
+        }
+
+        $skipped = [];
+        if (is_array($data['skipped'] ?? null)) {
+            foreach ($data['skipped'] as $entry) {
+                if (is_array($entry) && is_string($entry['name'] ?? null) && is_string($entry['reason'] ?? null)) {
+                    $skipped[] = ($entry['name'] !== '' ? $entry['name'] . ': ' : '') . $entry['reason'];
+                }
+            }
+            $data['skipped'] = count($skipped);
         }
 
         $summary = [];
@@ -102,6 +115,9 @@ final class Report
             'warnings' => array_values(array_filter(is_array($data['warnings'] ?? null) ? $data['warnings'] : [], static fn ($w): bool => is_string($w) && $w !== '')),
             'failures' => $failures,
             'renamed' => $renamed,
+            'skipped' => $skipped,
+            'skipped_count' => is_int($data['skipped'] ?? null) ? max(0, $data['skipped']) : 0,
+            'failed_count' => is_int($data['failed'] ?? null) ? max(0, $data['failed']) : count($failures),
         ];
     }
 }

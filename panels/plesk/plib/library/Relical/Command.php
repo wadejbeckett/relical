@@ -31,8 +31,11 @@ final class Command
         'cli.php', 'write-config.php', 'install-timers.php', 'overview.php',
         'hostkey.php', 'probe.php', 'log-tail.php', 'running.php',
         'restore-run.php', 'restore-result.php', 'restore-running.php',
-        'restore-read.php', 'cache-clear.php',
+        'restore-read.php', 'cache-clear.php', 'run-all.php',
     ];
+
+    /** restore-run.php's marker for a restore an administrator started (not held to the daily limit). */
+    public const ADMIN_FLAG = '--admin';
 
     /** The units a customer restores (the panel configuration is the administrator's). */
     public const CUSTOMER_UNITS = ['mail', 'files', 'db'];
@@ -141,8 +144,9 @@ final class Command
     /**
      * Validates a root script's arguments (each script calls this on its own
      * argv as well): cli.php as parse() does, hostkey.php `scan` or
-     * `trust <SHA256 fingerprint>`, restore-run.php `<id> restore ...` (a
-     * customer restore, see customerRestore()), restore-result.php `<id>`,
+     * `trust <SHA256 fingerprint>`, restore-run.php `<id> [--admin] restore ...`
+     * (a customer restore, see customerRestore(); `--admin` when an
+     * administrator started it), restore-result.php `<id>`,
      * restore-running.php `<subscription>`, every other script none.
      *
      * @param list<string> $args the arguments after the script name
@@ -169,11 +173,12 @@ final class Command
                 }
                 throw new InvalidArgumentException('hostkey.php takes "scan" or "trust <fingerprint>"');
             case 'restore-run.php':
-                if (count($args) < 2) {
-                    throw new InvalidArgumentException('restore-run.php takes <id> restore <flags>');
+                $rest = array_slice($args, ($args[1] ?? '') === self::ADMIN_FLAG ? 2 : 1);
+                if (count($args) < 2 || $rest === []) {
+                    throw new InvalidArgumentException('restore-run.php takes <id> [--admin] restore <flags>');
                 }
                 self::restoreId($args[0]);
-                self::customerRestore(array_slice($args, 1));
+                self::customerRestore($rest);
                 return $args;
             case 'restore-result.php':
                 if (count($args) !== 1) {
@@ -207,6 +212,44 @@ final class Command
     }
 
     /**
+     * The arguments of the scripts only relical-root and Plesk run (never
+     * the screens): inventory.php none (the core runs it), pre-uninstall.php
+     * none, post-install.php none or `upgrade` with at most two version
+     * words (Plesk's previous version and release).
+     *
+     * @param list<string> $args
+     * @return list<string> the arguments, unchanged
+     * @throws InvalidArgumentException naming what was refused
+     */
+    public static function hookArgs(string $script, array $args): array
+    {
+        $args = array_values(array_map('strval', $args));
+        switch ($script) {
+            case 'inventory.php':
+            case 'pre-uninstall.php':
+                if ($args !== []) {
+                    throw new InvalidArgumentException(sprintf('%s takes no arguments', $script));
+                }
+                return $args;
+            case 'post-install.php':
+                if ($args === []) {
+                    return $args;
+                }
+                if ($args[0] !== 'upgrade' || count($args) > 3) {
+                    throw new InvalidArgumentException('post-install.php takes nothing or "upgrade [<version> [<release>]]"');
+                }
+                foreach (array_slice($args, 1) as $word) {
+                    if (preg_match('/^[0-9A-Za-z][0-9A-Za-z.+~_-]{0,63}$/D', $word) !== 1) {
+                        throw new InvalidArgumentException('post-install.php upgrade takes a version, not "' . self::printable($word) . '"');
+                    }
+                }
+                return $args;
+            default:
+                throw new InvalidArgumentException(sprintf('script "%s" is not a hook', self::printable($script)));
+        }
+    }
+
+    /**
      * The argv that runs a root script as root, for Process (no shell),
      * through Plesk's mod_wrapper link to sbin/relical-root
      * (Paths::rootCommand()).
@@ -221,6 +264,35 @@ final class Command
             [$script],
             self::scriptArgs($script, $args)
         );
+    }
+
+    /**
+     * How run-all.php starts "Run everything now" as root: the timer's own
+     * unit when systemd runs this server (same priority, retention, cgroup
+     * and OnFailure= as the nightly run, and systemd refuses a second start
+     * while it runs), else the core's `backup --all` detached.
+     *
+     * @param ?string $systemctl systemctl's path, or null when systemd is not running
+     * @return array{mode: string, argv: list<string>}
+     */
+    public static function runAll(?string $systemctl): array
+    {
+        if ($systemctl !== null) {
+            return ['mode' => 'systemd', 'argv' => [$systemctl, 'start', '--no-block', Units::BACKUP_SERVICE]];
+        }
+
+        return ['mode' => 'detached', 'argv' => self::parse(['backup', '--all'])->argv()];
+    }
+
+    /**
+     * An argv as a shell command run in the background, detached from the
+     * caller: every word quoted, no input or output.
+     *
+     * @param list<string> $argv
+     */
+    public static function background(array $argv): string
+    {
+        return implode(' ', array_map([self::class, 'shellQuote'], $argv)) . ' < /dev/null > /dev/null 2>&1 &';
     }
 
     /**
@@ -244,9 +316,7 @@ final class Command
      */
     public static function detachedScript(string $script, array $args): string
     {
-        $words = array_map([self::class, 'shellQuote'], self::rootArgv($script, $args));
-
-        return implode(' ', $words) . ' < /dev/null > /dev/null 2>&1 &';
+        return self::background(self::rootArgv($script, $args));
     }
 
     /**

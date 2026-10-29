@@ -12,15 +12,20 @@ use RuntimeException;
  * process reads it only through root scripts:
  *
  * - `<id>.json` (0600): one record per restore (RestoreRecord).
- * - `<subscription>.lock`: held (flock) by restore-run.php for as long as
- *   the subscription's restore runs; stops a second one.
+ * - `run-<subscription>.lock`: held (flock) by restore-run.php for as long
+ *   as the subscription's restore runs; stops a second one.
  * - `slot-<n>.lock`: SLOTS of them, one held by each running restore;
  *   caps the restores running on the whole server.
- * - `<subscription>.read.lock`: held while restore-read.php asks the core
+ * - `read-<subscription>.lock`: held while restore-read.php asks the core
  *   about the subscription's backups; a second request meanwhile is told
  *   to wait instead of opening another Storage Box connection.
- * - `<subscription>.<kind>.cache` (0600): the core's last answer to
- *   `snapshots` or `mailboxes`, reused for CACHE_TTL seconds.
+ * - `read-slot-<n>.lock`: READ_SLOTS of them, one held by each running
+ *   read; caps the customer reads on the whole server.
+ * - `cache-<subscription>_<kind>[_<hash>].cache` (0600): the core's last
+ *   answer to `snapshots`, `mailboxes` or one `ls` (per restore point and
+ *   folder, told apart by a hash of both), reused for CACHE_TTL seconds.
+ *   "_" never occurs in a subscription name, so one subscription's files
+ *   are never matched for another.
  *
  * Asking whether a lock is held reads /proc/locks (Status::lockHeld) and
  * takes no lock, so asking never makes a restore that is just starting
@@ -34,11 +39,14 @@ final class RestoreStore
     /** Customer restores running at the same time on the whole server. */
     public const SLOTS = 2;
 
-    /** How long an answer of the core about restore points or mailboxes is reused. */
+    /** Customer reads (restore-read.php) running at the same time on the whole server. */
+    public const READ_SLOTS = 4;
+
+    /** How long an answer of the core about restore points, mailboxes or a folder is reused. */
     public const CACHE_TTL = 300;
 
-    /** The answers that are cached. */
-    public const CACHED = ['snapshots', 'mailboxes'];
+    /** The answers that are cached; `ls` needs a key (restore point and folder). */
+    public const CACHED = ['snapshots', 'mailboxes', 'ls'];
 
     private string $dir;
 
@@ -69,21 +77,26 @@ final class RestoreStore
 
     public function lockPath(string $subscription): string
     {
-        return $this->dir . '/' . Command::domain($subscription) . '.lock';
+        return $this->dir . '/run-' . Command::domain($subscription) . '.lock';
     }
 
     public function readLockPath(string $subscription): string
     {
-        return $this->dir . '/' . Command::domain($subscription) . '.read.lock';
+        return $this->dir . '/read-' . Command::domain($subscription) . '.lock';
     }
 
-    public function cachePath(string $subscription, string $kind): string
+    /** @param string $key what else the answer depends on: '' for snapshots and mailboxes, the restore point and folder for ls */
+    public function cachePath(string $subscription, string $kind, string $key = ''): string
     {
         if (!in_array($kind, self::CACHED, true)) {
             throw new \InvalidArgumentException(sprintf('"%s" is not cached', $kind));
         }
+        if (($kind === 'ls') !== ($key !== '')) {
+            throw new \InvalidArgumentException($kind === 'ls' ? 'an ls answer is cached per restore point and folder' : sprintf('"%s" takes no key', $kind));
+        }
 
-        return $this->dir . '/' . Command::domain($subscription) . '.' . $kind . '.cache';
+        return $this->dir . '/cache-' . Command::domain($subscription) . '_' . $kind
+            . ($key === '' ? '' : '_' . substr(hash('sha256', $key), 0, 32)) . '.cache';
     }
 
     // ----- locks -----
@@ -125,7 +138,24 @@ final class RestoreStore
         return $this->take($this->readLockPath($subscription));
     }
 
-    /** @param resource $lock from lock(), slot() or readLock() */
+    /**
+     * Takes one of the server's read slots without waiting.
+     *
+     * @return resource|null the held slot, or null when READ_SLOTS reads run already
+     */
+    public function readSlot()
+    {
+        for ($n = 1; $n <= self::READ_SLOTS; $n++) {
+            $slot = $this->take($this->dir . '/read-slot-' . $n . '.lock');
+            if ($slot !== null) {
+                return $slot;
+            }
+        }
+
+        return null;
+    }
+
+    /** @param resource $lock from lock(), slot(), readLock() or readSlot() */
     public static function unlock($lock): void
     {
         flock($lock, LOCK_UN);
@@ -173,6 +203,27 @@ final class RestoreStore
         );
     }
 
+    /**
+     * Every readable record (malformed ones are left out).
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function records(): array
+    {
+        $out = [];
+        foreach (glob($this->dir . '/*.json') ?: [] as $path) {
+            if (is_link($path) || !is_file($path)) {
+                continue;
+            }
+            $data = json_decode((string) @file_get_contents($path), true);
+            if (is_array($data)) {
+                $out[] = $data;
+            }
+        }
+
+        return $out;
+    }
+
     /** Removes records older than MAX_AGE. @return int how many were removed */
     public function prune(int $now): int
     {
@@ -193,15 +244,15 @@ final class RestoreStore
      * The core's cached answer, when it is younger than CACHE_TTL and was
      * stored for this subscription.
      */
-    public function cached(string $subscription, string $kind, int $now): ?string
+    public function cached(string $subscription, string $kind, int $now, string $key = ''): ?string
     {
-        $path = $this->cachePath($subscription, $kind);
+        $path = $this->cachePath($subscription, $kind, $key);
         if (is_link($path) || !is_file($path)) {
             return null;
         }
         $entry = json_decode((string) @file_get_contents($path), true);
         if (!is_array($entry) || ($entry['subscription'] ?? null) !== $subscription || ($entry['kind'] ?? null) !== $kind
-            || !is_int($entry['at'] ?? null) || !is_string($entry['stdout'] ?? null)) {
+            || ($entry['key'] ?? '') !== $key || !is_int($entry['at'] ?? null) || !is_string($entry['stdout'] ?? null)) {
             return null;
         }
         $age = $now - $entry['at'];
@@ -209,11 +260,11 @@ final class RestoreStore
         return $age >= 0 && $age < self::CACHE_TTL ? $entry['stdout'] : null;
     }
 
-    public function cache(string $subscription, string $kind, string $stdout, int $now): void
+    public function cache(string $subscription, string $kind, string $stdout, int $now, string $key = ''): void
     {
         RootFile::write(
-            $this->cachePath($subscription, $kind),
-            json_encode(['subscription' => $subscription, 'kind' => $kind, 'at' => $now, 'stdout' => $stdout], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR) . "\n"
+            $this->cachePath($subscription, $kind, $key),
+            json_encode(['subscription' => $subscription, 'kind' => $kind, 'key' => $key, 'at' => $now, 'stdout' => $stdout], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR) . "\n"
         );
     }
 
@@ -222,7 +273,7 @@ final class RestoreStore
     {
         $paths = $subscription === null
             ? (glob($this->dir . '/*.cache') ?: [])
-            : array_map(fn (string $kind): string => $this->cachePath($subscription, $kind), self::CACHED);
+            : (glob($this->dir . '/cache-' . Command::domain($subscription) . '_*.cache') ?: []);
         $removed = 0;
         foreach ($paths as $path) {
             if ((is_file($path) || is_link($path)) && @unlink($path)) {

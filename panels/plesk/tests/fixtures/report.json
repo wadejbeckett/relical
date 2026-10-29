@@ -3,7 +3,10 @@
   "subscriptions": 3,
   "ok": 7,
   "failed": 1,
-  "skipped": 0,
+  "skipped": [
+    {"name": "dotted.example.test", "reason": "database phpmyadmin_old: the name is reserved for a server or panel database"},
+    {"name": "mailonly.example.test", "reason": "nothing to back up: the subscription has no system user (no web hosting)"}
+  ],
   "stored_bytes": 1536,
   "rows": [
     {"subscription": "example.test", "unit": "mail", "ok": true, "time": "2026-10-29T01:00:09Z", "error": "", "stored_bytes": 1024},

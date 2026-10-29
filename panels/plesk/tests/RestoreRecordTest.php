@@ -132,6 +132,7 @@ final class RestoreRecordTest extends TestCase
         yield 'storage box down' => ['Fatal: unable to open repository at sftp:u000000-sub1@u000000-sub1.your-storagebox.example:relical/example.test: ssh: connection refused', RestoreRecord::CANNOT_READ];
         yield 'anything else' => ['the server did not finish in time', RestoreRecord::CANNOT_READ];
         yield 'another page is reading' => [RestoreRecord::READ_BUSY, RestoreRecord::READ_BUSY];
+        yield 'the server is busy reading' => [RestoreRecord::READ_SERVER_BUSY, RestoreRecord::READ_SERVER_BUSY];
     }
 
     /** @dataProvider readErrors */
@@ -166,5 +167,53 @@ final class RestoreRecordTest extends TestCase
         self::assertSame(RestoreRecord::CANNOT_START, RestoreRecord::startRefusal(null, 'mail', true));
         self::assertSame(RestoreRecord::CANNOT_START, RestoreRecord::startRefusal(['running' => false], 'mail', true));
         self::assertSame(RestoreRecord::CANNOT_START, RestoreRecord::startRefusal(['error' => 'x'], 'mail', true));
+    }
+
+    /** @return array<string, mixed> */
+    private static function record(string $unit, string $started, array $extra = []): array
+    {
+        return array_merge(['subscription' => 'example.test', 'unit' => $unit, 'state' => 'done', 'started' => $started, 'error' => ''], $extra);
+    }
+
+    public function testRecentCustomerRestoresCountFilesAndDatabasesOfTheLastDay(): void
+    {
+        $now = strtotime('2026-10-29T12:00:00Z');
+        $records = [
+            self::record('files', '2026-10-29T11:00:00Z'),
+            self::record('db', '2026-10-28T12:00:01Z'),
+            self::record('files', '2026-10-29T10:00:00Z', ['state' => 'failed', 'error' => 'restic: exit 1']), // ran, counts
+            self::record('files', '2026-10-29T09:00:00Z', ['state' => 'running']),
+            self::record('files', '2026-10-28T12:00:00Z'),                                // 24 h ago: out
+            self::record('mail', '2026-10-29T11:00:00Z'),                                 // mail: out
+            self::record('files', '2026-10-29T11:00:00Z', ['by_admin' => true]),          // administrator: out
+            self::record('files', '2026-10-29T11:00:00Z', ['state' => 'failed', 'error' => RestoreRecord::BUSY]),
+            self::record('files', '2026-10-29T11:00:00Z', ['state' => 'failed', 'error' => RestoreRecord::SERVER_BUSY]),
+            self::record('files', '2026-10-29T11:00:00Z', ['state' => 'failed', 'error' => RestoreRecord::TOO_MANY_RESTORES]),
+            self::record('files', '2026-10-29T11:00:00Z', ['subscription' => 'other.example.test']),
+            self::record('files', 'not a date'),
+            'garbage',
+        ];
+
+        self::assertSame(4, RestoreRecord::recentCustomerRestores($records, 'example.test', $now));
+    }
+
+    public function testRunningRecordsSayWhoStartedThem(): void
+    {
+        $args = ['restore', '--subscription', 'example.test', '--unit', 'files', '--snapshot', 'abcdef12'];
+
+        self::assertFalse(RestoreRecord::running('20261029120000-abcdef0123456789abcdef01', $args, 1)['by_admin']);
+        self::assertTrue(RestoreRecord::running('20261029120000-abcdef0123456789abcdef01', $args, 1, true)['by_admin']);
+    }
+
+    public function testThreeRestoresADayStopTheFourthForCustomersOnly(): void
+    {
+        $state = ['running' => false, 'server_busy' => false, 'restored_folders' => 0, 'recent_restores' => 3];
+
+        self::assertSame(RestoreRecord::TOO_MANY_RESTORES, RestoreRecord::startRefusal($state, 'files', false));
+        self::assertSame(RestoreRecord::TOO_MANY_RESTORES, RestoreRecord::startRefusal($state, 'db', false));
+        self::assertNull(RestoreRecord::startRefusal($state, 'mail', false));
+        self::assertNull(RestoreRecord::startRefusal($state, 'files', true), 'administrators are exempt');
+        self::assertNull(RestoreRecord::startRefusal(['recent_restores' => 2] + $state, 'files', false));
+        self::assertSame(RestoreRecord::TOO_MANY_RESTORES, RestoreRecord::customerError(RestoreRecord::TOO_MANY_RESTORES));
     }
 }

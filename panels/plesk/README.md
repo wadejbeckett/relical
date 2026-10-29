@@ -35,8 +35,9 @@ installer prints each step. It:
    `/etc/relical/config.json` (0600) once the Storage Box destination is
    saved in the extension's settings.
 7. Installs `relical-backup.service`, `relical-backup.timer`,
-   `relical-check.service` and `relical-check.timer` into
-   `/etc/systemd/system/` and enables both timers.
+   `relical-check.service`, `relical-check.timer` and
+   `relical-notify@.service` into `/etc/systemd/system/` and enables both
+   timers.
 
 The nightly backup starts at the backup time in the settings (01:00 server
 local time by default, within a random delay of up to 30 minutes) and
@@ -44,7 +45,10 @@ applies the retention policy afterwards. The weekly repository check runs on
 Sunday, twelve hours after the backup time. Both run at the lowest CPU and
 disk priority (`Nice=19`, `IOSchedulingClass=idle`), so the sites and mail
 they back up come first. Until the destination is saved, both are skipped
-rather than failed.
+rather than failed. A run is stopped after 20 hours, and a stop waits at
+most 15 minutes. When either fails, `relical-notify@.service` adds a line
+to the run log, records the failure for the settings page and mails the
+Plesk administrator.
 
 The default backup time is 01:00. Phase 1 builds used 02:30; on a server
 where the backup time was never saved, an upgrade moves the timer to 01:00.
@@ -80,10 +84,13 @@ the extension carries on with the same keys and repositories.
 
 Extensions > Relical Backup is for administrators only. It holds:
 
+- At the top: the last successful backup, how many units failed or were
+  skipped in the last report, and the last failed run.
 - The settings: which subscriptions are backed up (every subscription, or
   those whose plan includes a Relical plan item), the Storage Box host,
   SFTP port (23), user and path (`relical`), how many daily, weekly and
-  monthly backups are kept, the backup time and an upload limit. Saving
+  monthly backups are kept, the backup time and an upload limit (20480
+  KiB/s, 20 MiB/s, when left blank; 0 for none). Saving
   writes `/etc/relical/config.json`; a new backup time also updates the
   timers.
 - The extension's public key, to add to the Storage Box's
@@ -143,12 +150,13 @@ the extension's var directory (`restores/`, root only). A customer only
 ever reaches their own subscription, and never the Plesk configuration;
 one whose plan does not include Relical sees a page that says so. A
 customer cannot start a files or database restore while five `restored-*`
-copies are in the home directory. The nightly files backup leaves those
+copies are in the home directory, nor more than three of them in 24 hours
+for one subscription (administrators are exempt from both). The nightly files backup leaves those
 `restored-*` copies out (beside `logs/`, `statistics/logs/`, `tmp/` and
-`.cagefs/`), so a restored copy is not backed up again. The screens' answers about restore points
-and mailboxes are reused for five minutes, and only one read of a
-subscription's backups runs at a time, so reloading the page cannot tie up
-the Storage Box's connections (`cache-clear.php [<subscription>]` forgets
+`.cagefs/`), so a restored copy is not backed up again. The screens' answers about restore points,
+mailboxes and folders are reused for five minutes, only one read of a
+subscription's backups runs at a time and at most four on the server, so
+reloading the page cannot tie up the Storage Box's connections (`cache-clear.php [<subscription>]` forgets
 them at once). The permission "Restore from Relical backups"
 (`relical_restore`, on by default) on the Permissions tab of a plan or
 subscription switches the screens off for it.

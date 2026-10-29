@@ -48,7 +48,7 @@ try {
         Installer::findTool($probe, Paths::SYSTEMCTL),
         Installer::findTool($probe, Paths::SSH_KEYGEN)
     );
-    $units = Units::renderAll(Units::loadTemplates(__DIR__ . '/../resources/systemd'), Settings::fromPlesk()->backupTime());
+    $units = Units::renderAll(Units::loadTemplates(__DIR__ . '/../resources/systemd'), Settings::fromPlesk()->backupTime(), Paths::rootScript());
 
     $log = fopen('php://memory', 'w+');
     (new InstallRunner($log, STDERR, ''))->run($installer->unitActions($units));

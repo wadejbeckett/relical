@@ -114,6 +114,7 @@ final class InstallerTest extends TestCase
             'write_file /etc/systemd/system/relical-backup.timer',
             'write_file /etc/systemd/system/relical-check.service',
             'write_file /etc/systemd/system/relical-check.timer',
+            'write_file /etc/systemd/system/relical-notify@.service',
             'run /usr/bin/systemctl daemon-reload',
             'run /usr/bin/systemctl enable --now relical-backup.timer relical-check.timer',
         ], self::summary($plan));
@@ -153,7 +154,7 @@ final class InstallerTest extends TestCase
             'ensure_dir /var/lib/relical',
             'note',
             'write_config /etc/relical/config.json',
-            'note', 'note', 'note', 'note',
+            'note', 'note', 'note', 'note', 'note',
             'run /usr/bin/systemctl daemon-reload',
             'run /usr/bin/systemctl enable --now relical-backup.timer relical-check.timer',
         ], self::summary($plan));
@@ -165,7 +166,7 @@ final class InstallerTest extends TestCase
         $plan = self::installer(new FakeProbe(self::installedServer()))->unitActions(self::units());
 
         self::assertSame([
-            'note', 'note', 'note', 'note',
+            'note', 'note', 'note', 'note', 'note',
             'run /usr/bin/systemctl daemon-reload',
             'run /usr/bin/systemctl enable --now relical-backup.timer relical-check.timer',
         ], self::summary($plan));
@@ -292,6 +293,7 @@ final class InstallerTest extends TestCase
             'remove_file /etc/systemd/system/relical-backup.timer',
             'remove_file /etc/systemd/system/relical-check.service',
             'remove_file /etc/systemd/system/relical-check.timer',
+            'remove_file /etc/systemd/system/relical-notify@.service',
             'run /usr/bin/systemctl daemon-reload',
             'remove_file /usr/local/lib/relical/relical',
             'remove_file /usr/local/lib/relical/restic',

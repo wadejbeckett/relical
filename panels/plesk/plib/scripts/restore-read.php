@@ -11,11 +11,13 @@ declare(strict_types=1);
  *
  * Each read of the Storage Box opens an SFTP session as root, and a page
  * reloaded in a loop must not use up the Storage Box's connections. So the
- * answers to `snapshots` and `mailboxes` are kept for
- * RestoreStore::CACHE_TTL seconds (root-only, in the restores directory;
- * restore-run.php and cache-clear.php forget them early), and only one read
- * per subscription runs at a time: another request meanwhile gets
- * {"error": RestoreRecord::READ_BUSY} at once instead of a second session.
+ * answers to `snapshots`, `mailboxes` and each `ls` (per restore point and
+ * folder) are kept for RestoreStore::CACHE_TTL seconds (root-only, in the
+ * restores directory; restore-run.php and cache-clear.php forget them
+ * early), only one read per subscription runs at a time (another request
+ * meanwhile gets {"error": RestoreRecord::READ_BUSY} at once instead of a
+ * second session), and at most RestoreStore::READ_SLOTS reads run on the
+ * whole server (beyond that: RestoreRecord::READ_SERVER_BUSY).
  *
  * Prints the core's JSON as `cli.php` would, with its exit code.
  */
@@ -49,12 +51,14 @@ ScriptIO::requireRoot('restore-read.php');
 
 [$kind, $subscription] = [$args[0], $args[1]];
 $cacheable = in_array($kind, RestoreStore::CACHED, true);
+// ls: the restore point and the folder ("" for the top), NUL-separated.
+$cacheKey = $kind === 'ls' ? implode("\0", array_slice($args, 2)) : '';
 
 try {
     $store = RestoreStore::fromPlesk();
     $store->ensure();
     if ($cacheable) {
-        $cached = $store->cached($subscription, $kind, time());
+        $cached = $store->cached($subscription, $kind, time(), $cacheKey);
         if ($cached !== null) {
             echo $cached;
             exit(0);
@@ -64,12 +68,20 @@ try {
     if ($lock === null) {
         ScriptIO::fail(RestoreRecord::READ_BUSY);
     }
+    $slot = null;
     try {
+        $slot = $store->readSlot();
+        if ($slot === null) {
+            ScriptIO::fail(RestoreRecord::READ_SERVER_BUSY);
+        }
         $result = Process::capture(Command::parse($cli)->argv(), READ_TIMEOUT);
         if ($result['code'] === 0 && !$result['timed_out'] && $cacheable) {
-            $store->cache($subscription, $kind, $result['stdout'], time());
+            $store->cache($subscription, $kind, $result['stdout'], time(), $cacheKey);
         }
     } finally {
+        if ($slot !== null) {
+            RestoreStore::unlock($slot);
+        }
         RestoreStore::unlock($lock);
     }
 } catch (Throwable $e) {

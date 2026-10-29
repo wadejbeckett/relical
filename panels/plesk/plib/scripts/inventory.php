@@ -13,6 +13,8 @@ declare(strict_types=1);
  * and the exit code is 1, so the core never backs up from a partial list.
  */
 
+use Noiz\Relical\Command;
+use Noiz\Relical\ConfigFiles;
 use Noiz\Relical\Coverage;
 use Noiz\Relical\Inventory;
 use Noiz\Relical\Paths;
@@ -41,6 +43,12 @@ if (class_exists('pm_Context')) {
 
 require_once __DIR__ . '/../library/autoload.php';
 
+try {
+    Command::hookArgs('inventory.php', array_slice($argv, 1));
+} catch (InvalidArgumentException $e) {
+    ScriptIO::fail('refused: ' . $e->getMessage(), 2);
+}
+
 ScriptIO::requireRoot('inventory.php');
 
 try {
@@ -50,7 +58,7 @@ try {
     }
 
     $source = new PleskSource();
-    $webspaces = $source->webspaces();
+    $webspaces = $source->webspaces($scope);
 
     // The rename hints are a convenience: a missing, unreadable or corrupt
     // hints file means no hints this run, never a failed inventory.
@@ -65,6 +73,14 @@ try {
 
     $inventory = Inventory::build($webspaces, $scope);
     $inventory['skipped'] = array_merge($inventory['skipped'], $source->notes());
+
+    // Plesk's MySQL admin password can change (a repair, --set-mysql-password);
+    // the option file follows it here, every run, not only on a settings save.
+    try {
+        ConfigFiles::refreshMysqlOptionFile();
+    } catch (Throwable $e) {
+        $inventory['skipped'][] = Inventory::skip('', 'MySQL option file: ' . $e->getMessage());
+    }
 
     try {
         RootFile::ensureDir(Paths::STATE_DIR);

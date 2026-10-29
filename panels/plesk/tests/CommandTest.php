@@ -70,7 +70,7 @@ final class CommandTest extends TestCase
         $sbin = (string) file_get_contents(__DIR__ . '/../sbin/relical-root');
         self::assertSame(1, preg_match('/case "\$script" in\n(.*?)\)\n/s', $sbin, $m));
         $allowed = preg_split('/[|\\\\\s]+/', trim($m[1]), -1, PREG_SPLIT_NO_EMPTY);
-        $expected = array_merge(Command::SCRIPTS, ['inventory.php', 'post-install.php', 'pre-uninstall.php']);
+        $expected = array_merge(Command::SCRIPTS, ['inventory.php', 'post-install.php', 'pre-uninstall.php', 'notify.php']);
         sort($allowed);
         sort($expected);
         self::assertSame($expected, $allowed);
@@ -78,6 +78,68 @@ final class CommandTest extends TestCase
             self::assertFileExists(__DIR__ . '/../plib/scripts/' . $script);
         }
         self::assertTrue(is_executable(__DIR__ . '/../sbin/relical-root'), 'sbin/relical-root must be executable');
+    }
+
+    public function testTheRootEntryPointStartsPhpWithAnEmptyEnvironment(): void
+    {
+        $sbin = (string) file_get_contents(__DIR__ . '/../sbin/relical-root');
+        $code = array_values(array_filter(
+            array_map('trim', explode("\n", $sbin)),
+            static fn (string $line): bool => $line !== '' && $line[0] !== '#'
+        ));
+
+        self::assertSame(
+            'exec env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 "$php" -dauto_prepend_file=sdk.php "$file" "$@"',
+            end($code),
+            'PHPRC, PHP_INI_SCAN_DIR and the rest of the caller\'s environment must not reach PHP as root'
+        );
+        self::assertSame(1, preg_match_all('/^\s*exec\b/m', $sbin), 'one exec only');
+    }
+
+    /** @return iterable<string, array{string, list<string>, bool}> */
+    public static function hookArguments(): iterable
+    {
+        yield 'inventory' => ['inventory.php', [], true];
+        yield 'inventory with an argument' => ['inventory.php', ['--subscription'], false];
+        yield 'pre-uninstall' => ['pre-uninstall.php', [], true];
+        yield 'pre-uninstall with an argument' => ['pre-uninstall.php', ['x'], false];
+        yield 'post-install' => ['post-install.php', [], true];
+        yield 'post-install upgrade' => ['post-install.php', ['upgrade'], true];
+        yield 'post-install upgrade version' => ['post-install.php', ['upgrade', '0.2.0'], true];
+        yield 'post-install upgrade version release' => ['post-install.php', ['upgrade', '0.2.0', '1'], true];
+        yield 'post-install upgrade dashed version' => ['post-install.php', ['upgrade', '0.2.0-1'], true];
+        yield 'post-install something else' => ['post-install.php', ['install'], false];
+        yield 'post-install upgrade an option' => ['post-install.php', ['upgrade', '--x'], false];
+        yield 'post-install upgrade too many' => ['post-install.php', ['upgrade', '1', '2', '3'], false];
+        yield 'post-install upgrade with a space' => ['post-install.php', ['upgrade', '1 2'], false];
+        yield 'not a hook' => ['cli.php', [], false];
+    }
+
+    /**
+     * @dataProvider hookArguments
+     * @param list<string> $args
+     */
+    public function testHooksRefuseExtraArguments(string $script, array $args, bool $ok): void
+    {
+        if (!$ok) {
+            $this->expectException(InvalidArgumentException::class);
+        }
+        self::assertSame($args, Command::hookArgs($script, $args));
+    }
+
+    public function testRunEverythingNowStartsTheNightlyUnit(): void
+    {
+        self::assertSame(
+            ['mode' => 'systemd', 'argv' => ['/usr/bin/systemctl', 'start', '--no-block', 'relical-backup.service']],
+            Command::runAll('/usr/bin/systemctl')
+        );
+        $detached = Command::runAll(null);
+        self::assertSame('detached', $detached['mode']);
+        self::assertSame(['/usr/local/lib/relical/relical', '-config', '/etc/relical/config.json', 'backup', '--all'], $detached['argv']);
+        self::assertSame(
+            "'/usr/local/lib/relical/relical' '-config' '/etc/relical/config.json' 'backup' '--all' < /dev/null > /dev/null 2>&1 &",
+            Command::background($detached['argv'])
+        );
     }
 
     public function testTheRootEntryPointRefusesOtherScripts(): void
@@ -371,8 +433,10 @@ final class CommandTest extends TestCase
         yield 'restore-run mail' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'mail', '--domain', 'example.test', '--mailbox', 'info', '--snapshot', 'abcdef12']];
         yield 'restore-run files' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'files', '--snapshot', 'abcdef12', '--path', 'httpdocs']];
         yield 'restore-run db' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'db', '--database', 'example_wp']];
+        yield 'restore-run by an administrator' => ['restore-run.php', [self::RESTORE_ID, '--admin', 'restore', '--subscription', 'example.test', '--unit', 'files', '--snapshot', 'abcdef12']];
         yield 'restore-result' => ['restore-result.php', [self::RESTORE_ID]];
         yield 'restore-running' => ['restore-running.php', ['example.test']];
+        yield 'run-all' => ['run-all.php', []];
         yield 'restore-read snapshots' => ['restore-read.php', ['snapshots', 'example.test']];
         yield 'restore-read mailboxes' => ['restore-read.php', ['mailboxes', 'example.test']];
         yield 'restore-read ls top' => ['restore-read.php', ['ls', 'example.test', 'abcdef12']];
@@ -417,6 +481,9 @@ final class CommandTest extends TestCase
         yield 'restore-run with a bad id' => ['restore-run.php', ['../x', 'restore', '--subscription', 'example.test', '--unit', 'files']];
         yield 'restore-run with an upper-case id' => ['restore-run.php', ['20261029120000-ABCDEF0123456789ABCDEF01', 'restore', '--subscription', 'example.test', '--unit', 'files']];
         yield 'restore-run without a command' => ['restore-run.php', [self::RESTORE_ID]];
+        yield 'restore-run admin without a command' => ['restore-run.php', [self::RESTORE_ID, '--admin']];
+        yield 'restore-run admin in the wrong place' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--admin', '--subscription', 'example.test', '--unit', 'files']];
+        yield 'restore-run admin twice' => ['restore-run.php', [self::RESTORE_ID, '--admin', '--admin', 'restore', '--subscription', 'example.test', '--unit', 'files']];
         yield 'restore-run a backup' => ['restore-run.php', [self::RESTORE_ID, 'backup', '--subscription', 'example.test']];
         yield 'restore-run the panel configuration' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', '_server', '--unit', 'panel-config']];
         yield 'restore-run in _server' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', '_server', '--unit', 'files']];
@@ -427,6 +494,7 @@ final class CommandTest extends TestCase
         yield 'restore-result with a path' => ['restore-result.php', ['../../etc/shadow']];
         yield 'restore-result twice' => ['restore-result.php', [self::RESTORE_ID, self::RESTORE_ID]];
         yield 'restore-running of the server' => ['restore-running.php', ['_server']];
+        yield 'run-all with an argument' => ['run-all.php', ['--all']];
         yield 'restore-running without a subscription' => ['restore-running.php', []];
         yield 'restore-running with a path' => ['restore-running.php', ['../x']];
         yield 'restore-read nothing' => ['restore-read.php', []];

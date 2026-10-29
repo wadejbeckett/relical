@@ -154,4 +154,16 @@ final class RestoreAccessTest extends TestCase
     {
         self::assertTrue($this->decide(true, [], 10, 'plan-items', [])->allowed());
     }
+
+    public function testThePermissionIsCheckedOnTheSubscriptionAsWellAsTheSubdomain(): void
+    {
+        // Permission true for subdomain 11, switched off on its subscription 10.
+        $access = $this->decide(false, [10, 11], 11, 'plan-items', [11]);
+
+        self::assertFalse($access->allowed());
+        self::assertSame(RestoreAccess::NO_ACCESS, $access->refusal());
+
+        self::assertTrue($this->decide(false, [10, 11], 11, 'plan-items', [10, 11])->allowed());
+        self::assertTrue($this->decide(true, [], 11, 'plan-items', [])->allowed(), 'administrators are not asked');
+    }
 }

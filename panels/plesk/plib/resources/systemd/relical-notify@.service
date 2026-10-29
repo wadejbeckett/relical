@@ -1,0 +1,10 @@
+# Installed by the Relical Backup extension for Plesk; rewritten on every
+# install and upgrade. relical-backup.service and relical-check.service
+# start it on failure (OnFailure=relical-notify@%n.service): it logs the
+# failure and mails the Plesk administrator.
+[Unit]
+Description=Relical failure notice for %i
+
+[Service]
+Type=oneshot
+ExecStart={root_script} notify.php %i

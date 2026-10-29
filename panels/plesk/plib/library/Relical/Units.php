@@ -24,10 +24,14 @@ final class Units
     public const BACKUP_TIMER = 'relical-backup.timer';
     public const CHECK_SERVICE = 'relical-check.service';
     public const CHECK_TIMER = 'relical-check.timer';
+    /** Started by both services on failure (OnFailure=); runs notify.php. */
+    public const NOTIFY_SERVICE = 'relical-notify@.service';
 
-    public const ALL = [self::BACKUP_SERVICE, self::BACKUP_TIMER, self::CHECK_SERVICE, self::CHECK_TIMER];
+    public const ALL = [self::BACKUP_SERVICE, self::BACKUP_TIMER, self::CHECK_SERVICE, self::CHECK_TIMER, self::NOTIFY_SERVICE];
     public const SERVICES = [self::BACKUP_SERVICE, self::CHECK_SERVICE];
     public const TIMERS = [self::BACKUP_TIMER, self::CHECK_TIMER];
+
+    public const DEFAULT_ROOT_SCRIPT = '/opt/psa/admin/sbin/modules/relical/relical-root';
 
     private const TIME = '/^([01][0-9]|2[0-3]):([0-5][0-9])$/D';
 
@@ -35,7 +39,7 @@ final class Units
      * @param array<string, string> $templates unit name => template, exactly ALL
      * @return array<string, string> unit name => rendered unit, in ALL's order
      */
-    public static function renderAll(array $templates, string $backupTime): array
+    public static function renderAll(array $templates, string $backupTime, string $rootScript = self::DEFAULT_ROOT_SCRIPT): array
     {
         $names = array_keys($templates);
         sort($names);
@@ -46,17 +50,22 @@ final class Units
         }
         $out = [];
         foreach (self::ALL as $name) {
-            $out[$name] = self::render($templates[$name], $backupTime);
+            $out[$name] = self::render($templates[$name], $backupTime, $rootScript);
         }
 
         return $out;
     }
 
-    public static function render(string $template, string $backupTime): string
+    /** @param string $rootScript relical-root as root runs it (Paths::rootScript()) */
+    public static function render(string $template, string $backupTime, string $rootScript = self::DEFAULT_ROOT_SCRIPT): string
     {
+        if (preg_match('#^/[A-Za-z0-9._/-]+$#D', $rootScript) !== 1 || str_contains($rootScript, '..')) {
+            throw new InvalidArgumentException('the root script must be a plain absolute path');
+        }
         $unit = strtr($template, [
             '{backup_time}' => self::time($backupTime),
             '{check_time}' => self::checkTime($backupTime),
+            '{root_script}' => $rootScript,
         ]);
 
         if (preg_match('/\{[a-z_]+\}/', $unit, $m) === 1) {
