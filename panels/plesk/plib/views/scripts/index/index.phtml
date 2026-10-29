@@ -92,7 +92,7 @@ $e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES 
     <a class="relical-button" href="<?php echo $e($this->logUrl); ?>">Show the log</a>
 </p>
 
-<h3 class="relical-section">Last report</h3>
+<h3 class="relical-section">Last report<?php if ($this->report['skipped_count'] > 0): ?> <span class="relical-error">(<?php echo $e($this->report['skipped_count']); ?> skipped)</span><?php endif; ?></h3>
 <?php if (!$this->report['available']): ?>
 <p class="relical-muted"><?php echo $e($this->report['message']); ?></p>
 <?php else: ?>
@@ -114,6 +114,12 @@ $e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES 
 <p>Failures:</p>
 <ul>
     <?php foreach ($this->report['failures'] as $failure): ?><li class="relical-error"><?php echo $e($failure); ?></li><?php endforeach; ?>
+</ul>
+<?php endif; ?>
+<?php if ($this->report['skipped'] !== []): ?>
+<p>Left out of the backup (<?php echo $e(count($this->report['skipped'])); ?>):</p>
+<ul>
+    <?php foreach ($this->report['skipped'] as $skipped): ?><li class="relical-error"><?php echo $e($skipped); ?></li><?php endforeach; ?>
 </ul>
 <?php endif; ?>
 <?php if ($this->report['renamed'] !== []): ?>

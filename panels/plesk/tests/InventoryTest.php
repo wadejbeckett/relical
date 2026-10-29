@@ -252,6 +252,7 @@ final class InventoryTest extends TestCase
     public static function brokenWebspaces(): iterable
     {
         yield 'invalid system user' => [['sys_user' => 'Bad User']];
+        yield 'system user with a leading dot' => [['sys_user' => '.john']];
         yield 'uid 0' => [['uid' => 0, 'gid' => 0]];
         yield 'unknown uid' => [['uid' => null]];
         yield 'home outside the files root' => [['home' => '/home/example.test']];
@@ -281,6 +282,17 @@ final class InventoryTest extends TestCase
         self::assertSame(['mail', 'files', 'db'], $byName['fine.example.test']['features']);
         self::assertSame('example.test', $inventory['skipped'][0]['name']);
         self::assertStringStartsWith('website files and databases:', $inventory['skipped'][0]['reason']);
+    }
+
+    public function testASystemUserWithADotKeepsFilesAndDatabases(): void
+    {
+        $inventory = Inventory::build([self::webspace(['sys_user' => 'john.smith'])], 'all');
+
+        self::assertSame([], $inventory['skipped']);
+        self::assertSame('john.smith', $inventory['subscriptions'][0]['sys_user']);
+        self::assertSame(['mail', 'files', 'db'], $inventory['subscriptions'][0]['features']);
+        self::assertSame(['/var/www/vhosts/example.test'], $inventory['subscriptions'][0]['files']);
+        self::assertSame([['type' => 'mysql', 'name' => 'example_wp']], $inventory['subscriptions'][0]['databases']);
     }
 
     public function testFilesRootsCanBeGiven(): void
