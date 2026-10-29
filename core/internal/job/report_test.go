@@ -108,7 +108,7 @@ func TestReportCountsAndWarnings(t *testing.T) {
 	put(stats("_server", 500))
 	inv := &inventory.Inventory{Subscriptions: []inventory.Subscription{{Name: "a.test", Features: []string{"mail"}},
 		{Name: "b.test", Features: []string{"mail", "files", "db"}, Databases: []inventory.Database{{Type: "postgresql", Name: "pg"}, {Type: "mysql", Name: "shop"}}}},
-		Server: &inventory.Server{Features: []string{"panel-config"}},
+		Server:  &inventory.Server{Features: []string{"panel-config"}},
 		Renamed: []inventory.Rename{{Subscription: "b.test", RenamedFrom: "bee.test", Note: "the old repository is kept"}}}
 
 	rep := BuildReport(st, inv, nil, now)
