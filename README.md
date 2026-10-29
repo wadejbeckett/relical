@@ -169,7 +169,8 @@ Result fields: `subscription`; `unit` (`mail`, `files`, `db`, `panel-config`; ab
       "path": "httpdocs",
       "restored_to": "/var/www/vhosts/example.test/restored-2026-10-15-4f0a3c2e",
       "files": 1824,
-      "bytes": 73400320
+      "bytes": 73400320,
+      "dropped": []
     }
 
 `relical restore --subscription example.test --unit db --database example_wp`:
@@ -283,7 +284,7 @@ File and database restores never write into the live webspace either. Before any
 
 The finished `restored-<snapshot date>-<short id>/` folder is built in full in a root-only staging directory, `<files root>/.relical/` (mode 0700, owned by root; created when missing, and a restore is refused if it is a symlink or has another owner or mode). It sits next to the homes, so it is on the same file system and inside none of them. There the folder and everything in it are handed to the subscription's user (owners changed with `lchown`, so a symlink is never followed), and then the folder is moved into `home` with a single `renameat2(RENAME_NOREPLACE)` relative to the opened `home`: it appears complete or not at all, never replaces an entry (a folder of that name created meanwhile makes the restore fail with "already exists") and never follows a symlink. Only when that rename is not possible (`home` on another file system than its files root, or a kernel older than 3.15) does Relical create the folder in `home` and fill it there, after checking that what it opened is the empty, root-owned, mode 0700 directory it just made; anything else (the user having swapped it for another directory) stops the restore without touching it. Then:
 
-- `files`: the snapshot is restored with `restic restore` into the staging directory, keeping its layout under `home`: `--path httpdocs` gives `restored-…/httpdocs/`. Set-user-id and set-group-id bits are cleared from files and directories, fifos and sockets are left out, and a device node fails the restore, naming it (a Plesk chroot's `dev/` holds some: restore the paths around it instead). On the copy path (another file system), modes and owners are kept and times are not.
+- `files`: the snapshot is restored with `restic restore` into the staging directory, keeping its layout under `home`: `--path httpdocs` gives `restored-…/httpdocs/`. Set-user-id and set-group-id bits are cleared from files and directories, device nodes, fifos and sockets are left out (a Plesk chroot webspace holds some under `dev/`), and the result lists them as `dropped` (paths relative to `restored_to`, at most 100 and then `... and N more`). On the copy path (another file system), modes and owners are kept and times are not.
 - `db`: the dump (`/<name>.sql` in a snapshot tagged `db:<name>`) is streamed with `restic dump` into a temporary file (with a random suffix) in the staging folder, and renamed to `<name>.sql` (mode 0600, owned by the user) once complete; a failed dump leaves nothing in `home`. The database does not have to be in the current inventory, so a database deleted since can still be restored: a `db:<name>` snapshot in the subscription's own repository is enough, because only a backup of that subscription's database can have written it. The name must still pass the inventory's database name rule. The dump is never imported.
 - `panel-config`: the file is streamed with `restic dump` into a temporary file with a random suffix in `<state_dir>/restore`, then renamed, without replacing anything, to `panel-config-<snapshot date>-<short id>.<ext>` (mode 0600, root). Relical never runs `plesk bin pleskrestore`: the administrator restores from the file with it, giving the `_server` key as `PLESK_BACKUP_PASSWORD` when `encrypt_with_repo_key` is on, and deletes the file afterwards.
 

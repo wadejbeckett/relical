@@ -155,7 +155,7 @@ mysql -e "CREATE DATABASE scratch" && mysql scratch < "$RD"
 [ "$(stat -c %U:%a /var/www/vhosts/.relical)" = root:700 ] || fail ".relical is $(stat -c %U:%a /var/www/vhosts/.relical)"
 [ -z "$(ls -A /var/www/vhosts/.relical)" ] || fail "restore staging left behind"
 
-# Set-id bits are dropped and device nodes refused. restored-* folders are
+# Set-id bits are dropped and device nodes left out (listed as dropped). restored-* folders are
 # not backed up again.
 mkdir -p $W/setid/dir $W/devs
 cp /bin/true $W/setid/suid && chmod 4755 $W/setid/suid && chmod 2755 $W/setid/dir
@@ -166,10 +166,12 @@ grep -q '"ok": true' /tmp/backup-setid.json || fail "files backup with set-id fi
 SETID_SNAP=$(sed -n 's/^ *"snapshot": "\([0-9a-f]*\)",*$/\1/p' /tmp/backup-setid.json)
 [ -n "$SETID_SNAP" ] || fail "no snapshot id from the files backup"
 if $R ls --subscription example.test --snapshot "$SETID_SNAP" --path "${RF#$W/}" > /tmp/ls-restored.json; then fail "a restored-* folder was backed up"; fi
-if $R restore --subscription example.test --unit files --snapshot "$SETID_SNAP" --path devs > /tmp/restore-dev.json; then fail "a device node was restored"; fi
-grep -q 'device node devs/null' /tmp/restore-dev.json || fail "device refusal does not name the node"
-if ls -d $W/restored-* | grep -v -e "^$RF\$" -e "^$(dirname "$RD")\$"; then fail "a refused restore left a folder"; fi
-[ -z "$(ls -A /var/www/vhosts/.relical)" ] || fail "refused restore left staging behind"
+$R restore --subscription example.test --unit files --snapshot "$SETID_SNAP" --path devs | tee /tmp/restore-dev.json
+grep -q '"devs/null"' /tmp/restore-dev.json || fail "the dropped device node is not listed"
+RDEV=$(sed -n 's/^ *"restored_to": "\(.*\)",*$/\1/p' /tmp/restore-dev.json)
+[ -d "$RDEV/devs" ] && [ ! -e "$RDEV/devs/null" ] || fail "a device node was restored"
+rm -rf "$RDEV"
+[ -z "$(ls -A /var/www/vhosts/.relical)" ] || fail "restore with a device node left staging behind"
 $R restore --subscription example.test --unit files --snapshot "$SETID_SNAP" --path setid | tee /tmp/restore-setid.json
 RS=$(sed -n 's/^ *"restored_to": "\(.*\)",*$/\1/p' /tmp/restore-setid.json)
 [ "$(stat -c %a "$RS/setid/suid")" = 755 ] || fail "set-user-id kept: $(stat -c %a "$RS/setid/suid")"

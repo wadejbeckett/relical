@@ -27,6 +27,9 @@ type FilesResult struct {
 	RestoredTo   string `json:"restored_to"`
 	Files        int    `json:"files"`
 	Bytes        int64  `json:"bytes"`
+	// Dropped lists the device nodes, fifos and sockets in the snapshot
+	// that were left out, relative to restored_to.
+	Dropped []string `json:"dropped"`
 }
 
 // subscription returns the inventory entry for a file or database
@@ -132,8 +135,11 @@ func RunFiles(ctx context.Context, env job.Env, req FilesRequest) (FilesResult, 
 	if err := os.Rename(tree, built); err != nil {
 		return res, err
 	}
-	if res.Files, res.Bytes, err = prepareTree(built, ws.uid, ws.gid); err != nil {
+	if res.Files, res.Bytes, res.Dropped, err = prepareTree(built, ws.uid, ws.gid); err != nil {
 		return res, err
+	}
+	if res.Dropped == nil {
+		res.Dropped = []string{}
 	}
 	if err := os.Chmod(built, 0o700); err != nil {
 		return res, err

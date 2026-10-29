@@ -399,24 +399,34 @@ func copyTree(src string, dirfd int, name string) error {
 	return nil // device, fifo or socket: not restored into a webspace
 }
 
+// MaxDropped caps the entries prepareTree lists as dropped; the rest are
+// counted in one last entry.
+const MaxDropped = 100
+
 // prepareTree hands the staging tree at root to uid:gid before it goes
 // into home: owners change with Lchown (a symlink itself, never its
 // target), set-user-id and set-group-id bits are cleared from files and
-// directories, fifos and sockets are left out (as on the copy path), and
-// a device node fails the restore, naming it. It counts the regular files
-// and their bytes.
-func prepareTree(root string, uid, gid int) (files int, bytes int64, err error) {
+// directories, and device nodes, fifos and sockets are left out (as on
+// the copy path; a Plesk chroot webspace holds some under dev/ and
+// var/run/). It counts the regular files and their bytes, and lists the
+// entries left out relative to root (at most MaxDropped, then one
+// "... and N more").
+func prepareTree(root string, uid, gid int) (files int, bytes int64, dropped []string, err error) {
+	more := 0
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, _ := filepath.Rel(root, p)
-		switch t := d.Type(); {
-		case t&fs.ModeDevice != 0:
-			return fmt.Errorf("the snapshot holds the device node %s; restores never put device nodes in a webspace, so restore the paths around it instead", rel)
-		case t&(fs.ModeNamedPipe|fs.ModeSocket) != 0:
+		if t := d.Type(); t&(fs.ModeDevice|fs.ModeCharDevice|fs.ModeNamedPipe|fs.ModeSocket) != 0 {
+			rel, _ := filepath.Rel(root, p)
+			if len(dropped) < MaxDropped {
+				dropped = append(dropped, rel)
+			} else {
+				more++
+			}
 			return os.Remove(p)
-		case t.IsRegular():
+		}
+		if d.Type().IsRegular() {
 			fi, err := d.Info()
 			if err != nil {
 				return err
@@ -442,7 +452,10 @@ func prepareTree(root string, uid, gid int) (files int, bytes int64, err error) 
 		}
 		return nil
 	})
-	return files, bytes, err
+	if more > 0 {
+		dropped = append(dropped, fmt.Sprintf("... and %d more", more))
+	}
+	return files, bytes, dropped, err
 }
 
 // statfs is syscall.Statfs; a variable so that tests can stand in a full

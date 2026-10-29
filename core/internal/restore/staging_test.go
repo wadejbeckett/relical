@@ -2,6 +2,7 @@ package restore
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -140,9 +141,12 @@ func TestPrepareTreeDropsSetIDAndSpecialFiles(t *testing.T) {
 	if err := syscall.Mkfifo(filepath.Join(tree, "d", "fifo"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	files, bytes, err := prepareTree(tree, os.Getuid(), os.Getgid())
+	files, bytes, dropped, err := prepareTree(tree, os.Getuid(), os.Getgid())
 	if err != nil || files != 1 || bytes != 1 {
 		t.Fatalf("%d %d %v", files, bytes, err)
+	}
+	if len(dropped) != 1 || dropped[0] != "d/fifo" {
+		t.Errorf("dropped = %q", dropped)
 	}
 	for _, p := range []string{"suid", "d"} {
 		fi, _ := os.Lstat(filepath.Join(tree, p))
@@ -153,7 +157,23 @@ func TestPrepareTreeDropsSetIDAndSpecialFiles(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(tree, "d", "fifo")); !os.IsNotExist(err) {
 		t.Errorf("fifo kept: %v", err)
 	}
-	// Device nodes need root to make; the e2e covers their refusal.
+	// Device nodes need root to make; the e2e covers that they are dropped.
+}
+
+func TestPrepareTreeCapsTheDroppedList(t *testing.T) {
+	tree := t.TempDir()
+	for i := 0; i < MaxDropped+5; i++ {
+		if err := syscall.Mkfifo(filepath.Join(tree, fmt.Sprintf("f%03d", i)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, _, dropped, err := prepareTree(tree, os.Getuid(), os.Getgid())
+	if err != nil || len(dropped) != MaxDropped+1 || dropped[MaxDropped] != "... and 5 more" {
+		t.Fatalf("%d %q %v", len(dropped), dropped[len(dropped)-1], err)
+	}
+	if entries, _ := os.ReadDir(tree); len(entries) != 0 {
+		t.Errorf("%d fifos kept", len(entries))
+	}
 }
 
 func TestRestoreRefusesWithoutFreeSpace(t *testing.T) {
