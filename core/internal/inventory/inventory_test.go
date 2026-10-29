@@ -375,7 +375,7 @@ func TestStaticInventoryMayOmitID(t *testing.T) {
 
 func TestInventoryRejectsCrossSubscriptionPaths(t *testing.T) {
 	b := func(over map[string]any) string {
-		o := map[string]any{"id": "18", "name": "b.example.test", "mail_domains": []string{}}
+		o := map[string]any{"id": "18", "name": "b.example.test", "mail_domains": []string{}, "databases": []map[string]string{{"type": "mysql", "name": "b_wp"}}}
 		for k, v := range over {
 			o[k] = v
 		}
@@ -405,6 +405,35 @@ func TestInventoryRejectsCrossSubscriptionPaths(t *testing.T) {
 		b(map[string]any{"mail_domains": []string{"b.example.test"}}))
 	if _, err := Load(context.Background(), cfgWith(ok)); err != nil {
 		t.Errorf("valid pair refused: %v", err)
+	}
+}
+
+func TestInventoryRejectsForeignAndSystemDatabases(t *testing.T) {
+	b := sub(map[string]any{"id": "18", "name": "b.example.test", "mail_domains": []string{}, "databases": []map[string]string{{"type": "mysql", "name": "b_wp"}}})
+	db := func(name string) map[string]any {
+		return map[string]any{"databases": []map[string]string{{"type": "mysql", "name": name}}}
+	}
+	_, err := Load(context.Background(), cfgWith(list(sub(db("b_wp")), b)))
+	if err == nil || !strings.Contains(err.Error(), "database b_wp (mysql) is also listed by example.test") {
+		t.Errorf("database of another subscription: %v", err)
+	}
+	for _, name := range []string{"mysql", "information_schema", "performance_schema", "sys", "psa", "PSA", "apsc", "horde",
+		"roundcubemail", "atmail", "sitebuilder5", "phpmyadmin", "phpmyadmin_abc123", "phpMyAdmin"} {
+		_, err := Load(context.Background(), cfgWith(list(sub(db(name)))))
+		if err == nil || !strings.Contains(err.Error(), "is a server or panel database") {
+			t.Errorf("system database %s: %v", name, err)
+		}
+	}
+	// Names that only contain a reserved word are customers' own.
+	for _, name := range []string{"psa_shop", "my_sys", "wp_mysql", "horde2"} {
+		if _, err := Load(context.Background(), cfgWith(list(sub(db(name))))); err != nil {
+			t.Errorf("%s refused: %v", name, err)
+		}
+	}
+	// The same name with another type is another database.
+	other := sub(map[string]any{"id": "18", "name": "b.example.test", "mail_domains": []string{}, "databases": []map[string]string{{"type": "postgresql", "name": "example_wp"}}})
+	if _, err := Load(context.Background(), cfgWith(list(sub(nil), other))); err != nil {
+		t.Errorf("same name, other type refused: %v", err)
 	}
 }
 

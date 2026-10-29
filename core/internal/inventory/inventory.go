@@ -446,6 +446,8 @@ func validateSubscription(cfg *config.Config, s *Subscription, requireID bool) [
 		}
 		if !dbNameRE.MatchString(d.Name) {
 			add(fmt.Sprintf("databases[%d].name", i), fmt.Errorf("%q must be 1-64 of A-Z a-z 0-9 _ $ -", d.Name))
+		} else if reservedDB(d.Name) {
+			add(fmt.Sprintf("databases[%d].name", i), fmt.Errorf("%q is a server or panel database and never belongs to a subscription", d.Name))
 		} else if dbs[d.Type+"/"+d.Name] {
 			add(fmt.Sprintf("databases[%d].name", i), fmt.Errorf("%q is listed twice", d.Name))
 		}
@@ -490,6 +492,21 @@ func validateServer(s *Server) []error {
 	return errs
 }
 
+// reservedDatabases are MySQL's and Plesk's own databases. The dump runs
+// with the administrator's credentials, so a subscription listing one of
+// them would get a copy of every customer's data.
+var reservedDatabases = map[string]bool{
+	"mysql": true, "information_schema": true, "performance_schema": true, "sys": true,
+	"psa": true, "apsc": true, "horde": true, "roundcubemail": true, "atmail": true, "sitebuilder5": true,
+}
+
+// reservedDB reports whether name is a reserved database (compared
+// case-insensitively, as MySQL does on case-insensitive file systems).
+func reservedDB(name string) bool {
+	n := strings.ToLower(name)
+	return reservedDatabases[n] || strings.HasPrefix(n, "phpmyadmin")
+}
+
 // within reports whether p is dir or lies under it.
 func within(p, dir string) bool { return p == dir || strings.HasPrefix(p, dir+"/") }
 
@@ -512,7 +529,7 @@ func orEmpty[T any](v []T) []T {
 func validate(cfg *config.Config, subs []Subscription, server *Server, requireID bool) (Inventory, error) {
 	inv := Inventory{Version: config.Version, Subscriptions: []Subscription{}, Server: server, Renamed: []Rename{}, Skipped: []Skip{}}
 	var errs []error
-	names, ids, mailOwner := map[string]bool{}, map[string]string{}, map[string]string{}
+	names, ids, mailOwner, dbOwner := map[string]bool{}, map[string]string{}, map[string]string{}, map[string]string{}
 	for i := range subs {
 		s := subs[i]
 		label := fmt.Sprintf("subscription %s", s.Name)
@@ -542,6 +559,13 @@ func validate(cfg *config.Config, subs []Subscription, server *Server, requireID
 				errs = append(errs, fmt.Errorf("%s: mail domain %s is also listed by %s", label, d, other))
 			}
 			mailOwner[d] = s.Name
+		}
+		for _, d := range s.Databases {
+			k := d.Type + "/" + d.Name
+			if other, ok := dbOwner[k]; ok && other != s.Name {
+				errs = append(errs, fmt.Errorf("%s: database %s (%s) is also listed by %s", label, d.Name, d.Type, other))
+			}
+			dbOwner[k] = s.Name
 		}
 		s.Features = orEmpty(s.Features)
 		s.MailDomains = orEmpty(s.MailDomains)
