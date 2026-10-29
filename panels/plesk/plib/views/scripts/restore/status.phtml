@@ -1,0 +1,67 @@
+<?php
+/** @var pm_View $this */
+$e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+echo $this->render('restore/_style.phtml');
+$r = $this->restore;
+?>
+<?php if ($r['refresh'] && $this->refreshUrl !== ''): ?>
+<meta http-equiv="refresh" content="<?php echo $e($this->refreshSeconds); ?>;url=<?php echo $e($this->refreshUrl); ?>">
+<?php endif; ?>
+
+<?php if ($r['state'] === 'starting' || $r['state'] === 'running'): ?>
+<p>
+    The restore is running. This page reloads itself every
+    <?php echo $e($this->refreshSeconds); ?> seconds until it has finished;
+    a large website can take a while. You can also leave this page: the
+    restore carries on.
+</p>
+<p><a class="relical-button" href="<?php echo $e($this->refreshUrl); ?>">Reload now</a></p>
+<?php if ($this->readError !== ''): ?>
+<p class="relical-muted"><?php echo $e($this->readError); ?></p>
+<?php endif; ?>
+
+<?php elseif ($r['state'] === 'done'): ?>
+<p class="relical-ok"><strong>The restore has finished.</strong> Nothing live was changed.</p>
+<?php if ($r['unit'] === 'mail'): ?>
+<p>
+    The messages are in the new folder <code><?php echo $e($r['location']); ?></code>
+    of <code><?php echo $e(($r['request']['mailbox'] ?? '') . '@' . ($r['request']['domain'] ?? '')); ?></code><?php echo $r['count'] !== '' ? ' (' . $e($r['count']) . ')' : ''; ?>.
+    Open it in webmail or any mail program; your mail program may need to
+    refresh its folder list (or subscribe to the folder) before it shows.
+    Move back what you need, then delete the folder.
+</p>
+<?php elseif ($r['unit'] === 'files'): ?>
+<p>
+    The files are in the folder <code><?php echo $e($r['location']); ?></code>
+    in the subscription's home directory<?php echo $r['count'] !== '' ? ' (' . $e($r['count']) . ')' : ''; ?>.
+    Open it in Plesk's File Manager (one level above <code>httpdocs</code>),
+    copy back what you need, then delete the folder. The website does not
+    serve this folder.
+</p>
+<?php else: ?>
+<p>
+    The database dump is the file <code><?php echo $e($r['location']); ?></code>
+    in the subscription's home directory<?php echo $r['count'] !== '' ? ' (' . $e($r['count']) . ')' : ''; ?>.
+    To use it, download it with the File Manager and import it with
+    phpMyAdmin (Databases, then phpMyAdmin, then Import), preferably into a
+    new, empty database first. Importing it into the live database replaces
+    that database's tables. Delete the file when you are done.
+</p>
+<?php endif; ?>
+
+<?php elseif ($r['state'] === 'failed'): ?>
+<p class="relical-error"><strong>The restore did not complete.</strong> <?php echo $e($r['error']); ?></p>
+
+<?php else: ?>
+<p>
+    No restore with this reference was found for this subscription. If it
+    was started a few minutes ago, it did not start: go back to the backups
+    and start it again. If that keeps happening, contact your hosting
+    provider and quote the reference below.
+</p>
+<?php endif; ?>
+
+<?php if ($this->id !== ''): ?>
+<p class="relical-muted">Reference: <code><?php echo $e($this->id); ?></code></p>
+<?php endif; ?>
+<p><a href="<?php echo $e($this->backUrl); ?>">Back to the backups</a></p>

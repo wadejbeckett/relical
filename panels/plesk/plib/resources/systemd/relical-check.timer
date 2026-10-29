@@ -1,0 +1,12 @@
+# Installed by the Relical Backup extension for Plesk. The time is twelve
+# hours after the nightly backup time in the extension's settings.
+[Unit]
+Description=Relical weekly repository check (Sunday {check_time} server local time)
+
+[Timer]
+OnCalendar=Sun *-*-* {check_time}:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<module>
+    <id>relical</id>
+    <name>Relical Backup</name>
+    <description>Relical backs up each subscription's mail, website files and databases, plus the Plesk configuration, into encrypted restic repositories, and restores them beside the live data without overwriting it.</description>
+    <category>backup</category>
+    <version>0.2.0</version>
+    <release>1</release>
+    <vendor>Wade John Beckett</vendor>
+    <vendorUrl>https://github.com/wadejbeckett/relical</vendorUrl>
+    <url>https://github.com/wadejbeckett/relical</url>
+    <plesk_min_version>18.0.55</plesk_min_version>
+    <os>unix</os>
+</module>

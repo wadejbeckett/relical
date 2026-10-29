@@ -1,0 +1,20 @@
+{
+  "generated": "2026-10-29T06:00:00Z",
+  "subscriptions": 3,
+  "ok": 7,
+  "failed": 1,
+  "skipped": 0,
+  "stored_bytes": 1536,
+  "rows": [
+    {"subscription": "example.test", "unit": "mail", "ok": true, "time": "2026-10-29T01:00:09Z", "error": "", "stored_bytes": 1024},
+    {"subscription": "example.test", "unit": "db:example_wp", "ok": false, "time": "2026-10-29T01:03:00Z", "error": "mysqldump: exit 2", "stored_bytes": 1024},
+    {"subscription": "other.example.test", "unit": "files", "ok": true, "time": "2026-10-26T01:02:00Z", "error": "", "stored_bytes": 512}
+  ],
+  "renamed": [
+    {"name": "new.example.test", "renamed_from": "old.example.test", "note": "backups go to a new repository; the old one is kept"}
+  ],
+  "warnings": [
+    "other.example.test files: the last backup (2026-10-26T01:02:00Z) is older than 48 hours",
+    "example.test: backed up since 2026-10-20T01:00:00Z but never checked"
+  ]
+}

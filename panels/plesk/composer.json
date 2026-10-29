@@ -1,0 +1,30 @@
+{
+    "name": "noiz/relical-plesk",
+    "description": "Relical Backup: Plesk extension. Panel adapter over the panel-agnostic relical core binary.",
+    "type": "project",
+    "license": "GPL-3.0-or-later",
+    "keywords": ["backup", "restic", "plesk"],
+    "require": {
+        "php": ">=8.1",
+        "ext-json": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.6"
+    },
+    "autoload": {
+        "psr-4": {
+            "Noiz\\Relical\\": "plib/library/Relical/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Noiz\\Relical\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "config": {
+        "sort-packages": true
+    }
+}

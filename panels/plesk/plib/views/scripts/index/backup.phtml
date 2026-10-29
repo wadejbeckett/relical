@@ -1,0 +1,9 @@
+<?php
+/** @var pm_View $this */
+$e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+?>
+<p>Back up <strong><?php echo $e($this->what); ?></strong> now, in the background.</p>
+<?php if ($this->running): ?>
+<p>A backup run is in progress at the moment. Wait until it has finished; a second run cannot start while it holds the lock.</p>
+<?php endif; ?>
+<?php echo $this->form; ?>

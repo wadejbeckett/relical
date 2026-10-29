@@ -1,0 +1,17 @@
+<?php
+/** @var pm_View $this */
+$e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+?>
+<p>
+    The repository key of <strong><?php echo $e($this->subscription); ?></strong>
+    has no recorded owner, so Relical stopped backing it up rather than
+    write into a repository that might belong to another subscription of the
+    same name (for example one that was deleted and created again).
+</p>
+<p>
+    Adopting records this subscription's Plesk id with the key. Do it only if
+    the repository is this subscription's own: from then on its backups go
+    into the existing repository, beside the restore points already there.
+    Nothing else is changed.
+</p>
+<?php echo $this->form; ?>

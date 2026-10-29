@@ -1,0 +1,22 @@
+# Installed by the Relical Backup extension for Plesk; rewritten on every
+# install and upgrade, so local changes belong in a drop-in
+# (systemctl edit relical-backup.service).
+[Unit]
+Description=Relical nightly backup
+After=network-online.target
+Wants=network-online.target
+# Until the destination is saved in the extension's settings there is no
+# configuration, and the run is skipped rather than failed.
+ConditionPathExists=/etc/relical/config.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/relical/relical -config /etc/relical/config.json backup --all
+# Retention runs after every backup run, whatever its result: ExecStartPost=
+# would be skipped when one subscription's backup fails, and then no old
+# snapshots would ever be pruned. ExecStopPost= runs regardless of result
+# (the unit still records the backup's failure).
+ExecStopPost=/usr/local/lib/relical/relical -config /etc/relical/config.json forget --all
+# ExecStopPost= is bounded by TimeoutStopSec= (default 90s), which a prune
+# can easily exceed.
+TimeoutStopSec=infinity

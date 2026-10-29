@@ -1,0 +1,21 @@
+<?php
+/** @var pm_View $this */
+$e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+echo $this->render('restore/_style.phtml');
+?>
+<p>
+    The messages from the restore point go into a new folder in the mailbox,
+    named after the restore point (for example
+    <code>Restored 2026-10-28 1a2b3c4d</code>). The existing folders and
+    messages are not touched. Open the new folder in webmail or any mail
+    program and move back what you need.
+</p>
+<?php if ($this->error !== ''): ?>
+<p class="relical-error"><?php echo $e($this->error); ?></p>
+<?php elseif (!empty($this->empty)): ?>
+<p class="relical-muted">There is nothing to restore yet: no mail backup or no mailbox in this subscription.</p>
+<?php endif; ?>
+<?php if ($this->form !== null): ?>
+<?php echo $this->form; ?>
+<?php endif; ?>
+<p><a href="<?php echo $e($this->backUrl); ?>">Back to the backups</a></p>

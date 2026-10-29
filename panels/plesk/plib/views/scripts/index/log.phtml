@@ -1,0 +1,13 @@
+<?php
+/** @var pm_View $this */
+$e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+?>
+<p><a href="<?php echo $e($this->backUrl); ?>">Back to the settings</a></p>
+<?php if ($this->logError !== ''): ?>
+<p>The log could not be read: <?php echo $e($this->logError); ?></p>
+<?php elseif (!$this->logExists): ?>
+<p>There is no log yet: <code><?php echo $e($this->logPath); ?></code> is written by the first backup run.</p>
+<?php else: ?>
+<p>The last <?php echo count($this->lines); ?> lines of <code><?php echo $e($this->logPath); ?></code>:</p>
+<pre style="white-space: pre-wrap; background: #f6f6f6; border: 1px solid #e0e0e0; padding: 8px 10px; max-height: 600px; overflow: auto;"><?php echo $e(implode("\n", $this->lines)); ?></pre>
+<?php endif; ?>
