@@ -81,6 +81,7 @@ func (e Env) BackupPanelConfig(ctx context.Context) Result {
 		return failed(res, err)
 	}
 	env := []string{"PATH=" + os.Getenv("PATH")}
+	var secret string
 	if srv.Encrypt() {
 		kp, err := keys.Path(e.Cfg.KeysDir, sub.Name)
 		if err != nil {
@@ -90,7 +91,8 @@ func (e Env) BackupPanelConfig(ctx context.Context) Result {
 		if err != nil {
 			return failed(res, err)
 		}
-		env = append(env, "PLESK_BACKUP_PASSWORD="+strings.TrimSpace(string(b)))
+		secret = strings.TrimSpace(string(b))
+		env = append(env, "PLESK_BACKUP_PASSWORD="+secret)
 	}
 	out := filepath.Join(staging, fmt.Sprintf("%s%s.%s", stagingPrefix, e.Now().UTC().Format("20060102T150405Z"), srv.ConfigExt))
 	// Whatever happens below, the unencrypted file does not outlive the run.
@@ -99,7 +101,7 @@ func (e Env) BackupPanelConfig(ctx context.Context) Result {
 	for i, a := range srv.ConfigCommand {
 		argv[i] = strings.ReplaceAll(a, "{output}", out)
 	}
-	if err := runConfigCommand(ctx, argv, env); err != nil {
+	if err := runConfigCommand(ctx, argv, env, secret); err != nil {
 		return failed(res, err)
 	}
 	fi, err := os.Lstat(out)
@@ -161,10 +163,11 @@ func (e Env) CleanStaging() error {
 	return nil
 }
 
-// runConfigCommand runs argv with env only, in its own process group, so
+// runConfigCommand runs argv with env only (secret, when not empty, is
+// replaced by *** in the stderr it reports), in its own process group, so
 // that a timeout or an interrupted run kills the whole group (the panel's
 // backup tool starts children of its own).
-func runConfigCommand(ctx context.Context, argv, env []string) error {
+func runConfigCommand(ctx context.Context, argv, env []string, secret string) error {
 	ctx, cancel := context.WithTimeout(ctx, PanelConfigTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
@@ -181,6 +184,11 @@ func runConfigCommand(ctx context.Context, argv, env []string) error {
 		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 	msg := strings.TrimSpace(stderr.String())
+	if secret != "" {
+		// The tail goes into the result, state and the report: never the
+		// key, should the command print its PLESK_BACKUP_PASSWORD.
+		msg = strings.ReplaceAll(msg, secret, "***")
+	}
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:
 		return fmt.Errorf("config_command: timed out after %s and was killed: %s", PanelConfigTimeout, msg)

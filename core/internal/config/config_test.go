@@ -300,3 +300,24 @@ func TestMailFolderPrefix(t *testing.T) {
 }
 
 func strconvQuote(s string) string { b, _ := json.Marshal(s); return string(b) }
+
+// As root, config.json must be root's: its owner chooses the commands
+// relical runs as root.
+func TestLoadRefusesAConfigNotOwnedByRoot(t *testing.T) {
+	b, err := os.ReadFile("../../../packaging/config.example.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := write(t, string(b), 0o600)
+	old := asRoot
+	asRoot = func() bool { return true }
+	t.Cleanup(func() { asRoot = old })
+	_, err = Load(p)
+	if os.Getuid() != 0 && (err == nil || !strings.Contains(err.Error(), "is not owned by root")) {
+		t.Fatalf("err = %v", err)
+	}
+	asRoot = func() bool { return false }
+	if _, err := Load(p); err != nil {
+		t.Fatal(err)
+	}
+}

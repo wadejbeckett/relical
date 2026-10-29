@@ -13,7 +13,7 @@ import (
 
 const fakeRestic = `#!/bin/sh
 echo "$*" >> "$FAKE_LOG"
-env | grep -E '^RESTIC_' | sort >> "$FAKE_LOG.env"
+env | grep -E '^(RESTIC_|TMPDIR=)' | sort >> "$FAKE_LOG.env"
 [ -n "$RESTIC_PASSWORD" ] && echo "LEAKED RESTIC_PASSWORD" >> "$FAKE_LOG"
 # Skip the global flags. Every global flag the runner passes takes a value
 # (-o, --limit-upload, --retry-lock); a boolean one would need its own case.

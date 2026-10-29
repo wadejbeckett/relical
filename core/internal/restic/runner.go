@@ -70,6 +70,9 @@ type Runner struct {
 	LimitUploadKiB int
 	LowPriority    bool
 	SftpArgs       string // passed as -o sftp.args=... when set
+	// TmpDir is restic's TMPDIR (check without --with-cache builds a
+	// temporary cache there), when set.
+	TmpDir string
 }
 
 type BackupSummary struct {
@@ -223,6 +226,9 @@ func (r Runner) command(ctx context.Context, args ...string) *exec.Cmd {
 		"RESTIC_REPOSITORY=" + r.Repository,
 		"RESTIC_PASSWORD_FILE=" + r.PasswordFile,
 		"RESTIC_CACHE_DIR=" + r.CacheDir,
+	}
+	if r.TmpDir != "" {
+		cmd.Env = append(cmd.Env, "TMPDIR="+r.TmpDir)
 	}
 	for k, v := range r.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)

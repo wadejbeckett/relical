@@ -35,6 +35,7 @@ Phase 2: full backup per hosting subscription, and the core the Plesk extension 
 - `snapshots`, `ls`, restores, `dump` and `stats` wait up to 2 minutes for a repository lock (`--retry-lock 2m`), and restic's exit 11 reads "the backup is being checked or pruned, try again in a few minutes". `check --all` waits up to 2 hours for Relical's run lock instead of failing at once. Retention still prunes every night.
 - `report` warns about each unit the inventory covers that has never been backed up, and leaves out the rows of units it no longer covers (a dropped database, a removed subscription): those are reported once, within 48 hours of their last backup, as "no longer backed up", instead of a stale-backup warning every day.
 - A files or database restore refused because a root-owned partial folder from an interrupted restore on the fallback path is in the way says to ask the server's administrator to remove it.
+- As root, `config.json` must be owned by root. `config_command`'s stderr in an error has the `_server` key replaced by `***`. The mail backup passes `--group-by host,tags`, so a new or removed mailbox does not make restic read all the subscription's mail again. restic runs with `TMPDIR=<state_dir>/tmp`.
 - In `--all` runs, a destination that three subscriptions in a row could not connect to is given up on: the rest fail at once with "destination NAME unreachable; not tried". `relical-backup.service` has `TimeoutStartSec=20h` as a last resort.
 
 ### Changed

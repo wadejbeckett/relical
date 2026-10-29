@@ -225,7 +225,8 @@ func (r Result) StateKey() string {
 
 // Prepare creates the state directories. state_dir and restore/ are 0711
 // so that doveadm, running as the mail user, can reach its own staging
-// directory; cache/ and staging/ (the panel configuration) are 0700. As
+// directory; cache/, tmp/ (restic's TMPDIR) and staging/ (the panel
+// configuration) are 0700. As
 // root, it also creates the restore staging directory in each files root
 // (see RestoreStagingName).
 func (e Env) Prepare() error {
@@ -235,6 +236,7 @@ func (e Env) Prepare() error {
 	}{
 		{e.Cfg.StateDir, 0o711},
 		{filepath.Join(e.Cfg.StateDir, "cache"), 0o700},
+		{filepath.Join(e.Cfg.StateDir, "tmp"), 0o700},
 		{filepath.Join(e.Cfg.StateDir, "restore"), 0o711},
 		{e.StagingDir(), 0o700},
 	} {
@@ -296,6 +298,7 @@ func (e Env) runnerWithKey(sub inventory.Subscription, keyPath string) (restic.R
 		Bin: e.Cfg.ResticBin, Repository: dst.Repository, PasswordFile: keyPath, Env: env,
 		Host: e.Cfg.ServerID, CacheDir: filepath.Join(e.Cfg.StateDir, "cache"),
 		LimitUploadKiB: e.Cfg.LimitUploadKiB, LowPriority: e.Cfg.LowPriority, SftpArgs: dst.SftpArgs,
+		TmpDir: filepath.Join(e.Cfg.StateDir, "tmp"),
 	}, dst, nil
 }
 

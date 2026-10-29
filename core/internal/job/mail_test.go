@@ -120,3 +120,23 @@ func TestBackupMailWithoutMailboxesIsANote(t *testing.T) {
 		t.Errorf("restic ran:\n%s", log())
 	}
 }
+
+// The mail backup picks its parent by host and tags, so adding or
+// removing a mailbox does not make restic read all the mail again; restic
+// gets its own TMPDIR in the state directory.
+func TestBackupMailGroupsByHostAndTags(t *testing.T) {
+	e, env, log := setup(t, "local")
+	if r := e.BackupMail(context.Background(), mustSub(t, e, "example.test")); !r.OK {
+		t.Fatalf("%+v", r)
+	}
+	if !strings.Contains(log(), "backup --json --host host.example.test --one-file-system --group-by host,tags --tag mail") {
+		t.Errorf("%s", log())
+	}
+	tmp := filepath.Join(e.Cfg.StateDir, "tmp")
+	if b, _ := os.ReadFile(env["FAKE_LOG"] + ".env"); !strings.Contains(string(b), "TMPDIR="+tmp+"\n") {
+		t.Errorf("restic's env: %s", b)
+	}
+	if fi, err := os.Stat(tmp); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("%s: %v %v", tmp, fi, err)
+	}
+}

@@ -64,7 +64,11 @@ func (e Env) BackupMail(ctx context.Context, sub inventory.Subscription) Result 
 		p := GlobEscape(b.Path)
 		excludes = append(excludes, p+"/tmp/*", p+"/.*/tmp/*")
 	}
-	sum, err := r.Backup(ctx, paths, []string{MailTag}, excludes)
+	// The parent snapshot is the last mail snapshot of this host, whatever
+	// its paths: restic's default grouping (host and paths) would read and
+	// hash all of the subscription's mail again whenever a mailbox is
+	// added or removed.
+	sum, err := r.Backup(ctx, paths, []string{MailTag}, excludes, "--group-by", "host,tags")
 	res = saved(res, sum, err)
 	if res.OK {
 		res.Mailboxes = len(boxes)

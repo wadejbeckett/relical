@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 )
 
 // Version is the configuration format this build reads.
@@ -105,6 +106,10 @@ func (c *Config) HasStaticInventory() bool { return present(c.Subscriptions) }
 // HasServer reports whether the config has a server section.
 func (c *Config) HasServer() bool { return present(c.Server) }
 
+// asRoot reports whether relical runs as root; a variable so that tests
+// can check the owner rule without root.
+var asRoot = func() bool { return os.Geteuid() == 0 }
+
 func Load(path string) (*Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -117,6 +122,13 @@ func Load(path string) (*Config, error) {
 	}
 	if st.Mode().Perm()&0o077 != 0 {
 		return nil, fmt.Errorf("%s: mode %04o is readable by others; chmod 600", path, st.Mode().Perm())
+	}
+	// Whoever owns the file chooses inventory_command and config_command,
+	// which run as root.
+	if asRoot() {
+		if sys, ok := st.Sys().(*syscall.Stat_t); !ok || sys.Uid != 0 {
+			return nil, fmt.Errorf("%s is not owned by root; chown root %s", path, path)
+		}
 	}
 	dec := json.NewDecoder(f)
 	dec.DisallowUnknownFields()

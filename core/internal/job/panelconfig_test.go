@@ -377,3 +377,16 @@ func TestForgetAndCheckServerRepository(t *testing.T) {
 		t.Errorf("%s", l)
 	}
 }
+
+// A config_command that prints its PLESK_BACKUP_PASSWORD on stderr: the
+// key is replaced by *** in the error, and so in state and the report.
+func TestPanelConfigStderrNeverHoldsTheKey(t *testing.T) {
+	e, _, _ := setup(t, "local")
+	withServer(t, &e, `echo "pleskbackup: bad password $PLESK_BACKUP_PASSWORD" >&2; exit 1`)
+	r := e.BackupPanelConfig(context.Background())
+	key, _ := os.ReadFile(filepath.Join(e.Cfg.KeysDir, "_server.key"))
+	k := strings.TrimSpace(string(key))
+	if r.OK || len(k) == 0 || strings.Contains(r.Error, k) || !strings.Contains(r.Error, "bad password ***") {
+		t.Errorf("%+v", r)
+	}
+}
