@@ -46,6 +46,8 @@ func panelConfigPath(snap restic.Snapshot) (string, error) {
 // restores it with the panel's own tool.
 func RunPanelConfig(ctx context.Context, env job.Env, req PanelConfigRequest) (PanelConfigResult, error) {
 	res := PanelConfigResult{Subscription: req.Subscription, Unit: job.PanelConfigTag}
+	// Best effort: a failure here never stops this restore.
+	_ = CleanStale(env.Cfg, env.Now())
 	if req.Subscription != config.ServerName {
 		return res, fmt.Errorf("the panel configuration is restored from --subscription %s", config.ServerName)
 	}

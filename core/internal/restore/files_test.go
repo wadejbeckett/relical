@@ -108,8 +108,9 @@ func TestRestoreFilesHappyPath(t *testing.T) {
 		!strings.Contains(l, "--include "+home(e)+"/httpdocs") {
 		t.Errorf("restic args:\n%s", l)
 	}
-	if entries, _ := os.ReadDir(filepath.Join(e.Cfg.StateDir, "restore")); len(entries) != 0 {
-		t.Errorf("staging left behind: %v", entries)
+	noStaging(t, e)
+	if fi, err := os.Stat(job.RestoreStagingDir(e.Cfg.Roots.Files[0])); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("restore staging: %v %v", fi, err)
 	}
 }
 
@@ -170,6 +171,7 @@ func TestRestoreFilesTargetInsideWebspace(t *testing.T) {
 		{name: "absolute", path: "/etc", want: "relative"},
 		{name: "option", path: "-x", want: "must not start with -"},
 		{name: "control", path: "a\nb", want: "control characters"},
+		{name: "too long", path: strings.Repeat("a/", 2048) + "a", want: "too long"},
 		{name: "symlinked home", want: "is a symlink", setup: func(t *testing.T, e *job.Env) {
 			h := home(*e)
 			os.Rename(h, h+".real")
@@ -235,8 +237,17 @@ func TestRestoreFilesRefusesServerAndUnknown(t *testing.T) {
 	}
 }
 
+// noRenameat2 makes renameat2 fail with err (EXDEV: home on another file
+// system than the staging; ENOSYS: an old kernel), forcing the mkdir path.
+func noRenameat2(t *testing.T, err error) {
+	old := renameat2
+	renameat2 = func(int, string, int, string, uint) error { return err }
+	t.Cleanup(func() { renameat2 = old })
+}
+
 func TestRestoreFilesAcrossFileSystems(t *testing.T) {
 	e, _, _ := webSetup(t)
+	noRenameat2(t, syscall.EXDEV)
 	old := renameat
 	renameat = func(int, string, int, string) error { return syscall.EXDEV }
 	t.Cleanup(func() { renameat = old })
@@ -251,8 +262,19 @@ func TestRestoreFilesAcrossFileSystems(t *testing.T) {
 	if fi, _ := os.Stat(filepath.Join(res.RestoredTo, "httpdocs", "index.html")); fi.Mode().Perm() != 0o640 {
 		t.Errorf("mode not kept: %v", fi.Mode())
 	}
-	if entries, _ := os.ReadDir(filepath.Join(e.Cfg.StateDir, "restore")); len(entries) != 0 {
-		t.Errorf("staging left behind: %v", entries)
+	if fi, _ := os.Stat(res.RestoredTo); fi.Mode().Perm() != 0o700 {
+		t.Errorf("restored folder mode %v", fi.Mode())
+	}
+	noStaging(t, e)
+}
+
+// noStaging fails when a restore left staging behind.
+func noStaging(t *testing.T, e job.Env) {
+	t.Helper()
+	for _, d := range []string{filepath.Join(e.Cfg.StateDir, "restore"), job.RestoreStagingDir(e.Cfg.Roots.Files[0])} {
+		if entries, _ := os.ReadDir(d); len(entries) != 0 {
+			t.Errorf("staging left behind in %s: %v", d, entries)
+		}
 	}
 }
 

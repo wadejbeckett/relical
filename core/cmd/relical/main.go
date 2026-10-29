@@ -329,6 +329,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (code int
 	if err := env.CleanStaging(); err != nil {
 		return emit(stdout, nil, err)
 	}
+	if cmd == "backup" && *all {
+		if err := restore.CleanStale(cfg, env.Now()); err != nil {
+			fmt.Fprintln(stderr, "warning:", err)
+		}
+	}
 	results := []job.Result{}
 	switch {
 	case cmd == "backup" && *all:

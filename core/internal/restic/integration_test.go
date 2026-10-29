@@ -444,3 +444,43 @@ func TestRealDumpStreams(t *testing.T) {
 		t.Fatalf("dump of a missing file: %v", err)
 	}
 }
+
+// TestRealRestoreIncludeSiblingsAndEscapes pins what restore's include
+// patterns rely on: a directory include leaves a sibling with the same
+// prefix alone, and an escaped [ matches itself (job.GlobEscape).
+func TestRealRestoreIncludeSiblingsAndEscapes(t *testing.T) {
+	ctx := context.Background()
+	r := realRunner(t, filepath.Join(t.TempDir(), "repo"))
+	if err := r.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(t.TempDir(), "example.test")
+	for _, d := range []string{"httpdocs", "httpdocs2", "a[b]", "ab"} {
+		os.MkdirAll(filepath.Join(home, d), 0o750)
+		os.WriteFile(filepath.Join(home, d, "f"), []byte(d), 0o600)
+	}
+	sum, err := r.Backup(ctx, []string{home}, []string{"files"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for include, want := range map[string]string{
+		home + "/httpdocs": "httpdocs",
+		home + `/a\[b]`:    "a[b]",
+	} {
+		target := t.TempDir()
+		if err := r.Restore(ctx, sum.SnapshotID, target, []string{include}); err != nil {
+			t.Fatal(err)
+		}
+		entries, _ := os.ReadDir(filepath.Join(target, home))
+		if len(entries) != 1 || entries[0].Name() != want {
+			t.Errorf("include %s restored %v, want only %s", include, entries, want)
+		}
+	}
+	// The restore size of the whole snapshot and of one path.
+	if n, err := r.RestoreSize(ctx, sum.SnapshotID, ""); err != nil || n < 8 {
+		t.Errorf("whole snapshot: %d %v", n, err)
+	}
+	if n, err := r.RestoreSize(ctx, sum.SnapshotID, home+"/httpdocs2"); err != nil || n != uint64(len("httpdocs2")) {
+		t.Errorf("httpdocs2: %d %v", n, err)
+	}
+}

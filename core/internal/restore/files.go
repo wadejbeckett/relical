@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/wadejbeckett/relical/core/internal/config"
 	"github.com/wadejbeckett/relical/core/internal/inventory"
@@ -49,6 +48,8 @@ func subscription(env job.Env, name string) (inventory.Subscription, error) {
 // folder exists.
 func RunFiles(ctx context.Context, env job.Env, req FilesRequest) (FilesResult, error) {
 	res := FilesResult{Subscription: req.Subscription, Unit: job.FilesTag, Path: req.Path}
+	// Best effort: a failure here never stops this restore.
+	_ = CleanStale(env.Cfg, env.Now())
 	if !snapshotRE.MatchString(req.Snapshot) {
 		return res, fmt.Errorf("snapshot must be latest or 8-64 hex characters, got %q", req.Snapshot)
 	}
@@ -99,8 +100,17 @@ func RunFiles(ctx context.Context, env job.Env, req FilesRequest) (FilesResult, 
 		return res, fmt.Errorf("path %q is not in snapshot %s", req.Path, snap.Short())
 	}
 
-	stage := filepath.Join(env.Cfg.StateDir, "restore", fmt.Sprintf("files-%s-%s", sub.Name, env.Now().UTC().Format("20060102T150405.000000000Z")))
-	if err := os.Mkdir(stage, 0o700); err != nil {
+	// A files snapshot holds only paths in home, so the whole webspace is
+	// the whole snapshot.
+	sizePath := ""
+	if req.Path != "" {
+		sizePath = src
+	}
+	if err := ws.ensureSpace(ctx, r, snap.ID, sizePath); err != nil {
+		return res, err
+	}
+	stage, err := ws.stage(sub.Name + "-" + snap.Short())
+	if err != nil {
 		return res, err
 	}
 	defer os.RemoveAll(stage)
@@ -116,23 +126,19 @@ func RunFiles(ctx context.Context, env job.Env, req FilesRequest) (FilesResult, 
 	} else if !fi.IsDir() {
 		return res, fmt.Errorf("snapshot %s holds %s as a %s, not a directory", snap.Short(), ws.home, fi.Mode().Type())
 	}
-	// Hand the copy to the user while it is still in root-only staging.
-	if res.Files, res.Bytes, err = chownTree(tree, ws.uid, ws.gid); err != nil {
+	// The finished folder, built and handed to the user while it is
+	// still in root-only staging, then moved into home in one step.
+	built := filepath.Join(stage, name)
+	if err := os.Rename(tree, built); err != nil {
 		return res, err
 	}
-	dirfd, err := ws.mkdir(name)
-	if err != nil {
+	if res.Files, res.Bytes, err = prepareTree(built, ws.uid, ws.gid); err != nil {
 		return res, err
 	}
-	defer syscall.Close(dirfd)
-	err = moveInto(tree, dirfd)
-	if err == nil {
-		err = ws.finish(dirfd)
+	if err := os.Chmod(built, 0o700); err != nil {
+		return res, err
 	}
-	if err != nil {
-		if derr := ws.discard(name); derr != nil {
-			return res, fmt.Errorf("%v; removing the partial %s also failed: %v", err, res.RestoredTo, derr)
-		}
+	if err := ws.place(stage, name); err != nil {
 		return res, err
 	}
 	return res, nil

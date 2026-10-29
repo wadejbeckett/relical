@@ -148,6 +148,8 @@ func subscriptionFor(env job.Env, req Request) (inventory.Subscription, error) {
 
 func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 	res := Result{Subscription: req.Subscription, Unit: job.MailTag, Domain: req.Domain, Mailbox: req.Mailbox}
+	// Best effort: a failure here never stops this restore.
+	_ = CleanStale(env.Cfg, env.Now())
 	if !snapshotRE.MatchString(req.Snapshot) {
 		return res, fmt.Errorf("snapshot must be latest or 8-64 hex characters, got %q", req.Snapshot)
 	}

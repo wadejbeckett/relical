@@ -295,6 +295,63 @@ func (r Runner) Stats(ctx context.Context) (uint64, error) {
 	return *s.TotalSize, nil
 }
 
+// RestoreSize estimates the bytes a restore of snapshotID would write:
+// for the whole snapshot, restic stats --mode restore-size; for a path
+// (restic stats has no subtree filter: its --path selects snapshots), the
+// sum of the file sizes restic ls --recursive lists under it.
+func (r Runner) RestoreSize(ctx context.Context, snapshotID, path string) (uint64, error) {
+	if path == "" {
+		out, err := r.run(ctx, "stats", "--mode", "restore-size", "--json", snapshotID)
+		if err != nil {
+			return 0, err
+		}
+		var s struct {
+			TotalSize *uint64 `json:"total_size"`
+		}
+		if err := json.Unmarshal(out, &s); err != nil || s.TotalSize == nil {
+			return 0, fmt.Errorf("restic stats: no total_size in the output (%v)", err)
+		}
+		return *s.TotalSize, nil
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := r.command(ctx, "ls", "--json", "--recursive", snapshotID, path)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return 0, err
+	}
+	if err := cmd.Start(); err != nil {
+		return 0, err
+	}
+	var total uint64
+	sc := bufio.NewScanner(out)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for sc.Scan() {
+		var n struct {
+			MessageType string `json:"message_type"`
+			Type        string `json:"type"`
+			Size        uint64 `json:"size"`
+		}
+		if json.Unmarshal(sc.Bytes(), &n) == nil && n.MessageType == "node" && n.Type == "file" {
+			total += n.Size
+		}
+	}
+	serr := sc.Err()
+	if serr != nil {
+		cancel()
+		io.Copy(io.Discard, out)
+	}
+	if err := cmd.Wait(); err != nil && serr == nil {
+		return 0, fmt.Errorf("restic ls: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	if serr != nil {
+		return 0, fmt.Errorf("restic ls: %w", serr)
+	}
+	return total, nil
+}
+
 func (r Runner) Check(ctx context.Context, readDataSubset string) error {
 	args := []string{"check"}
 	if readDataSubset != "" {

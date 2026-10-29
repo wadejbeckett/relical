@@ -80,7 +80,9 @@ func (r Result) StateKey() string {
 
 // Prepare creates the state directories. state_dir and restore/ are 0711
 // so that doveadm, running as the mail user, can reach its own staging
-// directory; cache/ and staging/ (the panel configuration) are 0700.
+// directory; cache/ and staging/ (the panel configuration) are 0700. As
+// root, it also creates the restore staging directory in each files root
+// (see RestoreStagingName).
 func (e Env) Prepare() error {
 	for _, d := range []struct {
 		p string
@@ -98,7 +100,7 @@ func (e Env) Prepare() error {
 			return err
 		}
 	}
-	return nil
+	return e.prepareRestoreStaging()
 }
 
 // Subscription returns the inventory entry for name. config.ServerName

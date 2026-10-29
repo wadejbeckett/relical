@@ -1,6 +1,7 @@
 package restore
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,18 +13,25 @@ import (
 	"strings"
 	"syscall"
 	"unicode"
+	"unsafe"
 
 	"github.com/wadejbeckett/relical/core/internal/config"
 	"github.com/wadejbeckett/relical/core/internal/inventory"
+	"github.com/wadejbeckett/relical/core/internal/job"
 	"github.com/wadejbeckett/relical/core/internal/restic"
 )
 
 // File and database restores write into the subscription's webspace root
-// (home), which its system user can write to. Everything below works
-// relative to directory file descriptors opened without following
-// symlinks, so the user cannot redirect a write elsewhere by swapping a
-// path component for a symlink while the restore runs; the files are
-// prepared in a root-only staging directory first.
+// (home), which its system user can write to and rename entries in. So
+// the finished restored-<date>-<id> folder is built completely in a
+// root-only staging directory on home's file system (<files root>/.relical,
+// see job.RestoreStagingName), handed to the user there, and moved into
+// home with one renameat2(RENAME_NOREPLACE) relative to home's file
+// descriptor: the folder appears whole or not at all, never replaces an
+// entry and never follows a symlink. Only when that rename is not
+// possible (another file system, or a kernel without renameat2) is the
+// folder created in home and filled there, and then only after checking
+// that what was opened is the empty, root-only directory just made.
 
 // RestoredDirName is the folder a file or database restore creates in home.
 func RestoredDirName(snap restic.Snapshot) string {
@@ -65,6 +73,7 @@ func validRelPath(p string) error {
 // webspace is a subscription's home, checked and held open.
 type webspace struct {
 	home     string
+	root     string // the files root home is in
 	fd       int
 	uid, gid int
 }
@@ -87,13 +96,13 @@ func openWebspace(cfg *config.Config, sub inventory.Subscription) (*webspace, er
 		return nil, fmt.Errorf("system user %s has uid %s and gid %s, but the inventory gives %d and %d for subscription %s",
 			sub.SysUser, u.Uid, u.Gid, sub.UID, sub.GID, sub.Name)
 	}
-	under := false
+	root := ""
 	for _, r := range cfg.Roots.Files {
 		if sub.Home == r+"/"+sub.Name {
-			under = true
+			root = r
 		}
 	}
-	if !config.CleanAbs(sub.Home) || !under {
+	if !config.CleanAbs(sub.Home) || root == "" {
 		return nil, fmt.Errorf("home %s of subscription %s is not <files root>/%s", sub.Home, sub.Name, sub.Name)
 	}
 	if fi, err := os.Lstat(sub.Home); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
@@ -119,7 +128,7 @@ func openWebspace(cfg *config.Config, sub inventory.Subscription) (*webspace, er
 		syscall.Close(fd)
 		return nil, fmt.Errorf("home %s is owned by uid %d, not by %s (uid %d); refusing to restore into it", sub.Home, st.Uid, sub.SysUser, sub.UID)
 	}
-	return &webspace{home: sub.Home, fd: fd, uid: sub.UID, gid: sub.GID}, nil
+	return &webspace{home: sub.Home, root: root, fd: fd, uid: sub.UID, gid: sub.GID}, nil
 }
 
 // exists reports whether name exists in home (a symlink counts). It is a
@@ -137,40 +146,148 @@ func errTargetExists(path string) error {
 	return fmt.Errorf("%s already exists (it may be from an earlier, possibly incomplete restore of this snapshot); delete or rename it to restore this snapshot again", path)
 }
 
-// mkdir creates name in home, root-owned with mode 0700 until finish
-// hands it over, and returns it open. It never reuses an existing entry.
-func (w *webspace) mkdir(name string) (int, error) {
-	if err := syscall.Mkdirat(w.fd, name, 0o700); err != nil {
-		if errors.Is(err, syscall.EEXIST) {
-			return -1, errTargetExists(filepath.Join(w.home, name))
-		}
-		return -1, fmt.Errorf("creating %s: %w", filepath.Join(w.home, name), err)
+// stage creates a new root-only directory for one restore in the files
+// root's restore staging directory, which is created when missing and
+// refused unless it is root's with mode 0700. The caller removes it.
+func (w *webspace) stage(prefix string) (string, error) {
+	dir := job.RestoreStagingDir(w.root)
+	if err := job.EnsureRestoreStaging(dir); err != nil {
+		return "", err
 	}
-	fd, err := syscall.Openat(w.fd, name, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
-	if err != nil {
-		return -1, fmt.Errorf("opening %s: %w", filepath.Join(w.home, name), err)
-	}
-	var st syscall.Stat_t
-	if err := syscall.Fstat(fd, &st); err != nil || int(st.Uid) != os.Geteuid() {
-		syscall.Close(fd)
-		return -1, fmt.Errorf("%s changed while it was being created", filepath.Join(w.home, name))
-	}
-	return fd, nil
+	return os.MkdirTemp(dir, prefix+"-")
 }
 
-// finish hands the restored folder to the subscription's user, mode 0700.
-func (w *webspace) finish(dirfd int) error {
-	if err := syscall.Fchown(dirfd, w.uid, w.gid); err != nil {
+// place moves the finished folder stage/name, already the user's with
+// mode 0700, into home as name. It never replaces an entry.
+func (w *webspace) place(stage, name string) error {
+	sfd, err := syscall.Open(stage, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
 		return err
 	}
-	return syscall.Fchmod(dirfd, 0o700)
+	defer syscall.Close(sfd)
+	err = renameat2(sfd, name, w.fd, name, renameNoReplace)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, syscall.EEXIST):
+		return errTargetExists(filepath.Join(w.home, name))
+	case !errors.Is(err, syscall.EXDEV) && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOSYS):
+		return fmt.Errorf("moving %s into %s: %w", name, w.home, err)
+	}
+	// Another file system, or no renameat2: fill a new folder in home.
+	dirfd, err := w.mkdirEmpty(name)
+	if err != nil {
+		return err
+	}
+	defer syscall.Close(dirfd)
+	err = moveInto(filepath.Join(stage, name), dirfd)
+	if err == nil {
+		err = syscall.Fchown(dirfd, w.uid, w.gid)
+	}
+	if err == nil {
+		err = syscall.Fchmod(dirfd, 0o700)
+	}
+	if err != nil {
+		if derr := w.discard(dirfd, name); derr != nil {
+			return fmt.Errorf("%v; removing the partial %s also failed: %v", err, filepath.Join(w.home, name), derr)
+		}
+	}
+	return err
 }
 
-// discard removes a restored folder this run created and could not
-// finish. os.RemoveAll opens home by path (home was checked, and its
-// parent belongs to root) and the rest without following symlinks.
-func (w *webspace) discard(name string) error {
-	return os.RemoveAll(filepath.Join(w.home, name))
+// afterMkdir runs between mkdirEmpty's mkdirat and openat; tests use it to
+// swap the new folder for another directory.
+var afterMkdir = func(home, name string) {}
+
+// mkdirEmpty creates name in home and returns it open. The user can rename
+// entries in home, so the directory opened by name may not be the one
+// just made: it is accepted only if it is empty, root's (the effective
+// user's) and mode 0700 exactly, which is all the new folder can be. An
+// impostor that passes holds nothing that could be altered.
+func (w *webspace) mkdirEmpty(name string) (int, error) {
+	path := filepath.Join(w.home, name)
+	if err := syscall.Mkdirat(w.fd, name, 0o700); err != nil {
+		if errors.Is(err, syscall.EEXIST) {
+			return -1, errTargetExists(path)
+		}
+		return -1, fmt.Errorf("creating %s: %w", path, err)
+	}
+	afterMkdir(w.home, name)
+	fd, err := syscall.Openat(w.fd, name, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, fmt.Errorf("opening %s: %w", path, err)
+	}
+	changed := fmt.Errorf("%s changed while it was being created; nothing was restored into it", path)
+	var st syscall.Stat_t
+	if err := syscall.Fstat(fd, &st); err != nil || int(st.Uid) != os.Geteuid() || st.Mode&0o7777 != 0o700 || st.Nlink != 2 {
+		syscall.Close(fd)
+		return -1, changed
+	}
+	f := os.NewFile(uintptr(fd), path)
+	names, err := f.Readdirnames(1)
+	if err != io.EOF || len(names) != 0 {
+		f.Close()
+		return -1, changed
+	}
+	// Readdirnames moved the offset; a new descriptor keeps the file's
+	// state simple for the caller.
+	nfd, err := syscall.Dup(fd)
+	f.Close()
+	if err != nil {
+		return -1, err
+	}
+	return nfd, nil
+}
+
+// discard empties the folder this run created at dirfd through the
+// descriptor, then removes name from home if it is still that folder.
+func (w *webspace) discard(dirfd int, name string) error {
+	self := fmt.Sprintf("/proc/self/fd/%d", dirfd)
+	entries, err := os.ReadDir(self)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := os.RemoveAll(filepath.Join(self, e.Name())); err != nil {
+			return err
+		}
+	}
+	var mine, there syscall.Stat_t
+	if err := syscall.Fstat(dirfd, &mine); err != nil {
+		return err
+	}
+	if err := fstatat(w.fd, name, &there); err != nil || there.Ino != mine.Ino || there.Dev != mine.Dev {
+		return nil // renamed away by the user: theirs now, and empty
+	}
+	return unlinkatDir(w.fd, name)
+}
+
+// oPath is O_PATH (the same value on amd64 and arm64).
+const oPath = 0x200000
+
+// fstatat stats name in dirfd without following a symlink (an O_PATH
+// open, as the syscall package does not export fstatat everywhere).
+func fstatat(dirfd int, name string, st *syscall.Stat_t) error {
+	fd, err := syscall.Openat(dirfd, name, oPath|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer syscall.Close(fd)
+	return syscall.Fstat(fd, st)
+}
+
+// unlinkatDir is unlinkat(2) with AT_REMOVEDIR: it removes an empty
+// directory and nothing else.
+func unlinkatDir(dirfd int, name string) error {
+	p, err := syscall.BytePtrFromString(name)
+	if err != nil {
+		return err
+	}
+	_, _, errno := syscall.Syscall(syscall.SYS_UNLINKAT, uintptr(dirfd), uintptr(unsafe.Pointer(p)), 0x200)
+	if errno != 0 {
+		return errno
+	}
+	return nil
 }
 
 // unix_AT_SYMLINK_NOFOLLOW is AT_SYMLINK_NOFOLLOW (the syscall package
@@ -282,15 +399,24 @@ func copyTree(src string, dirfd int, name string) error {
 	return nil // device, fifo or socket: not restored into a webspace
 }
 
-// chownTree hands the staging tree at root to uid:gid (Lchown, so a
-// symlink itself changes owner, never its target) and counts its regular
-// files and their bytes.
-func chownTree(root string, uid, gid int) (files int, bytes int64, err error) {
+// prepareTree hands the staging tree at root to uid:gid before it goes
+// into home: owners change with Lchown (a symlink itself, never its
+// target), set-user-id and set-group-id bits are cleared from files and
+// directories, fifos and sockets are left out (as on the copy path), and
+// a device node fails the restore, naming it. It counts the regular files
+// and their bytes.
+func prepareTree(root string, uid, gid int) (files int, bytes int64, err error) {
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.Type().IsRegular() {
+		rel, _ := filepath.Rel(root, p)
+		switch t := d.Type(); {
+		case t&fs.ModeDevice != 0:
+			return fmt.Errorf("the snapshot holds the device node %s; restores never put device nodes in a webspace, so restore the paths around it instead", rel)
+		case t&(fs.ModeNamedPipe|fs.ModeSocket) != 0:
+			return os.Remove(p)
+		case t.IsRegular():
 			fi, err := d.Info()
 			if err != nil {
 				return err
@@ -298,7 +424,68 @@ func chownTree(root string, uid, gid int) (files int, bytes int64, err error) {
 			files++
 			bytes += fi.Size()
 		}
-		return os.Lchown(p, uid, gid)
+		if err := os.Lchown(p, uid, gid); err != nil {
+			return err
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		// After the chown, which clears some of these bits but never a
+		// directory's set-group-id. The staging tree is root's alone, so p
+		// cannot have been swapped for a symlink.
+		var st syscall.Stat_t
+		if err := syscall.Lstat(p, &st); err != nil {
+			return err
+		}
+		if st.Mode&(syscall.S_ISUID|syscall.S_ISGID) != 0 {
+			return syscall.Chmod(p, st.Mode&0o1777)
+		}
+		return nil
 	})
 	return files, bytes, err
+}
+
+// statfs is syscall.Statfs; a variable so that tests can stand in a full
+// file system.
+var statfs = syscall.Statfs
+
+// SpaceReserve is kept free on top of a restore's size and 10% margin.
+const SpaceReserve = 256 << 20
+
+// ensureSpace refuses a restore of path (empty for the whole snapshot)
+// when the restore staging file system, which is home's, has less free
+// space than the restore's estimated size plus 10% plus SpaceReserve.
+func (w *webspace) ensureSpace(ctx context.Context, r restic.Runner, snapshotID, path string) error {
+	size, err := r.RestoreSize(ctx, snapshotID, path)
+	if err != nil {
+		return fmt.Errorf("estimating the size of the restore: %w", err)
+	}
+	dir := job.RestoreStagingDir(w.root)
+	if err := job.EnsureRestoreStaging(dir); err != nil {
+		return err
+	}
+	var st syscall.Statfs_t
+	if err := statfs(dir, &st); err != nil {
+		return fmt.Errorf("free space of %s: %w", dir, err)
+	}
+	free := st.Bavail * uint64(st.Bsize)
+	need := size + size/10 + SpaceReserve
+	if free < need {
+		return fmt.Errorf("not enough free space for this restore (need %s, free %s)", humanBytes(need), humanBytes(free))
+	}
+	return nil
+}
+
+// humanBytes formats n in binary units, for messages.
+func humanBytes(n uint64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := uint64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }

@@ -66,7 +66,7 @@ func TestLoadStaticAppliesDefaults(t *testing.T) {
 		t.Fatalf("%+v", inv)
 	}
 	s := inv.Subscriptions[0]
-	if strings.Join(s.FileExcludes, " ") != "logs/** statistics/logs/** tmp/** .cagefs/**" {
+	if strings.Join(s.FileExcludes, " ") != "logs/** statistics/logs/** tmp/** .cagefs/** restored-*" {
 		t.Errorf("excludes = %q", s.FileExcludes)
 	}
 	if s.Databases == nil || s.Features == nil {

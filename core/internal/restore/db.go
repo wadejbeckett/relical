@@ -2,6 +2,9 @@ package restore
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -53,6 +56,8 @@ func withTag(snaps []restic.Snapshot, tag string) []restic.Snapshot {
 // must still pass the inventory's database name rule.
 func RunDB(ctx context.Context, env job.Env, req DBRequest) (DBResult, error) {
 	res := DBResult{Subscription: req.Subscription, Unit: job.DBTag, Database: req.Database}
+	// Best effort: a failure here never stops this restore.
+	_ = CleanStale(env.Cfg, env.Now())
 	if !snapshotRE.MatchString(req.Snapshot) {
 		return res, fmt.Errorf("snapshot must be latest or 8-64 hex characters, got %q", req.Snapshot)
 	}
@@ -93,19 +98,37 @@ func RunDB(ctx context.Context, env job.Env, req DBRequest) (DBResult, error) {
 	} else if ex {
 		return res, errTargetExists(filepath.Join(ws.home, name))
 	}
-	dirfd, err := ws.mkdir(name)
+	if err := ws.ensureSpace(ctx, r, snap.ID, "/"+job.DumpFilename(req.Database)); err != nil {
+		return res, err
+	}
+	stage, err := ws.stage(sub.Name + "-" + snap.Short())
 	if err != nil {
 		return res, err
 	}
-	defer syscall.Close(dirfd)
-	res.Bytes, err = dumpInto(ctx, r, snap.ID, "/"+job.DumpFilename(req.Database), dirfd, job.DumpFilename(req.Database), ws.uid, ws.gid)
+	defer os.RemoveAll(stage)
+	// The finished folder is built in root-only staging and moved into
+	// home in one step (see webspace.place).
+	built := filepath.Join(stage, name)
+	if err := os.Mkdir(built, 0o700); err != nil {
+		return res, err
+	}
+	bfd, err := syscall.Open(built, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return res, err
+	}
+	defer syscall.Close(bfd)
+	res.Bytes, err = dumpInto(ctx, r, snap.ID, "/"+job.DumpFilename(req.Database), bfd, job.DumpFilename(req.Database), ws.uid, ws.gid)
 	if err == nil {
-		err = ws.finish(dirfd)
+		err = syscall.Fchown(bfd, ws.uid, ws.gid)
+	}
+	if err == nil {
+		err = syscall.Fchmod(bfd, 0o700)
+	}
+	if err == nil {
+		err = ws.place(stage, name)
 	}
 	if err != nil {
-		if derr := ws.discard(name); derr != nil {
-			return res, fmt.Errorf("%v; removing the partial %s also failed: %v", err, filepath.Join(ws.home, name), derr)
-		}
+		res.Bytes = 0
 		return res, err
 	}
 	res.Note = "the dump is not imported; load it into a database with the mysql client or phpMyAdmin"
@@ -116,7 +139,10 @@ func RunDB(ctx context.Context, env job.Env, req DBRequest) (DBResult, error) {
 // and renames it to name once complete, mode 0600, owned by uid:gid. A
 // failed dump leaves no file behind.
 func dumpInto(ctx context.Context, r restic.Runner, snapshotID, path string, dirfd int, name string, uid, gid int) (int64, error) {
-	tmp := "." + name + ".part"
+	tmp, err := partName(name)
+	if err != nil {
+		return 0, err
+	}
 	fd, err := syscall.Openat(dirfd, tmp, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
 	if err != nil {
 		return 0, fmt.Errorf("creating %s: %w", tmp, err)
@@ -137,13 +163,42 @@ func dumpInto(ctx context.Context, r restic.Runner, snapshotID, path string, dir
 		err = cerr
 	}
 	if err == nil {
-		err = syscall.Renameat(dirfd, tmp, dirfd, name)
+		err = renameInPlace(dirfd, tmp, name)
 	}
 	if err != nil {
 		syscall.Unlinkat(dirfd, tmp)
 		return 0, err
 	}
 	return cw.n, nil
+}
+
+// partName is a temporary name for name in the same directory, with a
+// random suffix, so that a temporary file left by a killed run never
+// blocks the next one.
+func partName(name string) (string, error) {
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return "." + name + "." + hex.EncodeToString(b) + ".part", nil
+}
+
+// renameInPlace renames tmp to name in dirfd (a root-only directory)
+// without replacing an existing name; without renameat2 it falls back to
+// renameat after checking that name is absent.
+func renameInPlace(dirfd int, tmp, name string) error {
+	err := rawRenameat2(dirfd, tmp, dirfd, name, renameNoReplace)
+	if errors.Is(err, syscall.ENOSYS) || errors.Is(err, syscall.EINVAL) {
+		var st syscall.Stat_t
+		if fstatat(dirfd, name, &st) == nil {
+			return syscall.EEXIST
+		}
+		err = syscall.Renameat(dirfd, tmp, dirfd, name)
+	}
+	if errors.Is(err, syscall.EEXIST) {
+		return fmt.Errorf("%s already exists", name)
+	}
+	return err
 }
 
 type countWriter struct {

@@ -64,6 +64,9 @@ case "$1" in
       shift
     done
     [ -n "$FAKE_RESTORE_EMPTY" ] && exit 0
+    # FAKE_RESTORE_MKDIR: a directory that appears while restic runs (the
+    # customer creating the restore's target folder meanwhile).
+    [ -n "$FAKE_RESTORE_MKDIR" ] && mkdir -p "$FAKE_RESTORE_MKDIR"
     if [ "$FAKE_RESTORE_KIND" = files ]; then
       # A webspace subtree: two files, one in a subdirectory.
       mkdir -p "$t$i/sub"

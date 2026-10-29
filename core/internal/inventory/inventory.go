@@ -156,7 +156,9 @@ func (inv Inventory) ByMailDomain(d string) (Subscription, bool) {
 }
 
 // DefaultFileExcludes apply when a subscription lists none.
-var DefaultFileExcludes = []string{"logs/**", "statistics/logs/**", "tmp/**", ".cagefs/**"}
+// restored-* are the folders file and database restores create in home:
+// copies of earlier backups, which the customer copies back from.
+var DefaultFileExcludes = []string{"logs/**", "statistics/logs/**", "tmp/**", ".cagefs/**", "restored-*"}
 
 // Units a subscription may back up, and the server's.
 var (
