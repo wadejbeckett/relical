@@ -201,7 +201,7 @@ class IndexController extends pm_Controller_Action
         } catch (InvalidArgumentException $e) {
             $this->_status->addMessage('error', 'Back up now: ' . $e->getMessage());
             $this->_helper->viewRenderer->setNoRender(true);
-            $this->_redirect(pm_Context::getBaseUrl());
+            $this->_redirect(pm_Context::getBaseUrl(), ['prependBase' => false]);
             return;
         }
 
@@ -255,7 +255,7 @@ class IndexController extends pm_Controller_Action
         } catch (InvalidArgumentException $e) {
             $this->_status->addMessage('error', 'Adopt repository: ' . $e->getMessage());
             $this->_helper->viewRenderer->setNoRender(true);
-            $this->_redirect(pm_Context::getBaseUrl());
+            $this->_redirect(pm_Context::getBaseUrl(), ['prependBase' => false]);
             return;
         }
 

@@ -405,6 +405,6 @@ class RestoreController extends pm_Controller_Action
     private function redirectTo(string $url): void
     {
         $this->_helper->viewRenderer->setNoRender(true);
-        $this->_redirect($url);
+        $this->_redirect($url, ['prependBase' => false]);
     }
 }
