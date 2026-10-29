@@ -101,11 +101,11 @@ func RunDB(ctx context.Context, env job.Env, req DBRequest) (DBResult, error) {
 	if err := ws.ensureSpace(ctx, r, snap.ID, "/"+job.DumpFilename(req.Database)); err != nil {
 		return res, err
 	}
-	stage, err := ws.stage(sub.Name + "-" + snap.Short())
+	stage, done, err := ws.stage(sub.Name + "-" + snap.Short())
 	if err != nil {
 		return res, err
 	}
-	defer os.RemoveAll(stage)
+	defer done()
 	// The finished folder is built in root-only staging and moved into
 	// home in one step (see webspace.place).
 	built := filepath.Join(stage, name)

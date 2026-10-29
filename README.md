@@ -294,7 +294,7 @@ The finished `restored-<snapshot date>-<short id>/` folder is built in full in a
 
 As for mail, a second restore of the same snapshot is refused while its `restored-…` folder (or panel configuration file) exists; delete or rename it first.
 
-A restore that is killed (SIGKILL, out of memory, power loss) can leave its staging behind, never a partial folder in `home`. Every restore, and every `backup --all` after it takes the run lock, removes staging older than 24 hours: everything in each `<files root>/.relical/`, and mail staging (`run-*`), staging from earlier builds (`files-*`) and temporary `.*.part` files in `<state_dir>/restore`.
+A restore that is killed (SIGKILL, out of memory, power loss) can leave its staging behind, never a partial folder in `home`. Every restore holds an exclusive `flock` on its own staging directory while it runs. Every restore, and every `backup --all` after it takes the run lock, removes staging older than 24 hours whose lock nobody holds (so a restore that runs for more than a day keeps its staging): everything in each `<files root>/.relical/`, and mail staging (`run-*`), staging from earlier builds (`files-*`) and temporary `.*.part` files in `<state_dir>/restore`.
 
 ## Configuration
 

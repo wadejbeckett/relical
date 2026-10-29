@@ -148,13 +148,29 @@ func errTargetExists(path string) error {
 
 // stage creates a new root-only directory for one restore in the files
 // root's restore staging directory, which is created when missing and
-// refused unless it is root's with mode 0700. The caller removes it.
-func (w *webspace) stage(prefix string) (string, error) {
-	dir := job.RestoreStagingDir(w.root)
-	if err := job.EnsureRestoreStaging(dir); err != nil {
-		return "", err
+// refused unless it is root's with mode 0700, and locks it (lockStage).
+// The caller runs done, which removes it and then releases the lock.
+func (w *webspace) stage(prefix string) (dir string, done func(), err error) {
+	parent := job.RestoreStagingDir(w.root)
+	if err := job.EnsureRestoreStaging(parent); err != nil {
+		return "", nil, err
 	}
-	return os.MkdirTemp(dir, prefix+"-")
+	return newStage(parent, prefix+"-")
+}
+
+// newStage makes a staging directory in parent and locks it; done removes
+// it while still holding the lock, then releases it.
+func newStage(parent, pattern string) (dir string, done func(), err error) {
+	dir, err = os.MkdirTemp(parent, pattern)
+	if err != nil {
+		return "", nil, err
+	}
+	release, err := lockStage(dir)
+	if err != nil {
+		os.RemoveAll(dir)
+		return "", nil, err
+	}
+	return dir, func() { os.RemoveAll(dir); release() }, nil
 }
 
 // place moves the finished folder stage/name, already the user's with

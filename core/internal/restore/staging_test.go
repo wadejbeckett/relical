@@ -252,3 +252,42 @@ func TestStaleRestoreStagingIsCleaned(t *testing.T) {
 		}
 	}
 }
+
+// TestCleanStaleSkipsALiveRestore: a staging directory older than
+// StaleAfter whose lock a running restore holds is kept; one left by a
+// killed restore (no lock) is removed.
+func TestCleanStaleSkipsALiveRestore(t *testing.T) {
+	e, _, _ := webSetup(t)
+	old := time.Now().Add(-48 * time.Hour)
+	var live, dead []string
+	for _, parent := range []string{job.RestoreStagingDir(e.Cfg.Roots.Files[0]), filepath.Join(e.Cfg.StateDir, "restore")} {
+		os.MkdirAll(parent, 0o700)
+		pattern := map[bool]string{true: "run-", false: "example.test-aaaaaaaa-"}[strings.HasSuffix(parent, "restore")]
+		l, done, err := newStage(parent, pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(done)
+		d, err := os.MkdirTemp(parent, pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range []string{l, d} {
+			os.Chtimes(p, old, old)
+		}
+		live, dead = append(live, l), append(dead, d)
+	}
+	if err := CleanStale(e.Cfg, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range live {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("a live restore's staging was removed: %s", p)
+		}
+	}
+	for _, p := range dead {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("stale staging kept: %s", p)
+		}
+	}
+}

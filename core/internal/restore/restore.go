@@ -208,11 +208,11 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 	if err := checkSpace(size, filepath.Join(env.Cfg.StateDir, "restore"), box.Path); err != nil {
 		return res, err
 	}
-	stage, err := os.MkdirTemp(filepath.Join(env.Cfg.StateDir, "restore"), "run-")
+	stage, done, err := newStage(filepath.Join(env.Cfg.StateDir, "restore"), "run-")
 	if err != nil {
 		return res, err
 	}
-	defer os.RemoveAll(stage)
+	defer done()
 	if err := r.Restore(ctx, snap.ID, stage, []string{box.Path}); err != nil {
 		return res, err
 	}

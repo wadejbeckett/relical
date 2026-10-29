@@ -112,11 +112,11 @@ func RunFiles(ctx context.Context, env job.Env, req FilesRequest) (FilesResult, 
 	if err := ws.ensureSpace(ctx, r, snap.ID, sizePath); err != nil {
 		return res, err
 	}
-	stage, err := ws.stage(sub.Name + "-" + snap.Short())
+	stage, done, err := ws.stage(sub.Name + "-" + snap.Short())
 	if err != nil {
 		return res, err
 	}
-	defer os.RemoveAll(stage)
+	defer done()
 	if err := r.Restore(ctx, snap.ID, stage, []string{job.GlobEscape(src)}); err != nil {
 		return res, err
 	}
