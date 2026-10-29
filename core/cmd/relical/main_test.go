@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wadejbeckett/relical/core/internal/job"
 	"github.com/wadejbeckett/relical/core/internal/testutil"
@@ -107,9 +108,10 @@ func TestBackupAllThenStatus(t *testing.T) {
 		t.Fatalf("%d %s", code, out)
 	}
 	var results []map[string]any
-	if err := json.Unmarshal([]byte(out), &results); err != nil || len(results) != 2 || results[0]["ok"] != true ||
+	if err := json.Unmarshal([]byte(out), &results); err != nil || len(results) != 3 || results[0]["ok"] != true ||
 		results[0]["subscription"] != "example.test" || results[0]["unit"] != "mail" ||
-		results[1]["action"] != "stats" || results[1]["stored_bytes"] != float64(4096) {
+		results[1]["action"] != "stats" || results[1]["stored_bytes"] != float64(4096) ||
+		results[2]["action"] != "forget" || results[2]["ok"] != true {
 		t.Fatalf("%v %s", err, out)
 	}
 	code, out = runCLI("-config", cfg, "status")
@@ -135,10 +137,10 @@ func TestBackupAllUnits(t *testing.T) {
 	})
 	code, out := runCLI("-config", cfg, "backup", "--all")
 	var results []map[string]any
-	if code != 0 || json.Unmarshal([]byte(out), &results) != nil || len(results) != 4 {
+	if code != 0 || json.Unmarshal([]byte(out), &results) != nil || len(results) != 5 {
 		t.Fatalf("%d %s", code, out)
 	}
-	for i, u := range []string{"mail", "files", "db", ""} {
+	for i, u := range []string{"mail", "files", "db", "", ""} {
 		if results[i]["unit"] != nil && results[i]["unit"] != u || results[i]["ok"] != true {
 			t.Errorf("result %d: %v", i, results[i])
 		}
@@ -323,7 +325,8 @@ func TestPanelConfigCommands(t *testing.T) {
 		t.Fatalf("%d %s", code, out)
 	}
 	code, out = runCLI("-config", cfg, "backup", "--all")
-	if code != 0 || json.Unmarshal([]byte(out), &results) != nil || len(results) != 4 || results[1]["unit"] != "panel-config" {
+	if code != 0 || json.Unmarshal([]byte(out), &results) != nil || len(results) != 6 || results[1]["unit"] != "panel-config" ||
+		results[4]["action"] != "forget" || results[5]["action"] != "forget" || results[5]["subscription"] != "_server" {
 		t.Fatalf("%d %s", code, out)
 	}
 	for _, cmd := range []string{"forget", "check"} {
@@ -450,8 +453,40 @@ func TestRunLogWritten(t *testing.T) {
 		}
 		events = append(events, ev)
 	}
-	want := "backup start,backup result,backup result,backup end 0,check start,check result,check end 1"
+	want := "backup start,backup result,backup result,backup result,backup end 0,check start,check result,check end 1"
 	if got := strings.Join(events, ","); got != want {
 		t.Errorf("log events\n got %s\nwant %s", got, want)
+	}
+}
+
+// backup --all applies retention at the end, unless it was interrupted,
+// --no-forget was given or the run was for one unit.
+func TestBackupAllRunsRetentionUnlessInterrupted(t *testing.T) {
+	cfg := cliSetup(t)
+	forgets := func() int {
+		b, _ := os.ReadFile(os.Getenv("FAKE_LOG"))
+		return strings.Count(string(b), "forget --group-by tags")
+	}
+	if code, out := runCLI("-config", cfg, "backup", "--all"); code != 0 || forgets() != 1 {
+		t.Fatalf("%d forgets %d: %s", code, forgets(), out)
+	}
+	for _, args := range [][]string{{"--no-forget"}, {"--unit", "mail"}} {
+		if code, out := runCLI(append([]string{"-config", cfg, "backup", "--all"}, args...)...); code != 0 || forgets() != 1 {
+			t.Fatalf("%q: %d forgets %d: %s", args, code, forgets(), out)
+		}
+	}
+	if code, _ := runCLI("-config", cfg, "backup", "--subscription", "example.test", "--no-forget"); code != 2 {
+		t.Errorf("--no-forget without --all: exit %d", code)
+	}
+	// A stop (SIGTERM) during the backup: no forget afterwards.
+	t.Setenv("FAKE_HANG", "1")
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(300 * time.Millisecond); cancel() }()
+	var out, errb bytes.Buffer
+	if code := run(ctx, []string{"-config", cfg, "backup", "--all"}, &out, &errb); code != 1 {
+		t.Fatalf("interrupted run: exit %d %s", code, out.String())
+	}
+	if forgets() != 1 || !strings.Contains(errb.String(), "interrupted") {
+		t.Errorf("forgets %d after an interrupted run; stderr %s", forgets(), errb.String())
 	}
 }

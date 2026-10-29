@@ -114,6 +114,7 @@ R="/work/relical -config /etc/relical/config.json"
 $R backup --all | tee /tmp/backup.json
 if grep -q '"ok": false' /tmp/backup.json; then fail "backup --all"; fi
 for u in mail files db panel-config; do grep -q "\"unit\": \"$u\"" /tmp/backup.json || fail "no $u result"; done
+grep -q '"action": "forget"' /tmp/backup.json || fail "backup --all applied no retention"
 $R inventory | grep -q '"name": "example.test"'
 # Dumps and the panel configuration never stay on disk unencrypted.
 if find /var/lib/relical /tmp -name '*.sql' | grep .; then fail "a dump is on disk"; fi

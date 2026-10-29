@@ -31,6 +31,7 @@ Phase 2: full backup per hosting subscription, and the core the Plesk extension 
 ### Changed
 
 - The systemd units run `/usr/local/lib/relical/relical`, at `Nice=19` and `IOSchedulingClass=idle`; the weekly check runs on Sunday at 03:00.
+- `backup --all` applies retention itself at the end (`--no-forget` skips it, and an interrupted run or one restricted with `--unit` never runs it). `relical-backup.service` no longer runs `forget --all` through `ExecStopPost=`, which made a stop or a reboot during the backup wait for a prune of every repository; its stop timeout is 15 minutes instead of infinity.
 - `relical-check.service` passes `--read-data-subset 5%%`, since a bare `%` in a unit file is a specifier.
 - `restic_bin`, `doveadm_bin` and `mysqldump_bin` must be clean absolute paths when given.
 - Database names must start with a letter, a digit or `_`, and `mysqldump` gets `--` before the name.

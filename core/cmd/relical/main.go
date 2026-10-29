@@ -29,7 +29,7 @@ commands:
   version
   inventory
   mailboxes --subscription S
-  backup    --subscription S | --all [--unit mail|files|db|panel-config]
+  backup    --subscription S | --all [--unit mail|files|db|panel-config] [--no-forget]
   forget    --subscription S | --all
   check     --subscription S | --all [--read-data-subset 5%]
   snapshots --subscription S [--unit mail|files|db|panel-config]
@@ -49,7 +49,7 @@ var commandFlags = map[string][]string{
 	"status":    {},
 	"report":    {},
 	"mailboxes": {"subscription"},
-	"backup":    {"subscription", "all", "unit"},
+	"backup":    {"subscription", "all", "unit", "no-forget"},
 	"forget":    {"subscription", "all"},
 	"check":     {"subscription", "all", "read-data-subset"},
 	"snapshots": {"subscription", "unit"},
@@ -146,6 +146,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (code int
 	subset := fs.String("read-data-subset", "", "check: also read this share of the data, e.g. 5%")
 	path := fs.String("path", "", "path relative to the webspace root (restore --unit files, ls)")
 	database := fs.String("database", "", "database name (restore --unit db)")
+	noForget := fs.Bool("no-forget", false, "backup --all: do not apply retention afterwards")
 	if err := fs.Parse(cmdArgs); err != nil {
 		return 2
 	}
@@ -175,6 +176,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (code int
 	case "backup", "forget", "check":
 		if (*subName == "") == !*all {
 			return usageError(stderr, "give exactly one of --subscription or --all")
+		}
+		if set["no-forget"] && !*all {
+			return usageError(stderr, "--no-forget is for backup --all")
 		}
 	case "mailboxes", "snapshots", "adopt":
 		if *subName == "" {
@@ -343,6 +347,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (code int
 	switch {
 	case cmd == "backup" && *all:
 		results = env.BackupAll(ctx, *unit)
+		// Retention runs in the same process, after the backups: never
+		// after an interrupted run (a stop or a reboot must not start a
+		// prune of every repository), and not for a run of one unit.
+		if ctx.Err() == nil && *unit == "" && !*noForget {
+			results = append(results, env.ForgetAll(ctx, subs)...)
+		}
 	case cmd == "backup":
 		results = append(results, env.BackupSubscription(ctx, subs[0], *unit)...)
 	case cmd == "forget":
