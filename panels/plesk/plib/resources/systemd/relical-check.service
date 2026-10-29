@@ -9,9 +9,10 @@ ConditionPathExists=/etc/relical/config.json
 # A failed run is logged and mailed to the Plesk administrator.
 OnFailure=relical-notify@%n.service
 
-# A check that starts while a backup is still running fails on relical's own
-# lock and is not retried until next week, so the timer runs it twelve hours
-# after the nightly backup time.
+# A check that starts while the backup (or its retention) is still running
+# waits up to 2 hours for relical's run lock, then fails and is not retried
+# until next week, so the timer runs it twelve hours after the nightly
+# backup time to stay clear of that wait.
 
 [Service]
 Type=oneshot
