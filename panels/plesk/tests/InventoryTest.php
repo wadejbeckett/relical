@@ -12,6 +12,14 @@ final class InventoryTest extends TestCase
     /** @param array<string, mixed> $override */
     private static function webspace(array $override = []): array
     {
+        if (isset($override['name']) && !array_key_exists('home', $override)) {
+            $override['home'] = '/var/www/vhosts/' . $override['name']; // the core wants <root>/<name>
+        }
+        if (isset($override['name']) && !array_key_exists('databases', $override)) {
+            // a database belongs to one subscription only
+            $override['databases'] = [['type' => 'mysql', 'name' => 'db_' . substr(md5((string) $override['name']), 0, 8), 'local' => true]];
+        }
+
         return array_merge([
             'id' => 17,
             'name' => 'example.test',
@@ -140,6 +148,45 @@ final class InventoryTest extends TestCase
         self::assertStringStartsWith('database x`; DROP:', $inventory['skipped'][0]['reason']);
     }
 
+    /** @return iterable<string, array{0: string}> */
+    public static function refusedDatabaseNames(): iterable
+    {
+        foreach (['-x', '$x', 'SYS', 'phpMyAdmin2', 'mysql', 'phpmyadmin_old', 'roundcubemail'] as $name) {
+            yield $name => [$name];
+        }
+    }
+
+    /** @dataProvider refusedDatabaseNames */
+    public function testDatabaseTheCoreRefusesIsSkippedAndTheRestStays(string $dbName): void
+    {
+        $inventory = Inventory::build([self::webspace(['databases' => [
+            ['type' => 'mysql', 'name' => $dbName, 'local' => true],
+            ['type' => 'mysql', 'name' => 'example_wp', 'local' => true],
+        ]])], 'all');
+
+        self::assertSame([['type' => 'mysql', 'name' => 'example_wp']], $inventory['subscriptions'][0]['databases']);
+        self::assertSame(['mail', 'files', 'db'], $inventory['subscriptions'][0]['features']);
+        self::assertCount(1, $inventory['skipped']);
+        self::assertStringStartsWith('database ' . $dbName . ':', $inventory['skipped'][0]['reason']);
+    }
+
+    public function testADatabaseListedByTwoSubscriptionsStaysWithTheFirst(): void
+    {
+        $inventory = Inventory::build([
+            self::webspace(['databases' => [['type' => 'mysql', 'name' => 'shared', 'local' => true]]]),
+            self::webspace(['id' => 2, 'name' => 'b.example.test', 'home' => '/var/www/vhosts/b.example.test', 'mail_domains' => [],
+                'databases' => [['type' => 'mysql', 'name' => 'shared', 'local' => true], ['type' => 'mysql', 'name' => 'own', 'local' => true]]]),
+        ], 'all');
+
+        $byName = array_column($inventory['subscriptions'], 'databases', 'name');
+        self::assertSame([['type' => 'mysql', 'name' => 'shared']], $byName['example.test']);
+        self::assertSame([['type' => 'mysql', 'name' => 'own']], $byName['b.example.test']);
+        self::assertSame([[
+            'name' => 'b.example.test',
+            'reason' => 'database shared: the database is already listed by example.test',
+        ]], $inventory['skipped']);
+    }
+
     public function testDatabasesOnARemoteServerAreSkipped(): void
     {
         $inventory = Inventory::build([self::webspace(['databases' => [
@@ -211,6 +258,8 @@ final class InventoryTest extends TestCase
         yield 'home is the files root' => [['home' => '/var/www/vhosts']];
         yield 'home with ..' => [['home' => '/var/www/vhosts/../../etc']];
         yield 'home with a trailing slash' => [['home' => '/var/www/vhosts/example.test/']];
+        yield 'home of another webspace' => [['home' => '/var/www/vhosts/other.test']];
+        yield 'home below the webspace' => [['home' => '/var/www/vhosts/example.test/httpdocs']];
     }
 
     /**
