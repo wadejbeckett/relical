@@ -38,18 +38,26 @@ final class ConfigFiles
     /**
      * Rewrites the option file when it does not hold the password Plesk's
      * shadow file holds now (`plesk bin admin --set-mysql-password`, a
-     * repair), so database backups do not fail from that night on.
+     * repair), so database backups do not fail from that night on. A file
+     * with the right password is rewritten too when its mode is not 0600
+     * or its owner is not $owner (the user this runs as: root for
+     * inventory.php), so loosened permissions are put back.
      *
+     * @param ?int $owner the owner the file must have; null: this process's effective user
      * @return bool whether the file was rewritten
      */
-    public static function refreshMysqlOptionFile(string $shadow = Paths::PSA_SHADOW, string $target = Paths::MYSQL_CNF): bool
+    public static function refreshMysqlOptionFile(string $shadow = Paths::PSA_SHADOW, string $target = Paths::MYSQL_CNF, ?int $owner = null): bool
     {
         $want = self::mysqlOptionFileFrom($shadow);
         if (is_link($target)) {
             throw new RuntimeException(sprintf('%s is a symbolic link', $target));
         }
-        $current = is_file($target) ? @file_get_contents($target) : false;
-        if (is_string($current) && self::optionFileMatches($current, $want)) {
+        $owner ??= function_exists('posix_geteuid') ? posix_geteuid() : 0;
+        clearstatcache(true, $target);
+        $stat = is_file($target) ? @stat($target) : false;
+        $current = $stat !== false ? @file_get_contents($target) : false;
+        if (is_string($current) && self::optionFileMatches($current, $want)
+            && ($stat['mode'] & 07777) === 0600 && $stat['uid'] === $owner) {
             return false;
         }
         RootFile::write($target, $want);
