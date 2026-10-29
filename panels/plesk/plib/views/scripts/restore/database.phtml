@@ -1,0 +1,21 @@
+<?php
+/** @var pm_View $this */
+$e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+echo $this->render('restore/_style.phtml');
+?>
+<p>
+    The database is restored as an SQL file, <code>&lt;database&gt;.sql</code>,
+    in a new folder <code>restored-&lt;date&gt;-&lt;reference&gt;</code> in
+    the subscription's home directory. The live database is not changed.
+    To use the data, import the file with phpMyAdmin, preferably into a new,
+    empty database first.
+</p>
+<?php if ($this->error !== ''): ?>
+<p class="relical-error"><?php echo $e($this->error); ?></p>
+<?php elseif (!empty($this->empty)): ?>
+<p class="relical-muted">No database backups yet.</p>
+<?php endif; ?>
+<?php if ($this->form !== null): ?>
+<?php echo $this->form; ?>
+<?php endif; ?>
+<p><a href="<?php echo $e($this->backUrl); ?>">Back to the backups</a></p>

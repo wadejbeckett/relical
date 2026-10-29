@@ -1,0 +1,54 @@
+<?php
+/** @var pm_View $this */
+$e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+echo $this->render('restore/_style.phtml');
+?>
+<?php if ($this->error !== ''): ?>
+<p class="relical-error"><?php echo $e($this->error); ?></p>
+<p><a href="<?php echo $e($this->backUrl); ?>">Back to the backups</a></p>
+<?php else: ?>
+<p>
+    Restore point <?php echo $e($this->point['label']); ?>
+    (<code><?php echo $e($this->point['short']); ?></code>). The restored
+    copy goes into a new folder
+    <code>restored-<?php echo $e(substr($this->point['time'], 0, 10)); ?>-<?php echo $e($this->point['short']); ?></code>
+    in the subscription's home directory, beside <code>httpdocs</code>, where
+    the website does not serve it. The live files are not changed.
+</p>
+<p>
+    <?php foreach ($this->crumbs as $i => $crumb): ?>
+        <?php if ($i > 0): ?> / <?php endif; ?>
+        <?php if ($i === count($this->crumbs) - 1): ?>
+            <strong><?php echo $e($crumb['name'] === '' ? 'Home directory' : $crumb['name']); ?></strong>
+        <?php else: ?>
+            <a href="<?php echo $e($crumb['url']); ?>"><?php echo $e($crumb['name'] === '' ? 'Home directory' : $crumb['name']); ?></a>
+        <?php endif; ?>
+    <?php endforeach; ?>
+</p>
+<?php if ($this->entries === []): ?>
+<p class="relical-muted">This folder is empty in the backup.</p>
+<?php else: ?>
+<table class="relical-table">
+    <thead><tr><th>Name</th><th>Size</th><th>Changed</th></tr></thead>
+    <tbody>
+    <?php foreach ($this->entries as $entry): ?>
+        <tr>
+            <td>
+                <?php if ($entry['url'] !== ''): ?>
+                <a href="<?php echo $e($entry['url']); ?>"><?php echo $e($entry['name']); ?>/</a>
+                <?php else: ?>
+                <?php echo $e($entry['name']); ?><?php echo $entry['type'] === 'dir' ? '/' : ''; ?>
+                <?php endif; ?>
+            </td>
+            <td><?php echo $e($entry['size_label']); ?></td>
+            <td><?php echo $e(substr($entry['mtime'], 0, 10)); ?></td>
+        </tr>
+    <?php endforeach; ?>
+    </tbody>
+</table>
+<?php if ($this->truncated): ?>
+<p class="relical-muted">This folder holds more entries than can be shown; only the first 5,000 are listed. A restore of the folder includes all of them.</p>
+<?php endif; ?>
+<?php endif; ?>
+<?php echo $this->form; ?>
+<?php endif; ?>

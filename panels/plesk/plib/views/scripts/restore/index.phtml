@@ -1,0 +1,78 @@
+<?php
+/** @var pm_View $this */
+$e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+echo $this->render('restore/_style.phtml');
+$points = $this->points;
+?>
+<p>
+    Relical backs up this subscription every night. A restore puts a copy
+    of the backed-up data beside the live data: mail goes into a new folder
+    in the mailbox, website files and databases into a new folder in the
+    subscription's home directory. Nothing live is overwritten or changed,
+    so you can compare the copy and take what you need from it.
+</p>
+
+<?php if ($this->running): ?>
+<p class="relical-note">A restore of this subscription is running. Another one can start when it has finished.</p>
+<?php endif; ?>
+
+<?php if ($this->error !== ''): ?>
+<p class="relical-error"><?php echo $e($this->error); ?></p>
+<?php else: ?>
+
+<?php if (in_array('mail', $this->features, true)): ?>
+<h3 class="relical-section">Mail</h3>
+<?php if ($points['mail'] === []): ?>
+<p class="relical-muted">No mail backups yet.</p>
+<?php else: ?>
+<p>
+    <?php echo $e(count($points['mail'])); ?> restore point<?php echo count($points['mail']) === 1 ? '' : 's'; ?>,
+    the latest from <?php echo $e($points['mail'][0]['label']); ?>.
+</p>
+<p><a class="relical-button" href="<?php echo $e($this->mailUrl); ?>">Restore mail</a></p>
+<?php endif; ?>
+<?php endif; ?>
+
+<?php if (in_array('files', $this->features, true)): ?>
+<h3 class="relical-section">Website files</h3>
+<?php if ($points['files'] === []): ?>
+<p class="relical-muted">No website backups yet.</p>
+<?php else: ?>
+<p>Choose a restore point to look through its files and restore a folder or everything.</p>
+<table class="relical-table">
+    <thead><tr><th>Restore point</th><th>Reference</th><th></th></tr></thead>
+    <tbody>
+    <?php foreach ($points['files'] as $point): ?>
+        <tr>
+            <td><?php echo $e($point['label']); ?></td>
+            <td><code><?php echo $e($point['short']); ?></code></td>
+            <td><a href="<?php echo $e($this->browseUrls[$point['id']]); ?>">Browse</a></td>
+        </tr>
+    <?php endforeach; ?>
+    </tbody>
+</table>
+<?php endif; ?>
+<?php endif; ?>
+
+<?php if (in_array('db', $this->features, true)): ?>
+<h3 class="relical-section">Databases</h3>
+<?php if ($points['db'] === []): ?>
+<p class="relical-muted">No database backups yet.</p>
+<?php else: ?>
+<table class="relical-table">
+    <thead><tr><th>Database</th><th>Restore point</th><th>Reference</th></tr></thead>
+    <tbody>
+    <?php foreach ($points['db'] as $point): ?>
+        <tr>
+            <td><?php echo $e($point['database']); ?></td>
+            <td><?php echo $e($point['label']); ?></td>
+            <td><code><?php echo $e($point['short']); ?></code></td>
+        </tr>
+    <?php endforeach; ?>
+    </tbody>
+</table>
+<p><a class="relical-button" href="<?php echo $e($this->databaseUrl); ?>">Restore a database</a></p>
+<?php endif; ?>
+<?php endif; ?>
+
+<?php endif; ?>

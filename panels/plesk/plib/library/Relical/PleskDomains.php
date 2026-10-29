@@ -49,15 +49,33 @@ final class PleskDomains
     public static function access(array $params): RestoreAccess
     {
         $client = \pm_Session::getClient();
-        // An alias has no restore page of its own.
-        $domainId = isset($params['alias_id']) ? 0 : (int) ($params['dom_id'] ?? $params['site_id'] ?? 0);
 
         return RestoreAccess::decide(
             (bool) $client->isAdmin(),
             static fn (int $id): bool => (bool) $client->hasAccessToDomain($id),
-            $domainId,
+            self::domainId($params),
             [self::class, 'webspaceOf'],
             Settings::fromPlesk()->scope()
         );
+    }
+
+    /**
+     * The domain id a request or button names: `dom_id`, else `site_id`;
+     * 0 (refused) for an alias, which has no restore page of its own, and
+     * for anything that is not a plain number.
+     *
+     * @param array<string, mixed> $params
+     */
+    public static function domainId(array $params): int
+    {
+        if (isset($params['alias_id'])) {
+            return 0;
+        }
+        $value = $params['dom_id'] ?? $params['site_id'] ?? '';
+        if (is_int($value)) {
+            return $value;
+        }
+
+        return is_string($value) && preg_match('/^[1-9][0-9]{0,9}$/D', $value) === 1 ? (int) $value : 0;
     }
 }

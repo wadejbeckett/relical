@@ -1,0 +1,9 @@
+<?php
+/** @var pm_View $this */
+$e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+?>
+<p>
+    Backups with Relical are not included in the plan of
+    <strong><?php echo $e($this->subscription); ?></strong>, so there is
+    nothing to restore here. Contact your hosting provider to add them.
+</p>

@@ -62,4 +62,15 @@ final class RootScripts
     {
         @exec(Command::detached($cliArgs));
     }
+
+    /**
+     * Starts a root script detached (restore-run.php for a customer
+     * restore); its outcome lands in the script's own record.
+     *
+     * @param list<string> $args validated by Command::scriptArgs
+     */
+    public static function startScriptInBackground(string $script, array $args): void
+    {
+        @exec(Command::detachedScript($script, $args));
+    }
 }
