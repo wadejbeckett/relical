@@ -12,9 +12,10 @@ namespace Noiz\Relical;
  *      started, finished, result: {...core JSON...}|null, error}
  *
  * The core's error goes into the record whole, for the administrator. A
- * customer sees it only when it is one of the plain messages below; any
- * other error (it can name the Storage Box or the repository) is replaced
- * by a sentence that sends them to their provider.
+ * customer sees it only when it is one of the plain messages below and
+ * names nothing but their own subscription; any other error (it can name
+ * the Storage Box, the repository, the host or another subscription) is
+ * replaced by a sentence that sends them to their provider.
  */
 final class RestoreRecord
 {
@@ -32,6 +33,15 @@ final class RestoreRecord
     /** A customer may not start a files or database restore while this many `restored-*` copies are in the home directory. */
     public const MAX_RESTORED_FOLDERS = 5;
     public const TOO_MANY_FOLDERS = 'There are already %d restored copies (restored-...) in the home directory. Delete the ones you no longer need in the File Manager, then restore again.';
+
+    /**
+     * The core's words for a repository locked by a check or prune
+     * (core/internal/restic LockedMessage). The rest of that error is
+     * restic's lock notice, which names the repository and the host, so a
+     * customer gets LOCKED instead of the error.
+     */
+    public const CORE_LOCKED = 'the backup is being checked or pruned, try again in a few minutes';
+    public const LOCKED = 'The backup is being checked or pruned. Try again in a few minutes.';
 
     /** Core errors a customer may read as they are. */
     private const CUSTOMER_SAFE = [
@@ -162,7 +172,7 @@ final class RestoreRecord
         }
         $view['state'] = 'failed';
         $error = is_string($record['error'] ?? null) ? $record['error'] : '';
-        $view['error'] = $admin ? $error : self::customerError($error);
+        $view['error'] = $admin ? $error : self::customerError($error, $subscription);
 
         return $view;
     }
@@ -223,19 +233,60 @@ final class RestoreRecord
         return $count;
     }
 
-    /** The error a customer may see. */
-    public static function customerError(string $error): string
+    /**
+     * The error a customer may see: one of the plain core errors, unless it
+     * names anything beyond the customer's own subscription ($subscription,
+     * its subdomains, paths under its home, its own mailboxes).
+     */
+    public static function customerError(string $error, string $subscription = ''): string
     {
         if (in_array($error, [self::BUSY, self::STOPPED, self::SERVER_BUSY, self::TOO_MANY_RESTORES], true)) {
             return $error;
         }
+        if (str_contains($error, self::CORE_LOCKED)) {
+            return self::LOCKED;
+        }
         foreach (self::CUSTOMER_SAFE as $pattern) {
-            if (preg_match($pattern, $error) === 1 && preg_match('/sftp:|repository|storagebox|\/etc\/relical/i', $error) !== 1) {
+            if (preg_match($pattern, $error) === 1 && !self::namesMore($error, $subscription)) {
                 return ucfirst($error) . (str_ends_with($error, '.') ? '' : '.');
             }
         }
 
         return 'The restore could not be completed. Nothing was changed. Contact your hosting provider and quote the reference on this page.';
+    }
+
+    /**
+     * Whether a core error names anything a customer of $subscription must
+     * not read: the repository or its sftp: address, the Storage Box, a
+     * host, /etc/relical, a path outside the subscription's home, or a
+     * domain other than the subscription and its subdomains. Quoted text is
+     * the customer's own request echoed back (a path, a folder name) and is
+     * not looked at; a mail login (user@domain) is one of the subscription's
+     * mailboxes, as the core only restores those.
+     */
+    private static function namesMore(string $error, string $subscription): bool
+    {
+        if (preg_match('/sftp:|repository|repo\b|storagebox|storage box|\/etc\/|relical\/|\bhost\b|\bssh\b/i', $error) === 1) {
+            return true;
+        }
+        $rest = (string) preg_replace('/"(?:[^"\\\\]|\\\\.)*"/', '""', $error);
+        $sub = preg_quote($subscription, '#');
+        foreach (preg_match_all('#/[^\s"]+#', $rest, $m) > 0 ? $m[0] : [] as $path) {
+            // Under the home: no dotted name before the subscription's own.
+            if ($subscription === '' || preg_match('#^(?:/[^/.]+)*/' . $sub . '(?:/|$)#', rtrim($path, '.,;:')) !== 1) {
+                return true;
+            }
+        }
+        $rest = (string) preg_replace('#/[^\s"]+#', '', $rest);
+        $rest = (string) preg_replace('/[^\s@"]+@[a-z0-9.-]+/i', '', $rest);
+        foreach (preg_match_all('/(?:[a-z0-9-]+\.)+[a-z][a-z0-9-]*/i', $rest, $m) > 0 ? $m[0] : [] as $domain) {
+            $domain = strtolower($domain);
+            if ($subscription === '' || ($domain !== $subscription && !str_ends_with($domain, '.' . $subscription))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public const NO_BACKUPS_YET = 'There are no backups of this subscription yet. The first one is made during the next nightly backup.';
@@ -244,13 +295,17 @@ final class RestoreRecord
     /**
      * What a customer sees when the restore points or mailboxes could not be
      * read: "no backups yet" for the core's words before a subscription's
-     * first backup (no key yet, no repository, no snapshots), else a plain
-     * sentence. The core's message itself is never shown to a customer.
+     * first backup (no key yet, no repository, no snapshots), LOCKED while a
+     * check or prune holds the repository, else a plain sentence. The core's
+     * message itself is never shown to a customer.
      */
     public static function customerReadError(string $message): string
     {
         if ($message === self::READ_BUSY || $message === self::READ_SERVER_BUSY) {
             return $message;
+        }
+        if (str_contains($message, self::CORE_LOCKED)) {
+            return self::LOCKED;
         }
         if (preg_match('/repository does not exist|no backup snapshots|no key for|no key file/i', $message) === 1) {
             return self::NO_BACKUPS_YET;

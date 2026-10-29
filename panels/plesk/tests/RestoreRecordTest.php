@@ -123,6 +123,79 @@ final class RestoreRecordTest extends TestCase
         self::assertStringContainsString('Contact your hosting provider', RestoreRecord::customerError('home /var/www/vhosts/example.test is owned by uid 0'));
     }
 
+    /**
+     * The core's exact words (core/internal/restic/runner.go LockedMessage,
+     * restore/restore.go, restore/files.go, restore/webspace.go), as a
+     * customer of example.test sees them.
+     *
+     * @return iterable<string, array{string, string}>
+     */
+    public static function coreErrors(): iterable
+    {
+        yield 'locked by a check or prune' => [
+            'restic restore: the backup is being checked or pruned, try again in a few minutes (exit 11: repo already locked, waiting up to 2m0s for the lock | unable to create lock in backend: repository is already locked by PID 4242 on host.example.test by root (UID 0, GID 0) | lock was created at 2026-10-29 02:00:01 (1m2s ago) | storage ID 1a2b3c4d)',
+            RestoreRecord::LOCKED,
+        ];
+        yield 'mail folder not in the snapshot' => [
+            'folder "INBOX.Old" is not in snapshot 1a2b3c4d of info@example.test',
+            'Folder "INBOX.Old" is not in snapshot 1a2b3c4d of info@example.test.',
+        ];
+        yield 'mailbox not in the snapshot' => [
+            'mailbox info@example.test is not in snapshot 1a2b3c4d',
+            'Mailbox info@example.test is not in snapshot 1a2b3c4d.',
+        ];
+        yield 'path not in the snapshot' => [
+            'path "httpdocs/old.php" is not in snapshot 1a2b3c4d',
+            'Path "httpdocs/old.php" is not in snapshot 1a2b3c4d.',
+        ];
+        yield 'left over by an interrupted restore' => [
+            "/var/www/vhosts/example.test/restored-2026-10-29-1a2b3c4d already exists and is still owned by root: it is left from a restore of this snapshot that was interrupted; ask the server's administrator to remove it, then restore again",
+            "/var/www/vhosts/example.test/restored-2026-10-29-1a2b3c4d already exists and is still owned by root: it is left from a restore of this snapshot that was interrupted; ask the server's administrator to remove it, then restore again.",
+        ];
+        yield 'an earlier restore of this snapshot' => [
+            '/var/www/vhosts/example.test/restored-2026-10-29-1a2b3c4d already exists (it may be from an earlier, possibly incomplete restore of this snapshot); delete or rename it to restore this snapshot again',
+            '/var/www/vhosts/example.test/restored-2026-10-29-1a2b3c4d already exists (it may be from an earlier, possibly incomplete restore of this snapshot); delete or rename it to restore this snapshot again.',
+        ];
+    }
+
+    /** @dataProvider coreErrors */
+    public function testCoreErrorsACustomerReads(string $core, string $shown): void
+    {
+        self::assertSame($shown, RestoreRecord::customerError($core, 'example.test'));
+        $record = RestoreRecord::failed(RestoreRecord::running(self::ID, self::ARGS, self::NOW), $core, self::NOW);
+        self::assertSame($shown, RestoreRecord::view($record, 'example.test', self::NOW, self::NOW, false)['error']);
+    }
+
+    /**
+     * Allowlisted words that name more than the customer's subscription.
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function leakingErrors(): iterable
+    {
+        yield 'repository' => ['Fatal: create repository at sftp:u000000-sub1@u000000-sub1.your-storagebox.example:relical/example.test failed: config file already exists'];
+        yield 'sftp address' => ['folder "x" is not in snapshot 1a2b3c4d of sftp:u1@box'];
+        yield 'relical config' => ['/etc/relical/keys/example.test.key already exists'];
+        yield 'host name' => ['path "x" is not in snapshot 1a2b3c4d on host.example.test'];
+        yield 'the word host' => ['folder "x" already exists on host web1'];
+        yield 'another subscription' => ['/var/www/vhosts/other.test/restored-x already exists and is still owned by root: ask the server\'s administrator to remove it'];
+        yield 'another subscription in a home path' => ['/var/www/vhosts/other.test/example.test/restored-x already exists'];
+        yield 'a look-alike subscription' => ['/var/www/vhosts/example.test.evil/restored-x already exists'];
+        yield 'a path outside any home' => ['/root/restored-x already exists'];
+        yield 'another domain' => ['mailbox info@example.test is not in snapshot 1a2b3c4d (other.test)'];
+    }
+
+    /** @dataProvider leakingErrors */
+    public function testCoreErrorsNamingMoreStayHidden(string $core): void
+    {
+        self::assertStringContainsString('Contact your hosting provider', RestoreRecord::customerError($core, 'example.test'));
+    }
+
+    public function testAReadDuringACheckOrPruneSaysSo(): void
+    {
+        self::assertSame(RestoreRecord::LOCKED, RestoreRecord::customerReadError('restic snapshots: the backup is being checked or pruned, try again in a few minutes (exit 11: repository is already locked by PID 1 on host.example.test)'));
+    }
+
     /** @return iterable<string, array{string, string}> */
     public static function readErrors(): iterable
     {
