@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
+	"syscall"
 
 	"github.com/wadejbeckett/relical/core/internal/inventory"
 	"github.com/wadejbeckett/relical/core/internal/restic"
@@ -26,22 +28,37 @@ func (e Env) MysqldumpCommand(db string) []string {
 	return append(cmd, db)
 }
 
-// checkDefaultsFile requires mysql.defaults_file to be a regular file that
-// neither group nor others can read (mode 0600).
+// asRoot reports whether relical runs as root; a variable so that tests
+// can check the owner rule without root.
+var asRoot = func() bool { return os.Geteuid() == 0 }
+
+// checkDefaultsFile requires mysql.defaults_file to be a regular file, not
+// a symlink, with mode 0600 or stricter and, when relical runs as root,
+// owned by root: whoever can write it chooses the host, the credentials
+// and options (such as result-file) of a mysqldump run as root.
 func (e Env) checkDefaultsFile() error {
 	p := e.Cfg.MySQL.DefaultsFile
 	if p == "" {
 		return errors.New("mysql.defaults_file is not set in the configuration")
 	}
-	fi, err := os.Stat(p)
+	fi, err := os.Lstat(p)
 	if err != nil {
 		return fmt.Errorf("mysql.defaults_file: %w", err)
+	}
+	if fi.Mode()&fs.ModeSymlink != 0 {
+		return fmt.Errorf("mysql.defaults_file %s is a symlink; give the file itself", p)
 	}
 	if !fi.Mode().IsRegular() {
 		return fmt.Errorf("mysql.defaults_file %s is not a regular file", p)
 	}
-	if fi.Mode().Perm()&0o077 != 0 {
+	if fi.Mode().Perm()&^0o600 != 0 {
 		return fmt.Errorf("mysql.defaults_file %s has mode %04o; it holds a password, chmod 600", p, fi.Mode().Perm())
+	}
+	if asRoot() {
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok || st.Uid != 0 {
+			return fmt.Errorf("mysql.defaults_file %s is not owned by root; chown root %s", p, p)
+		}
 	}
 	return nil
 }

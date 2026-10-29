@@ -85,8 +85,21 @@ func TestDefaultsFileIsCheckedFirst(t *testing.T) {
 		"readable": func(e Env) { os.Chmod(e.Cfg.MySQL.DefaultsFile, 0o644) },
 		"unset":    func(e Env) { e.Cfg.MySQL.DefaultsFile = "" },
 		"dir":      func(e Env) { os.Remove(e.Cfg.MySQL.DefaultsFile); os.Mkdir(e.Cfg.MySQL.DefaultsFile, 0o700) },
+		"group":    func(e Env) { os.Chmod(e.Cfg.MySQL.DefaultsFile, 0o640) },
+		"exec":     func(e Env) { os.Chmod(e.Cfg.MySQL.DefaultsFile, 0o700) },
+		"symlink": func(e Env) {
+			target := e.Cfg.MySQL.DefaultsFile + ".real"
+			os.Rename(e.Cfg.MySQL.DefaultsFile, target)
+			os.Symlink(target, e.Cfg.MySQL.DefaultsFile)
+		},
+		// The test's files belong to the test user, never root.
+		"not root's": func(Env) { asRoot = func() bool { return true } },
 	} {
 		t.Run(name, func(t *testing.T) {
+			if os.Geteuid() == 0 && name == "not root's" {
+				t.Skip("running as root: the file is root's")
+			}
+			defer func(f func() bool) { asRoot = f }(asRoot)
 			e, _, log := setup(t, "local")
 			prep(e)
 			rs := e.BackupDatabases(context.Background(), dbSub(t, e, "a", "b"))
@@ -102,6 +115,14 @@ func TestDefaultsFileIsCheckedFirst(t *testing.T) {
 				t.Errorf("restic ran:\n%s", log())
 			}
 		})
+	}
+}
+
+func TestDefaultsFileStricterModeIsAccepted(t *testing.T) {
+	e, _, _ := setup(t, "local")
+	os.Chmod(e.Cfg.MySQL.DefaultsFile, 0o400)
+	if err := e.checkDefaultsFile(); err != nil {
+		t.Fatal(err)
 	}
 }
 
