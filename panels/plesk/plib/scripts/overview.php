@@ -10,7 +10,7 @@ declare(strict_types=1);
  * Prints {"public_key": {"key", "error"}, "status": {...}, "report": {...}}
  * where status and report are the core's answer to `relical status` and
  * `relical report` ({code, stdout, stderr, timed_out}), each stopped after
- * Overview::CORE_TIMEOUT seconds. Takes no arguments.
+ * Overview::timeout() seconds (6 for status, 12 for report). Takes no arguments.
  */
 
 use Noiz\Relical\Command;
@@ -39,7 +39,7 @@ ScriptIO::requireRoot('overview.php');
 $out = ['public_key' => Overview::publicKey(Paths::SSH_KEY . '.pub')];
 foreach (['status', 'report'] as $command) {
     try {
-        $out[$command] = Overview::call(Process::capture(Command::parse([$command])->argv(), Overview::CORE_TIMEOUT));
+        $out[$command] = Overview::call(Process::capture(Command::parse([$command])->argv(), Overview::timeout($command)));
     } catch (Throwable $e) {
         $out[$command] = ['code' => -1, 'stdout' => '', 'stderr' => $e->getMessage(), 'timed_out' => false];
     }

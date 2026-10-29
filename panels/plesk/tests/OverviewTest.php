@@ -77,5 +77,13 @@ final class OverviewTest extends TestCase
         self::assertTrue($parts['status']['timed_out']);
         self::assertStringContainsString('did not answer within 6 seconds', $parts['status']['stderr']);
         self::assertSame('x', $parts['report']['stderr'], 'a missing part');
+
+        $report = Overview::parse(['report' => ['code' => -1, 'stdout' => '', 'stderr' => '', 'timed_out' => true]], 'x');
+        self::assertStringContainsString('within 12 seconds', $report['report']['stderr']);
+    }
+
+    public function testThePageWaitsLongerThanBothCalls(): void
+    {
+        self::assertGreaterThan(Overview::timeout('status') + Overview::timeout('report'), Overview::TIMEOUT);
     }
 }

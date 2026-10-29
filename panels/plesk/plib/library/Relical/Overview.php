@@ -11,15 +11,28 @@ use Throwable;
  * The settings page's read-only data in one root call (overview.php): the
  * extension's public key, `relical status` and `relical report`. One
  * `extension --exec` instead of three in a row, each core call cut short
- * after CORE_TIMEOUT so a slow or hung core cannot hold the page.
+ * (timeout()) so a slow or hung core cannot hold the page.
  */
 final class Overview
 {
-    /** Per core call inside overview.php. */
+    /** `relical status` inside overview.php: it reads only the state file. */
     public const CORE_TIMEOUT = 6.0;
 
-    /** How long the page waits for overview.php as a whole. */
-    public const TIMEOUT = 15.0;
+    /**
+     * `relical report` inside overview.php: it also loads the inventory
+     * (inventory_command, which enumerates every subscription through Plesk),
+     * so it gets longer (Task 9 review finding 6; TEST-PLAN times it).
+     */
+    public const REPORT_TIMEOUT = 12.0;
+
+    /** How long the page waits for overview.php as a whole (both calls in a row, plus PHP's start). */
+    public const TIMEOUT = 21.0;
+
+    /** @return float the limit of one core call inside overview.php */
+    public static function timeout(string $command): float
+    {
+        return $command === 'report' ? self::REPORT_TIMEOUT : self::CORE_TIMEOUT;
+    }
 
     /** The public key may be at most this long (an ed25519 line is about 100 bytes). */
     private const KEY_READ_LIMIT = 4096;
@@ -84,7 +97,7 @@ final class Overview
                 ? ['code' => $call['code'], 'stdout' => $call['stdout'], 'stderr' => $call['stderr'], 'timed_out' => ($call['timed_out'] ?? false) === true]
                 : ['code' => -1, 'stdout' => '', 'stderr' => $error, 'timed_out' => false];
             if ($out[$part]['timed_out']) {
-                $out[$part]['stderr'] = trim($out[$part]['stderr'] . "\nrelical did not answer within " . (int) self::CORE_TIMEOUT . ' seconds');
+                $out[$part]['stderr'] = trim($out[$part]['stderr'] . "\nrelical did not answer within " . (int) self::timeout($part) . ' seconds');
             }
         }
 

@@ -70,6 +70,11 @@ what PHPUnit covers. Each line names the assumption and where it lives.
       the report block says the report is not available until the core has
       the `report` command (core Task 5).
 - [ ] The log screen before the first run says there is no log yet.
+- [ ] Timing on a server with a few hundred subscriptions: how long
+      `relical status` and `relical report` take inside `overview.php`
+      (report runs `inventory_command`). The limits are 6 s and 12 s, the
+      page waits 21 s; if report needs longer, the core should use the
+      inventory of the last run instead (Task 9 review finding 6).
 
 ## Customer restore screens
 
