@@ -5,6 +5,7 @@ package restic
 import (
 	"context"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
 	"os"
@@ -62,7 +63,7 @@ func TestRealRepoRoundTrip(t *testing.T) {
 		t.Fatalf("%+v %v", sum, err)
 	}
 	target := t.TempDir()
-	if err := r.Restore(ctx, sum.SnapshotID, m, target); err != nil {
+	if err := r.Restore(ctx, sum.SnapshotID, target, []string{m}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"cur/1.h:2,S", ".Sent/cur/2.h:2,S"} {
@@ -296,7 +297,7 @@ func TestFilesExcludesAndCaches(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := t.TempDir()
-	if err := r.Restore(ctx, sum.SnapshotID, esc, target); err != nil {
+	if err := r.Restore(ctx, sum.SnapshotID, target, []string{esc}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"httpdocs/index.php", "httpdocs/logs/keep.txt", "cache/CACHEDIR.TAG"} {
@@ -332,5 +333,114 @@ func TestSftpArgsReachSshIntact(t *testing.T) {
 	got := strings.ReplaceAll(strings.TrimSpace(string(b)), "\n", " ")
 	if !strings.Contains(got, "[-p] [23] [-o] [Ciphers=aes128-ctr,aes256-ctr] [-i] [/etc/relical/ssh/id_ed25519]") {
 		t.Errorf("ssh argv: %s", got)
+	}
+}
+
+// webspace makes a small vhost-shaped tree and backs it up.
+func webspace(t *testing.T, ctx context.Context, r Runner) (home, snapshot string) {
+	t.Helper()
+	if err := r.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	home = filepath.Join(t.TempDir(), "example.test")
+	for _, d := range []string{"httpdocs/sub", "logs"} {
+		os.MkdirAll(filepath.Join(home, d), 0o750)
+	}
+	os.WriteFile(filepath.Join(home, "httpdocs", "index.html"), []byte("hello\n"), 0o640)
+	os.WriteFile(filepath.Join(home, "httpdocs", "sub", "deep.txt"), []byte("deep\n"), 0o600)
+	os.WriteFile(filepath.Join(home, "logs", "access.log"), []byte("log\n"), 0o600)
+	sum, err := r.Backup(ctx, []string{home}, []string{"files"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return home, sum.SnapshotID
+}
+
+func TestRealRestoreInclude(t *testing.T) {
+	ctx := context.Background()
+	r := realRunner(t, filepath.Join(t.TempDir(), "repo"))
+	home, snap := webspace(t, ctx, r)
+	target := t.TempDir()
+	if err := r.Restore(ctx, snap, target, []string{home + "/httpdocs"}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(target, home, "httpdocs", "sub", "deep.txt"))
+	if err != nil || string(b) != "deep\n" {
+		t.Fatalf("%q %v", b, err)
+	}
+	if fi, err := os.Stat(filepath.Join(target, home, "httpdocs", "index.html")); err != nil || fi.Mode().Perm() != 0o640 {
+		t.Errorf("mode not kept: %v %v", fi, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, home, "logs")); err == nil {
+		t.Error("restored logs although only httpdocs was included")
+	}
+	// An include that matches nothing: exit 0 and nothing restored.
+	empty := t.TempDir()
+	if err := r.Restore(ctx, snap, empty, []string{home + "/nope"}); err != nil {
+		t.Fatalf("restic restore with an unmatched include: %v", err)
+	}
+	if entries, _ := os.ReadDir(empty); len(entries) != 0 {
+		t.Errorf("unmatched include restored %v", entries)
+	}
+}
+
+func TestRealLsOneLevel(t *testing.T) {
+	ctx := context.Background()
+	r := realRunner(t, filepath.Join(t.TempDir(), "repo"))
+	home, snap := webspace(t, ctx, r)
+	nodes, truncated, err := r.Ls(ctx, snap, home, 100)
+	if err != nil || truncated {
+		t.Fatal(err, truncated)
+	}
+	got := []string{}
+	for _, n := range nodes {
+		got = append(got, n.Type+" "+n.Path)
+	}
+	// The directory itself, then its direct children only.
+	want := []string{"dir " + home, "dir " + home + "/httpdocs", "dir " + home + "/logs"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if nodes[1].Name != "httpdocs" || nodes[1].MTime.IsZero() {
+		t.Errorf("%+v", nodes[1])
+	}
+	file, _, err := r.Ls(ctx, snap, home+"/httpdocs/index.html", 100)
+	if err != nil || len(file) != 1 || file[0].Type != "file" || file[0].Size != 6 || file[0].Name != "index.html" {
+		t.Fatalf("file: %+v %v", file, err)
+	}
+	missing, _, err := r.Ls(ctx, snap, home+"/nope", 100)
+	if err != nil || len(missing) != 0 {
+		t.Fatalf("missing path: %+v %v", missing, err)
+	}
+	capped, truncated, err := r.Ls(ctx, snap, home, 2)
+	if err != nil || !truncated || len(capped) != 2 {
+		t.Fatalf("cap: %d %v %v", len(capped), truncated, err)
+	}
+}
+
+func TestRealDumpStreams(t *testing.T) {
+	ctx := context.Background()
+	r := realRunner(t, filepath.Join(t.TempDir(), "repo"))
+	if err := r.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sum, err := r.BackupStdin(ctx, []string{"printf", "CREATE TABLE t (id int);\n"}, "example_wp.sql", []string{"db", "db:example_wp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	if err := r.Dump(ctx, sum.SnapshotID, "/example_wp.sql", &b); err != nil {
+		t.Fatal(err)
+	}
+	if b.String() != "CREATE TABLE t (id int);\n" {
+		t.Fatalf("%q", b.String())
+	}
+	nodes, _, err := r.Ls(ctx, sum.SnapshotID, "/", 10)
+	if err != nil || len(nodes) != 1 || nodes[0].Path != "/example_wp.sql" {
+		t.Fatalf("ls /: %+v %v", nodes, err)
+	}
+	err = r.Dump(ctx, sum.SnapshotID, "/other.sql", io.Discard)
+	if ExitCode(err) != 1 || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("dump of a missing file: %v", err)
 	}
 }

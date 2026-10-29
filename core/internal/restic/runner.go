@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -303,8 +304,102 @@ func (r Runner) Check(ctx context.Context, readDataSubset string) error {
 	return err
 }
 
-func (r Runner) Restore(ctx context.Context, snapshotID, include, target string) error {
-	_, err := r.run(ctx, "restore", snapshotID, "--target", target, "--include", include)
+// Restore restores snapshotID under target, limited to the include
+// patterns when any are given. restic exits 0 when the patterns match
+// nothing, so callers check what was restored (or use Ls first).
+func (r Runner) Restore(ctx context.Context, snapshotID, target string, include []string) error {
+	args := []string{"restore", snapshotID, "--target", target}
+	for _, i := range include {
+		args = append(args, "--include", i)
+	}
+	_, err := r.run(ctx, args...)
+	return err
+}
+
+// Node is one entry of restic ls --json (restic 0.19: one JSON object per
+// line, the snapshot first, then message_type "node" per entry).
+type Node struct {
+	Name  string    `json:"name"`
+	Type  string    `json:"type"` // file, dir, symlink, dev, chardev, fifo, socket
+	Path  string    `json:"path"`
+	Size  uint64    `json:"size"`
+	MTime time.Time `json:"mtime"`
+}
+
+// Ls lists path in snapshotID: for a directory, the directory itself and
+// its direct children (restic ls without --recursive); for a file, the
+// file. A path not in the snapshot gives no nodes and no error. At most
+// max nodes are returned; truncated is true when there were more, and
+// restic is then stopped without reading the rest.
+func (r Runner) Ls(ctx context.Context, snapshotID, path string, max int) (nodes []Node, truncated bool, err error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := r.command(ctx, "ls", "--json", snapshotID, path)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, false, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, false, err
+	}
+	sc := bufio.NewScanner(out)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	var perr error
+	for sc.Scan() {
+		var m struct {
+			MessageType string `json:"message_type"`
+		}
+		if json.Unmarshal(sc.Bytes(), &m) != nil || m.MessageType != "node" {
+			continue
+		}
+		if len(nodes) == max {
+			truncated = true
+			break
+		}
+		var n Node
+		if perr = json.Unmarshal(sc.Bytes(), &n); perr != nil {
+			perr = fmt.Errorf("restic ls: %w", perr)
+			break
+		}
+		nodes = append(nodes, n)
+	}
+	if perr == nil && !truncated {
+		perr = sc.Err()
+	}
+	if truncated || perr != nil {
+		cancel() // stop restic; its exit status no longer matters
+		io.Copy(io.Discard, out)
+		cmd.Wait()
+		if perr != nil {
+			return nil, false, perr
+		}
+		return nodes, true, nil
+	}
+	if err := cmd.Wait(); err != nil {
+		return nil, false, r.exitError(ctx, "ls", err, stderr.String())
+	}
+	return nodes, false, nil
+}
+
+// Dump writes the file path of snapshotID to w as restic reads it, so it
+// is never staged anywhere else on disk.
+func (r Runner) Dump(ctx context.Context, snapshotID, path string, w io.Writer) error {
+	cmd := r.command(ctx, "dump", snapshotID, path)
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = w, &stderr
+	if err := cmd.Run(); err != nil {
+		return r.exitError(ctx, "dump", err, stderr.String())
+	}
+	return nil
+}
+
+func (r Runner) exitError(ctx context.Context, command string, err error, stderr string) error {
+	var xe *exec.ExitError
+	if errors.As(err, &xe) {
+		return &ExitError{Command: command, Code: xe.ExitCode(), Stderr: stderr, Cancelled: ctx.Err()}
+	}
 	return err
 }
 

@@ -199,7 +199,7 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 		return res, err
 	}
 	defer os.RemoveAll(stage)
-	if err := r.Restore(ctx, snap.ID, box.Path, stage); err != nil {
+	if err := r.Restore(ctx, snap.ID, stage, []string{box.Path}); err != nil {
 		return res, err
 	}
 	// restic restore exits 0 when --include matches nothing in the snapshot.
