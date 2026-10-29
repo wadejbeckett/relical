@@ -183,6 +183,53 @@ class IndexController extends pm_Controller_Action
         $this->view->backUrl = pm_Context::getBaseUrl();
     }
 
+    /**
+     * GET `?subscription=S`: asks to confirm adopting the subscription's
+     * repository. POST: runs `cli.php adopt --subscription S`, which records
+     * the subscription's Plesk id with its repository key so the core backs
+     * it up again. Offered on a status row whose last error is the core's
+     * ownerless-key refusal (Status::ADOPT_HINT).
+     */
+    public function adoptAction()
+    {
+        $request = $this->getRequest();
+        $subscription = trim((string) $request->getParam('subscription'));
+        try {
+            $args = ['adopt', '--subscription', Command::domain($subscription)];
+            Command::parse($args);
+        } catch (InvalidArgumentException $e) {
+            $this->_status->addMessage('error', 'Adopt repository: ' . $e->getMessage());
+            $this->_helper->viewRenderer->setNoRender(true);
+            $this->_redirect(pm_Context::getBaseUrl());
+            return;
+        }
+
+        $form = new pm_Form_Simple();
+        $form->setAction(pm_Context::getActionUrl('index', 'adopt'));
+        $form->addElement('hidden', 'subscription', ['value' => $subscription]);
+        $form->addControlButtons([
+            'sendTitle' => 'Adopt repository',
+            'cancelLink' => pm_Context::getBaseUrl(),
+        ]);
+
+        if ($request->isPost()) {
+            if ($form->isValid($request->getPost())) {
+                if ($this->runInProgress()) {
+                    $this->_status->addMessage('warning', 'A backup run is in progress. Adopt the repository when it has finished.');
+                } else {
+                    $this->reportAdopt($subscription, RootScripts::run('cli.php', $args, self::SCRIPT_TIMEOUT));
+                }
+            }
+            $this->_helper->json(['redirect' => pm_Context::getBaseUrl()]);
+            return;
+        }
+
+        $this->view->pageTitle = 'Relical Backup: adopt repository';
+        $this->view->subscription = $subscription;
+        $this->view->form = $form;
+        $this->view->backUrl = pm_Context::getBaseUrl();
+    }
+
     /** GET: the last 200 lines of the core's log. */
     public function logAction()
     {
@@ -373,6 +420,9 @@ class IndexController extends pm_Controller_Action
             $row['backup_url'] = $row['subscription'] === Paths::SERVER_REPO
                 ? ''
                 : pm_Context::getActionUrl('index', 'backup') . '?subscription=' . rawurlencode($row['subscription']);
+            $row['adopt_url'] = $row['needs_adopt']
+                ? pm_Context::getActionUrl('index', 'adopt') . '?subscription=' . rawurlencode($row['subscription'])
+                : '';
         }
         unset($row);
 
@@ -385,6 +435,19 @@ class IndexController extends pm_Controller_Action
         $result = RootScripts::run('cli.php', ['report'], self::SCRIPT_TIMEOUT);
 
         return Report::fromCli($result['code'], $result['stdout'], $result['stderr']);
+    }
+
+    /** @param array{code: int, data: ?array<mixed>, stdout: string, stderr: string, timed_out: bool} $result */
+    private function reportAdopt(string $subscription, array $result): void
+    {
+        $results = is_array($result['data']) && array_is_list($result['data']) ? $result['data'] : [];
+        $ok = $result['code'] === 0 && $results !== [] && ($results[0]['ok'] ?? false) === true;
+        if ($ok) {
+            $this->_status->addMessage('info', sprintf('The repository of %s is adopted. The next backup uses it.', $subscription));
+            return;
+        }
+        $error = is_string($results[0]['error'] ?? null) && $results[0]['error'] !== '' ? $results[0]['error'] : RootScripts::error($result);
+        $this->_status->addMessage('error', sprintf('The repository of %s was not adopted: %s', $subscription, $error));
     }
 
     private function runInProgress(): bool

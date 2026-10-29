@@ -85,6 +85,8 @@ final class Command
                 break;
 
             case 'mailboxes':
+            case 'adopt':
+                // A subscription's own repository, never _server.
                 $out = self::emit('subscription', self::required($flags, 'subscription', [self::class, 'domain']));
                 self::only($flags, ['subscription']);
                 break;
@@ -113,6 +115,7 @@ final class Command
             case 'status':
             case 'report':
             case 'inventory':
+            case 'version':
                 $out = [];
                 self::only($flags, []);
                 break;

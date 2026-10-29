@@ -41,6 +41,8 @@ final class CommandTest extends TestCase
         yield 'restore db' => [['restore', '--subscription', 'example.test', '--unit', 'db', '--database', 'example_wp'], ['restore', '--subscription', 'example.test', '--unit', 'db', '--database', 'example_wp']];
         yield 'restore panel config' => [['restore', '--subscription', '_server', '--unit', 'panel-config'], ['restore', '--subscription', '_server', '--unit', 'panel-config']];
         yield 'mailboxes' => [['mailboxes', '--subscription', 'example.test'], ['mailboxes', '--subscription', 'example.test']];
+        yield 'adopt' => [['adopt', '--subscription', 'example.test'], ['adopt', '--subscription', 'example.test']];
+        yield 'version' => [['version'], ['version']];
         yield 'status' => [['status'], ['status']];
         yield 'report' => [['report'], ['report']];
         yield 'inventory' => [['inventory'], ['inventory']];
@@ -69,7 +71,11 @@ final class CommandTest extends TestCase
         yield 'mailboxes of every subscription' => [['mailboxes', '--all']];
         yield 'no command' => [[]];
         yield 'unknown command' => [['init']];
-        yield 'version is not exposed' => [['version']];
+        yield 'version with a flag' => [['version', '--all']];
+        yield 'adopt without a subscription' => [['adopt']];
+        yield 'adopt everything' => [['adopt', '--all']];
+        yield 'adopt the server' => [['adopt', '--subscription', '_server']];
+        yield 'adopt one unit' => [['adopt', '--subscription', 'example.test', '--unit', 'mail']];
         yield 'shell in the command' => [['status;id']];
         yield 'neither target' => [['backup']];
         yield 'both targets' => [['backup', '--all', '--subscription', 'example.test']];
@@ -307,7 +313,7 @@ final class CommandTest extends TestCase
         yield 'hostkey trust an option' => ['hostkey.php', ['trust', '-oProxyCommand=id']];
         yield 'hostkey scan with a host' => ['hostkey.php', ['scan', 'other.example.test']];
         yield 'hostkey trust twice' => ['hostkey.php', ['trust', self::FINGERPRINT, self::FINGERPRINT]];
-        yield 'cli not allowed' => ['cli.php', ['version']];
+        yield 'cli not allowed' => ['cli.php', ['init']];
         yield 'cli probe' => ['cli.php', ['probe']];
         yield 'cli bad value' => ['cli.php', ['backup', '--subscription', '-x']];
         yield 'restore-run without an id' => ['restore-run.php', ['restore', '--subscription', 'example.test', '--unit', 'files']];
