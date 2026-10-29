@@ -79,6 +79,18 @@ final class DestinationTest extends TestCase
             '-o', 'ConnectTimeout=10',
             'u000000-sub1@u000000-sub1.your-storagebox.example',
         ], $argv);
-        self::assertSame("pwd\n", Destination::probeCommands());
+    }
+
+    public function testTheProbeListsThePathAndWritesNothing(): void
+    {
+        $destination = Destination::fromInput(['sftp_host' => 'u000000-sub1.your-storagebox.example', 'sftp_port' => 23, 'sftp_user' => 'u000000-sub1', 'sftp_path' => 'relical/']);
+        $commands = $destination->probeCommands();
+
+        self::assertSame("pwd\n-ls \"relical\"\n", $commands);
+        foreach (explode("\n", trim($commands)) as $line) {
+            self::assertContains(strtok(ltrim($line, '-'), ' '), ['pwd', 'ls'], 'only commands that read');
+        }
+        self::assertTrue($destination->pathMissing("Can't ls: \"/relical\" not found\n"));
+        self::assertFalse($destination->pathMissing(''));
     }
 }

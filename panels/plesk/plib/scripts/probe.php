@@ -53,13 +53,17 @@ try {
         ScriptIO::ok(['ok' => false, 'message' => sprintf('%s is missing; run the installer again.', Paths::SSH_KEY)]);
     }
     $sftp = Installer::findTool(new LocalProbe(), Paths::SFTP);
-    $result = Process::capture($destination->sftpProbeArgv($sftp, 10), RELICAL_PROBE_TIMEOUT, Destination::probeCommands());
+    $result = Process::capture($destination->sftpProbeArgv($sftp, 10), RELICAL_PROBE_TIMEOUT, $destination->probeCommands());
 
     if ($result['timed_out']) {
         ScriptIO::ok(['ok' => false, 'message' => sprintf('No answer from %s within %d seconds.', $destination->knownHostsName(), RELICAL_PROBE_TIMEOUT)]);
     }
     if ($result['code'] === 0) {
-        ScriptIO::ok(['ok' => true, 'message' => sprintf('Connected to %s with the extension key and the pinned host key.', $destination->display())]);
+        $message = sprintf('Connected to %s with the extension key and the pinned host key.', $destination->display());
+        if ($destination->pathMissing($result['stderr'])) {
+            $message .= sprintf(' The path %s does not exist yet; the first backup creates it.', $destination->path);
+        }
+        ScriptIO::ok(['ok' => true, 'message' => $message]);
     }
     // sftp's own words (authentication refused, host key changed, ...), last lines only.
     $lines = array_slice(array_values(array_filter(array_map('trim', explode("\n", $result['stderr'])), 'strlen')), -3);

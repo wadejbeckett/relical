@@ -53,10 +53,14 @@ what PHPUnit covers. Each line names the assumption and where it lives.
       `ssh-keygen -l`, "Trust this host key" writes
       `/etc/relical/ssh/known_hosts` 0600, and a changed host key between
       scan and trust is refused.
-- [ ] "Test connection" (`sftp -b -` running `pwd`) succeeds against the SFTP
-      container once the public key is authorised, and fails with sftp's
-      reason when it is not. On a real Storage Box, confirm `pwd` is
-      accepted in sftp batch mode.
+- [ ] "Test connection" (a POST; `sftp -b -` running `pwd`, then
+      `-ls "<path>"`) succeeds against the SFTP container once the public
+      key is authorised, and fails with sftp's reason when it is not. A
+      missing path still counts as connected and adds "does not exist yet"
+      (sftp prints `Can't ls: "<path>" not found`). On a real Storage Box,
+      confirm `pwd` and `ls` are accepted in sftp batch mode. (Task 8
+      review finding 6: the plan's restic probe of `relical/_probe` became
+      this sftp probe, which writes nothing.)
 - [ ] Saving a new backup time rewrites `relical-backup.timer` and
       `systemctl list-timers` shows the new time.
 - [ ] The status table before any configuration shows the core's error, and

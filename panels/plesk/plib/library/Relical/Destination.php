@@ -86,9 +86,23 @@ final class Destination
         ];
     }
 
-    /** What the probe asks the server: only where it is, which changes nothing. */
-    public static function probeCommands(): string
+    /**
+     * What the probe asks the server, none of which changes anything: where
+     * it is, then a listing of the backup path. The `-` lets the session go
+     * on when the path is missing (restic creates it on the first backup);
+     * probe.php reads that from stderr (pathMissing()). The path passed
+     * ConfigWriter::path (letters, digits, "_", ".", "/", "-"), so it needs
+     * no quoting inside sftp's batch syntax; it is quoted anyway.
+     */
+    public function probeCommands(): string
     {
-        return "pwd\n";
+        return "pwd\n-ls \"" . $this->path . "\"\n";
+    }
+
+    /** Whether sftp's stderr from probeCommands() says the backup path does not exist. */
+    public function pathMissing(string $stderr): bool
+    {
+        return preg_match('/^Can\'t ls: .*not found/mi', $stderr) === 1
+            || stripos($stderr, 'No such file or directory') !== false;
     }
 }
