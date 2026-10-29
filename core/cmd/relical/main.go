@@ -334,23 +334,21 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (code int
 			fmt.Fprintln(stderr, "warning:", err)
 		}
 	}
+	if *all {
+		// An unreachable destination is given up on after a few
+		// subscriptions instead of costing timeouts for every one.
+		env.Breaker = job.NewBreaker()
+	}
 	results := []job.Result{}
 	switch {
 	case cmd == "backup" && *all:
 		results = env.BackupAll(ctx, *unit)
 	case cmd == "backup":
 		results = append(results, env.BackupSubscription(ctx, subs[0], *unit)...)
-	}
-	for _, s := range subs {
-		if ctx.Err() != nil || cmd == "backup" {
-			break
-		}
-		switch cmd {
-		case "forget":
-			results = append(results, env.Forget(ctx, s))
-		case "check":
-			results = append(results, env.Check(ctx, s, *subset))
-		}
+	case cmd == "forget":
+		results = env.ForgetAll(ctx, subs)
+	case cmd == "check":
+		results = env.CheckAll(ctx, subs, *subset)
 	}
 	if err := env.Record(results); err != nil {
 		fmt.Fprintln(stderr, "warning: state not saved:", err)

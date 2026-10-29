@@ -224,3 +224,42 @@ func TestCancelledRunSendsSIGTERMAndSaysCancelled(t *testing.T) {
 		t.Errorf("restic was not sent SIGTERM:\n%s", log())
 	}
 }
+
+func TestSftpRepositoriesGetSSHDefaults(t *testing.T) {
+	for _, c := range []struct{ args, want string }{
+		{"", "-o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes"},
+		{"-p 23 -o connecttimeout=5 -oServerAliveInterval=10 -o BatchMode=no",
+			"-p 23 -o connecttimeout=5 -oServerAliveInterval=10 -o BatchMode=no -o ServerAliveCountMax=4"},
+	} {
+		if got := sshArgs(c.args); got != c.want {
+			t.Errorf("sshArgs(%q) = %q, want %q", c.args, got, c.want)
+		}
+	}
+	r, _, log := fake(t)
+	r.Repository = "sftp:u000000-sub1@u000000-sub1.your-storagebox.example:relical/example.test"
+	r.Exists(context.Background())
+	if !strings.HasPrefix(log(), `-o "sftp.args=-o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes" cat config`) {
+		t.Errorf("%s", log())
+	}
+	// Other repositories get no sftp.args.
+	r, _, log = fake(t)
+	r.Exists(context.Background())
+	if strings.Contains(log(), "sftp.args") {
+		t.Errorf("%s", log())
+	}
+}
+
+func TestIsConnectionFailure(t *testing.T) {
+	for msg, want := range map[string]bool{
+		"subprocess ssh: Connection timed out during banner exchange":                                    true,
+		"Fatal: unable to open repository at sftp:x: unable to start the sftp session, error: EOF":       true,
+		"subprocess ssh: ssh: connect to host 127.0.0.1 port 1: Connection refused":                      true,
+		`Head "http://h/x/config": dial tcp 127.0.0.1:1: connect: connection refused`:                    true,
+		"Fatal: wrong password or no key found":                                                          false,
+		"Fatal: repository does not exist: unable to open config file: stat /srv/x/config: no such file": false,
+	} {
+		if got := IsConnectionFailure(msg); got != want {
+			t.Errorf("IsConnectionFailure(%q) = %v", msg, got)
+		}
+	}
+}

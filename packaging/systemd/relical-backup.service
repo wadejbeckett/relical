@@ -19,6 +19,10 @@ ExecStopPost=/usr/local/lib/relical/relical forget --all
 # ExecStopPost= is bounded by TimeoutStopSec= (default 90s), which a prune
 # can easily exceed.
 TimeoutStopSec=infinity
+# A last resort against a run that hangs (every sftp: destination already
+# gets ssh connect and keepalive timeouts): systemd stops the run after 20
+# hours, before the next night's.
+RuntimeMaxSec=20h
 # The backup yields CPU and disk to the sites and mail it is backing up.
 Nice=19
 IOSchedulingClass=idle

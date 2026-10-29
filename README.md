@@ -318,12 +318,14 @@ A Storage Box is reached over SFTP on port 23, with one sub-account per server s
       "storagebox": {
         "repository": "sftp:u000000-sub1@u000000-sub1.your-storagebox.example:relical/{subscription}",
         "env": {},
-        "sftp_args": "-p 23 -i /etc/relical/ssh/id_ed25519 -o UserKnownHostsFile=/etc/relical/ssh/known_hosts -o StrictHostKeyChecking=yes",
+        "sftp_args": "-p 23 -i /etc/relical/ssh/id_ed25519 -o UserKnownHostsFile=/etc/relical/ssh/known_hosts -o StrictHostKeyChecking=yes -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes",
         "prune": "local"
       }
     }
 
-`relical/{subscription}` is relative to the sub-account's home directory. `packaging/config.example.json` carries this destination as `storagebox`, beside an append-only rest-server one (`archive`); set `default_destination` to the one in use. `StrictHostKeyChecking=yes` refuses a host key that is not in `known_hosts`, rather than trusting it on first use.
+`relical/{subscription}` is relative to the sub-account's home directory. `packaging/config.example.json` carries this destination as `storagebox`, beside an append-only rest-server one (`archive`); set `default_destination` to the one in use. `StrictHostKeyChecking=yes` refuses a host key that is not in `known_hosts`, rather than trusting it on first use. `ConnectTimeout`, `ServerAliveInterval` and `ServerAliveCountMax` stop a Storage Box that accepts the connection and never answers, or a session that stalls, from hanging the run; `BatchMode=yes` stops ssh from ever waiting for a password. Relical adds these four options (`-o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes`) to every `sftp:` destination whose `sftp_args` do not set them, so they apply even when left out.
+
+In `--all` runs (`backup`, `forget` and `check`), a destination that three subscriptions in a row could not reach (restic or ssh reports a refused, reset or timed-out connection, or the SFTP session could not start) is given up on: the remaining subscriptions on it fail at once with "destination NAME unreachable; not tried", and restic is not run for them. Any subscription that reaches the destination resets the count. The nightly unit also stops a run that is still going after 20 hours (`RuntimeMaxSec=20h`).
 
 A Storage Box cannot run rest-server, so there is no append-only mode: the server's key can delete snapshots, and `prune` is `local`. Protection against deletion by a compromised server comes from the Storage Box itself: its own snapshots (enable automatic snapshots in the Storage Box settings, kept for longer than an attacker is likely to go unnoticed) and the separation of per-server sub-accounts. Where a destination that refuses deletion is needed, use rest-server with `--append-only` and `prune: remote` instead.
 

@@ -18,6 +18,11 @@ env | grep -E '^RESTIC_' | sort >> "$FAKE_LOG.env"
 # Skip the global flags. Every global flag the runner passes takes a value
 # (-o, --limit-upload, --retry-lock); a boolean one would need its own case.
 while [ "${1#-}" != "$1" ]; do shift 2; done
+if [ -n "$FAKE_CONNECT_FAIL" ]; then
+  echo "subprocess ssh: Connection timed out during banner exchange" >&2
+  echo "Fatal: unable to open repository at sftp:box:relical/x: unable to start the sftp session, error: unexpected EOF" >&2
+  exit 1
+fi
 if [ -n "$FAKE_HANG" ]; then
   # Stand-in for a long restic run; restic removes its own lock on SIGTERM.
   trap 'kill $! 2>/dev/null; echo "got SIGTERM" >> "$FAKE_LOG"; exit 130' TERM

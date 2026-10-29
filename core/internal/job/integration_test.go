@@ -4,11 +4,14 @@ package job
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wadejbeckett/relical/core/internal/config"
 )
@@ -69,5 +72,63 @@ func TestRealPanelConfigRoundTrip(t *testing.T) {
 	stagingEmpty(t, e)
 	if snaps, err := run.Snapshots(ctx, PanelConfigTag); err != nil || len(snaps) != 1 {
 		t.Fatalf("%+v %v", snaps, err)
+	}
+}
+
+// TestRealUnreachableDestinationIsGivenUp runs the real restic and ssh
+// against a TCP listener that accepts connections and never answers, as a
+// stalled Storage Box would. Each of the first three subscriptions fails
+// on ssh's ConnectTimeout, and the rest are not tried, so the run ends
+// within a bound instead of hanging.
+func TestRealUnreachableDestinationIsGivenUp(t *testing.T) {
+	bin := os.Getenv("RELICAL_RESTIC")
+	if bin == "" {
+		t.Skip("RELICAL_RESTIC not set (run make tools, then make integration)")
+	}
+	if _, err := exec.LookPath("ssh"); err != nil {
+		t.Skip("no ssh on PATH")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var held []net.Conn
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			held = append(held, c) // accepted, never answered
+		}
+	}()
+	e, _, _ := setup(t, "local")
+	sftpSubs(t, &e)
+	e.Cfg.ResticBin = bin
+	e.ExtraEnv = nil
+	d := e.Cfg.Destinations["d"]
+	d.Repository = "sftp:relical@127.0.0.1:relical/{subscription}"
+	d.SftpArgs = fmt.Sprintf("-p %d -o ConnectTimeout=2 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null", ln.Addr().(*net.TCPAddr).Port)
+	e.Cfg.Destinations["d"] = d
+	e.Breaker = NewBreaker()
+	start := time.Now()
+	rs := e.BackupAll(context.Background(), "")
+	if took := time.Since(start); took > 45*time.Second {
+		t.Errorf("the run took %s", took)
+	}
+	if len(rs) != 5 {
+		t.Fatalf("%+v", rs)
+	}
+	for i, r := range rs {
+		if r.OK {
+			t.Errorf("%d: %+v", i, r)
+		}
+		if notTried := strings.Contains(r.Error, "unreachable; not tried"); notTried != (i >= BreakerTrips) {
+			t.Errorf("%d: %s", i, r.Error)
+		}
+	}
+	if !strings.Contains(rs[0].Error, "timed out") {
+		t.Errorf("first error: %s", rs[0].Error)
 	}
 }

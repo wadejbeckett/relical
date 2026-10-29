@@ -252,6 +252,14 @@ func TestExamplePackagingConfigLoads(t *testing.T) {
 	if c.DefaultDestination != "archive" || !c.HasStaticInventory() || !c.HasServer() {
 		t.Errorf("%+v", c)
 	}
+	// The Storage Box example bounds a connection that never answers and a
+	// session that stalls, and never waits for a prompt.
+	args := c.Destinations["storagebox"].SftpArgs
+	for _, o := range []string{"-o ConnectTimeout=30", "-o ServerAliveInterval=30", "-o ServerAliveCountMax=4", "-o BatchMode=yes"} {
+		if !strings.Contains(args, o) {
+			t.Errorf("the storagebox sftp_args lack %s: %s", o, args)
+		}
+	}
 }
 
 func TestRedactRepository(t *testing.T) {

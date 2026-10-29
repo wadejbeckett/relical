@@ -47,6 +47,127 @@ type Env struct {
 	Locator  locator.Pattern
 	Now      func() time.Time
 	ExtraEnv map[string]string // tests only
+	// Breaker stops an --all run from trying a destination that has
+	// failed to connect BreakerTrips times in a row; nil runs without one.
+	Breaker *Breaker
+}
+
+// BreakerTrips is how many subscriptions in a row may fail to reach a
+// destination before the rest of an --all run stops trying it.
+const BreakerTrips = 3
+
+// Breaker counts, per destination, the subscriptions in a row whose
+// repository could not be reached (restic.IsConnectionFailure). Once a
+// destination has BreakerTrips of them, the remaining subscriptions on it
+// fail at once with "destination unreachable; not tried", so that an
+// unreachable Storage Box costs a few connection timeouts instead of
+// several per subscription. Any subscription that reaches the destination
+// resets its count.
+type Breaker struct {
+	fails map[string]int
+	last  map[string]string
+}
+
+func NewBreaker() *Breaker {
+	return &Breaker{fails: map[string]int{}, last: map[string]string{}}
+}
+
+// open returns the error for a destination that is no longer tried.
+func (b *Breaker) open(dest string) (string, bool) {
+	if b == nil || b.fails[dest] < BreakerTrips {
+		return "", false
+	}
+	return fmt.Sprintf("destination %s unreachable; not tried (%d subscriptions in a row could not connect; the last: %s)",
+		dest, b.fails[dest], b.last[dest]), true
+}
+
+// observe counts a subscription's results against its destination.
+func (b *Breaker) observe(dest string, rs []Result) {
+	if b == nil {
+		return
+	}
+	reached, unreachable := false, ""
+	for _, r := range rs {
+		switch {
+		case r.Snapshot != "" || (r.OK && r.Note == "" && (r.Action == "forget" || r.Action == "check")):
+			reached = true
+		case !r.OK && restic.IsConnectionFailure(r.Error):
+			unreachable = r.Error
+		}
+	}
+	switch {
+	case reached:
+		b.fails[dest] = 0
+	case unreachable != "":
+		b.fails[dest]++
+		b.last[dest] = unreachable
+	}
+}
+
+// destinationName is the name of the destination sub's repository is on.
+func (e Env) destinationName(sub inventory.Subscription) string {
+	if sub.Destination != "" {
+		return sub.Destination
+	}
+	return e.Cfg.DefaultDestination
+}
+
+// guarded runs fn for sub unless the breaker has given up on its
+// destination, in which case notTried gives the results instead.
+func (e Env) guarded(sub inventory.Subscription, fn func() []Result, notTried func(msg string) []Result) []Result {
+	dest := e.destinationName(sub)
+	if msg, open := e.Breaker.open(dest); open {
+		return notTried(msg)
+	}
+	rs := fn()
+	e.Breaker.observe(dest, rs)
+	return rs
+}
+
+// plannedUnits lists the results a backup of sub (restricted to unit when
+// not empty) would give, as unit and database, for "not tried" results.
+func plannedUnits(sub inventory.Subscription, unit string) [][2]string {
+	if sub.Name == config.ServerName {
+		return [][2]string{{PanelConfigTag, ""}}
+	}
+	var out [][2]string
+	for _, u := range unitOrder {
+		if (unit != "" && u != unit) || !sub.Has(u) {
+			continue
+		}
+		if u == DBTag && len(sub.Databases) > 0 {
+			for _, d := range sub.Databases {
+				out = append(out, [2]string{DBTag, d.Name})
+			}
+			continue
+		}
+		out = append(out, [2]string{u, ""})
+	}
+	return out
+}
+
+// ForgetAll runs Forget for each of subs in order, with the breaker.
+func (e Env) ForgetAll(ctx context.Context, subs []inventory.Subscription) []Result {
+	return e.eachRepository(ctx, subs, "forget", func(s inventory.Subscription) Result { return e.Forget(ctx, s) })
+}
+
+// CheckAll runs Check for each of subs in order, with the breaker.
+func (e Env) CheckAll(ctx context.Context, subs []inventory.Subscription, subset string) []Result {
+	return e.eachRepository(ctx, subs, "check", func(s inventory.Subscription) Result { return e.Check(ctx, s, subset) })
+}
+
+func (e Env) eachRepository(ctx context.Context, subs []inventory.Subscription, action string, fn func(inventory.Subscription) Result) []Result {
+	results := []Result{}
+	for _, s := range subs {
+		if ctx.Err() != nil {
+			break
+		}
+		rs := e.guarded(s, func() []Result { return []Result{fn(s)} }, func(msg string) []Result {
+			return []Result{failed(e.result(s.Name, "", action), errors.New(msg))}
+		})
+		results = append(results, rs...)
+	}
+	return results
 }
 
 type Result struct {
@@ -378,7 +499,7 @@ func (e Env) BackupAll(ctx context.Context, unit string) []Result {
 		if unit == PanelConfigTag {
 			break
 		}
-		rs := e.BackupSubscription(ctx, s, unit)
+		rs := e.guarded(s, func() []Result { return e.BackupSubscription(ctx, s, unit) }, e.notTried(s, unit))
 		results = append(results, rs...)
 		for _, r := range rs {
 			if r.Snapshot != "" {
@@ -390,7 +511,12 @@ func (e Env) BackupAll(ctx context.Context, unit string) []Result {
 	if ctx.Err() != nil {
 		return results
 	}
-	rs := e.runServer(ctx, unit)
+	var rs []Result
+	if (unit == "" || unit == PanelConfigTag) && e.Inv.Server.Has(PanelConfigTag) {
+		rs = e.guarded(ServerSubscription(), func() []Result { return e.runServer(ctx, unit) }, e.notTried(ServerSubscription(), PanelConfigTag))
+	} else {
+		rs = e.runServer(ctx, unit)
+	}
 	results = append(results, rs...)
 	for _, r := range rs {
 		if r.Snapshot != "" {
@@ -405,6 +531,20 @@ func (e Env) BackupAll(ctx context.Context, unit string) []Result {
 		results = append(results, e.Stats(ctx, s))
 	}
 	return results
+}
+
+// notTried gives sub's backup results when the breaker has given up on
+// its destination: one failed result per unit the backup would have run.
+func (e Env) notTried(sub inventory.Subscription, unit string) func(msg string) []Result {
+	return func(msg string) []Result {
+		var out []Result
+		for _, u := range plannedUnits(sub, unit) {
+			r := e.result(sub.Name, u[0], "backup")
+			r.Database = u[1]
+			out = append(out, failed(r, errors.New(msg)))
+		}
+		return out
+	}
 }
 
 // runServer runs the server's own units after every subscription in

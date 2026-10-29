@@ -101,16 +101,90 @@ const RetryLock = "30m"
 // retriesLock lists the commands that get --retry-lock.
 var retriesLock = map[string]bool{"backup": true, "check": true, "forget": true}
 
+// SSHDefaults are the ssh options every sftp: repository gets unless its
+// sftp_args set them: without a connect timeout and keepalives, a
+// destination that accepts the connection and never answers (or a session
+// that stalls) hangs restic for good, and with it the whole nightly run.
+// BatchMode stops ssh from ever waiting for a password or a host key
+// prompt. A variable so that tests can shorten the timeouts.
+var SSHDefaults = []string{"ConnectTimeout=30", "ServerAliveInterval=30", "ServerAliveCountMax=4", "BatchMode=yes"}
+
+// sshArgs returns args with each of SSHDefaults appended as -o Key=Value
+// when args do not set that option already (as -o Key=..., -oKey=... or
+// -o Key ...), compared without regard to case as ssh does.
+func sshArgs(args string) string {
+	f := strings.Fields(args)
+	set := map[string]bool{}
+	for i, a := range f {
+		var opt string
+		switch {
+		case a == "-o" && i+1 < len(f):
+			opt = f[i+1]
+		case strings.HasPrefix(a, "-o") && len(a) > 2:
+			opt = a[2:]
+		default:
+			continue
+		}
+		k, _, _ := strings.Cut(opt, "=")
+		set[strings.ToLower(k)] = true
+	}
+	out := args
+	for _, d := range SSHDefaults {
+		k, _, _ := strings.Cut(d, "=")
+		if set[strings.ToLower(k)] {
+			continue
+		}
+		if out != "" {
+			out += " "
+		}
+		out += "-o " + d
+	}
+	return out
+}
+
+// connectionFailures are what restic and ssh print when the destination
+// cannot be reached at all (as opposed to a problem with one repository).
+var connectionFailures = []string{
+	"unable to start the sftp session",
+	"ssh: connect to host",
+	"connection timed out",
+	"timed out during banner exchange",
+	"connection refused",
+	"connection reset",
+	"no route to host",
+	"network is unreachable",
+	"could not resolve hostname",
+	"no such host",
+	"dial tcp",
+	"i/o timeout",
+}
+
+// IsConnectionFailure reports whether a restic error message says that the
+// destination could not be reached.
+func IsConnectionFailure(msg string) bool {
+	m := strings.ToLower(msg)
+	for _, s := range connectionFailures {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // command builds the exec.Cmd. The environment is built from scratch so
 // that RESTIC_* variables from the caller never leak in. Cancelling ctx
 // sends SIGTERM, on which restic removes its own lock; restic is killed
 // only if it has not exited 60 seconds later.
 func (r Runner) command(ctx context.Context, args ...string) *exec.Cmd {
 	full := []string{}
-	if r.SftpArgs != "" {
+	sftp := r.SftpArgs
+	if strings.HasPrefix(r.Repository, "sftp:") {
+		sftp = sshArgs(sftp)
+	}
+	if sftp != "" {
 		// restic parses each -o value as CSV: quoted, a comma in the
 		// value (such as -o Ciphers=a,b) is kept instead of cutting it off.
-		full = append(full, "-o", `"sftp.args=`+strings.ReplaceAll(r.SftpArgs, `"`, `""`)+`"`)
+		full = append(full, "-o", `"sftp.args=`+strings.ReplaceAll(sftp, `"`, `""`)+`"`)
 	}
 	if r.LimitUploadKiB > 0 {
 		full = append(full, "--limit-upload", strconv.Itoa(r.LimitUploadKiB))

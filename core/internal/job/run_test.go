@@ -86,7 +86,7 @@ func TestSftpArgsReachRestic(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 	for _, l := range strings.Split(strings.TrimSpace(log()), "\n") {
-		if !strings.HasPrefix(l, `-o "sftp.args=-p 23 -o StrictHostKeyChecking=yes" `) {
+		if !strings.HasPrefix(l, `-o "sftp.args=-p 23 -o StrictHostKeyChecking=yes -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes" `) {
 			t.Errorf("restic call without sftp.args: %s", l)
 		}
 	}
@@ -659,5 +659,75 @@ func TestAdopt(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(idFile); string(b) != "17\n" {
 		t.Errorf("owner changed: %q", b)
+	}
+}
+
+// sftpSubs gives the setup five mail subscriptions on an sftp: destination
+// (the default), each with one mailbox.
+func sftpSubs(t *testing.T, e *Env) {
+	t.Helper()
+	e.Cfg.Destinations["d"] = config.Destination{Repository: "sftp:u000000-sub1@u000000-sub1.your-storagebox.example:relical/{subscription}", Prune: "local"}
+	mail := filepath.Dir(filepath.Dir(e.Cfg.MailboxPattern))
+	mail = filepath.Dir(mail)
+	e.Inv.Subscriptions = nil
+	for _, n := range []string{"a.test", "b.test", "c.test", "d.test", "e.test"} {
+		os.MkdirAll(filepath.Join(mail, n, "alice", "Maildir", "cur"), 0o700)
+		e.Inv.Subscriptions = append(e.Inv.Subscriptions, inventory.Subscription{Name: n, Features: []string{"mail"}, MailDomains: []string{n}})
+	}
+}
+
+// TestBreakerStopsTryingAnUnreachableDestination: after three
+// subscriptions in a row fail to connect, the rest of an --all run (and
+// its forget) fail at once without running restic.
+func TestBreakerStopsTryingAnUnreachableDestination(t *testing.T) {
+	e, env, log := setup(t, "local")
+	sftpSubs(t, &e)
+	e.Breaker = NewBreaker()
+	env["FAKE_CONNECT_FAIL"] = "1"
+	rs := e.BackupAll(context.Background(), "")
+	if len(rs) != 5 {
+		t.Fatalf("%d results: %+v", len(rs), rs)
+	}
+	for i, r := range rs {
+		if r.OK || r.Unit != "mail" {
+			t.Errorf("%d: %+v", i, r)
+		}
+		notTried := strings.Contains(r.Error, "destination d unreachable; not tried")
+		if notTried != (i >= BreakerTrips) {
+			t.Errorf("%d: %s", i, r.Error)
+		}
+	}
+	if n := strings.Count(log(), "cat config"); n != BreakerTrips {
+		t.Errorf("restic tried %d times:\n%s", n, log())
+	}
+	fs := e.ForgetAll(context.Background(), e.Inv.Subscriptions)
+	if len(fs) != 5 || fs[0].OK || !strings.Contains(fs[0].Error, "not tried") || strings.Contains(log(), "forget") {
+		t.Errorf("forget: %+v\n%s", fs, log())
+	}
+}
+
+// A destination that answers again resets the count, and a failure that
+// is not a connection failure never counts.
+func TestBreakerResetsAndIgnoresOtherFailures(t *testing.T) {
+	b := NewBreaker()
+	conn := Result{Action: "backup", Error: "restic cat: exit 1: Fatal: unable to open repository at sftp:x: unable to start the sftp session"}
+	other := Result{Action: "backup", Error: "restic cat: exit 12: Fatal: wrong password or no key found"}
+	ok := Result{Action: "backup", OK: true, Snapshot: "abc"}
+	for _, rs := range [][]Result{{conn}, {conn}, {ok}, {conn}, {other}, {conn}} {
+		b.observe("d", rs)
+	}
+	if _, open := b.open("d"); open {
+		t.Fatal("open after a reset")
+	}
+	b.observe("d", []Result{conn})
+	if msg, open := b.open("d"); !open || !strings.Contains(msg, "3 subscriptions in a row") {
+		t.Fatalf("%q %v", msg, open)
+	}
+	if _, open := b.open("other"); open {
+		t.Error("another destination is affected")
+	}
+	var none *Breaker
+	if _, open := none.open("d"); open {
+		t.Error("a nil breaker is open")
 	}
 }

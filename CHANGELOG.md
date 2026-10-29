@@ -24,6 +24,8 @@ Phase 2: full backup per hosting subscription, and the core the Plesk extension 
 - Restores clear set-user-id and set-group-id bits and leave out device nodes, fifos and sockets, listing them as `dropped` in the result (a Plesk chroot webspace has some under `dev/`).
 - Restores refuse to start without room for the estimated size plus 10% plus 256 MiB.
 - Staging left by a killed restore is removed after 24 hours, by the next restore or `backup --all`.
+- Every `sftp:` destination gets `-o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes` unless its `sftp_args` set those options, so a destination that accepts the connection and never answers cannot hang the run.
+- In `--all` runs, a destination that three subscriptions in a row could not connect to is given up on: the rest fail at once with "destination NAME unreachable; not tried". `relical-backup.service` has `RuntimeMaxSec=20h` as a last resort.
 
 ### Changed
 
