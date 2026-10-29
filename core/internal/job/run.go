@@ -80,7 +80,7 @@ func (r Result) StateKey() string {
 
 // Prepare creates the state directories. state_dir and restore/ are 0711
 // so that doveadm, running as the mail user, can reach its own staging
-// directory; cache/ is 0700.
+// directory; cache/ and staging/ (the panel configuration) are 0700.
 func (e Env) Prepare() error {
 	for _, d := range []struct {
 		p string
@@ -89,6 +89,7 @@ func (e Env) Prepare() error {
 		{e.Cfg.StateDir, 0o711},
 		{filepath.Join(e.Cfg.StateDir, "cache"), 0o700},
 		{filepath.Join(e.Cfg.StateDir, "restore"), 0o711},
+		{e.StagingDir(), 0o700},
 	} {
 		if err := os.MkdirAll(d.p, d.m); err != nil {
 			return err
@@ -105,7 +106,7 @@ func (e Env) Prepare() error {
 // destination.
 func (e Env) Subscription(name string) (inventory.Subscription, error) {
 	if name == config.ServerName {
-		return inventory.Subscription{Name: name}, nil
+		return ServerSubscription(), nil
 	}
 	if s, ok := e.Inv.Find(name); ok {
 		return s, nil
@@ -303,7 +304,11 @@ func globEscape(s string) string {
 var unitOrder = []string{MailTag, FilesTag, DBTag}
 
 // hasUnits reports whether the subscription has any unit to back up.
+// The panel configuration's repository always has.
 func hasUnits(sub inventory.Subscription) bool {
+	if sub.Name == config.ServerName {
+		return true
+	}
 	for _, u := range unitOrder {
 		if sub.Has(u) {
 			return true
@@ -317,7 +322,12 @@ const noUnits = "the subscription has none of the features mail, files or db; no
 // BackupSubscription backs up the subscription's units in order (mail,
 // files, db), each only when it is among the subscription's features.
 // unit, when not empty, restricts the run to that unit.
+//
+// config.ServerName backs up the server's units instead (BackupServer).
 func (e Env) BackupSubscription(ctx context.Context, sub inventory.Subscription, unit string) []Result {
+	if sub.Name == config.ServerName {
+		return e.BackupServer(ctx, unit)
+	}
 	if unit != "" && !sub.Has(unit) {
 		res := e.result(sub.Name, unit, "backup")
 		res.OK = true
@@ -361,6 +371,9 @@ func (e Env) BackupAll(ctx context.Context, unit string) []Result {
 		if ctx.Err() != nil {
 			return results
 		}
+		if unit == PanelConfigTag {
+			break
+		}
 		rs := e.BackupSubscription(ctx, s, unit)
 		results = append(results, rs...)
 		for _, r := range rs {
@@ -373,7 +386,14 @@ func (e Env) BackupAll(ctx context.Context, unit string) []Result {
 	if ctx.Err() != nil {
 		return results
 	}
-	results = append(results, e.runServer(ctx, unit)...)
+	rs := e.runServer(ctx, unit)
+	results = append(results, rs...)
+	for _, r := range rs {
+		if r.Snapshot != "" {
+			touched = append(touched, ServerSubscription())
+			break
+		}
+	}
 	for _, s := range touched {
 		if ctx.Err() != nil {
 			break
@@ -383,14 +403,18 @@ func (e Env) BackupAll(ctx context.Context, unit string) []Result {
 	return results
 }
 
-// runServer is the hook for the server's own units, run after every
-// subscription in BackupAll.
-//
-// TASK 3 HOOK: back up panel-config into the _server repository here
-// (when unit is "" or panel-config and the inventory's server lists the
-// feature), and add _server to the repositories whose size is recorded.
+// runServer runs the server's own units after every subscription in
+// BackupAll: panel-config, when the inventory's server lists it. When
+// --unit panel-config was asked for and the server does not list it, the
+// result says so.
 func (e Env) runServer(ctx context.Context, unit string) []Result {
-	return nil
+	switch {
+	case unit != "" && unit != PanelConfigTag:
+		return nil
+	case unit == "" && !e.Inv.Server.Has(PanelConfigTag):
+		return nil
+	}
+	return e.BackupServer(ctx, PanelConfigTag)
 }
 
 // Stats records the bytes the subscription's repository stores. A failed

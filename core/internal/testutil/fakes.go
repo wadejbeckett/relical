@@ -48,6 +48,9 @@ case "$1" in
         fi
         cat "$FAKE_BACKUP_OUT"; exit 0 ;;
     esac
+    # Log each regular file given as a path, with its first line, so that
+    # tests can see a file existed while it was backed up.
+    for a in "$@"; do [ -f "$a" ] && printf '%s: %s\n' "$a" "$(head -n 1 "$a")" >> "$FAKE_LOG.seen"; done
     cat "$FAKE_BACKUP_OUT"; exit "${FAKE_BACKUP_EXIT:-0}" ;;
   stats)
     if [ -n "$FAKE_STATS_EXIT" ]; then echo "stats failed" >&2; exit "$FAKE_STATS_EXIT"; fi
@@ -169,6 +172,12 @@ func FakeInventory(t *testing.T, out string) string {
 func FakeInventoryFailing(t *testing.T) string {
 	t.Helper()
 	return write(t, "inventory", "#!/bin/sh\necho '{\"version\": 2, \"subscriptions\": ['\necho 'panel database unreachable' >&2\nexit 1\n")
+}
+
+// FakeCommand returns an executable shell script with the given body.
+func FakeCommand(t *testing.T, name, body string) string {
+	t.Helper()
+	return write(t, name, "#!/bin/sh\n"+body+"\n")
 }
 
 // FakeInventoryScript returns an inventory_command with the given shell body.

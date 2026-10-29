@@ -178,7 +178,7 @@ func TestUnknownSubscriptionIsJSONError(t *testing.T) {
 func TestUnimplementedUnitIsJSONError(t *testing.T) {
 	cfg := cliSetup(t)
 	for _, args := range [][]string{
-		{"backup", "--all", "--unit", "panel-config"},
+		{"restore", "--unit", "panel-config", "--domain", "example.test", "--mailbox", "alice"},
 		{"restore", "--unit", "db", "--domain", "example.test", "--mailbox", "alice"},
 	} {
 		code, out := runCLI(append([]string{"-config", cfg}, args...)...)
@@ -270,5 +270,47 @@ func TestAdoptUnderInventoryCommand(t *testing.T) {
 	}
 	if code, out := runCLI("-config", cfg, "backup", "--subscription", "example.test"); code != 0 {
 		t.Fatalf("after adopt: %d %s", code, out)
+	}
+}
+
+func TestPanelConfigCommands(t *testing.T) {
+	bin := testutil.FakeCommand(t, "pleskbackup", `printf 'panel configuration tar\n' > "$2"`)
+	cfg := cliSetupWith(t, map[string]any{
+		"subscriptions": []any{testSub},
+		"server":        map[string]any{"features": []string{"panel-config"}, "config_command": []string{bin, "-output-file", "{output}"}, "config_ext": "tar"},
+	})
+	var results []map[string]any
+	code, out := runCLI("-config", cfg, "backup", "--subscription", "_server")
+	if code != 0 || json.Unmarshal([]byte(out), &results) != nil || len(results) != 1 ||
+		results[0]["subscription"] != "_server" || results[0]["unit"] != "panel-config" || results[0]["snapshot"] == nil {
+		t.Fatalf("%d %s", code, out)
+	}
+	code, out = runCLI("-config", cfg, "backup", "--all", "--unit", "panel-config")
+	if code != 0 || json.Unmarshal([]byte(out), &results) != nil || len(results) != 2 || results[0]["unit"] != "panel-config" || results[1]["action"] != "stats" {
+		t.Fatalf("%d %s", code, out)
+	}
+	code, out = runCLI("-config", cfg, "backup", "--all")
+	if code != 0 || json.Unmarshal([]byte(out), &results) != nil || len(results) != 4 || results[1]["unit"] != "panel-config" {
+		t.Fatalf("%d %s", code, out)
+	}
+	for _, cmd := range []string{"forget", "check"} {
+		code, out = runCLI("-config", cfg, cmd, "--all")
+		if code != 0 || json.Unmarshal([]byte(out), &results) != nil || len(results) != 2 || results[1]["subscription"] != "_server" {
+			t.Fatalf("%s: %d %s", cmd, code, out)
+		}
+	}
+	if code, out := runCLI("-config", cfg, "forget", "--subscription", "_server"); code != 0 || !strings.Contains(out, `"_server"`) {
+		t.Fatalf("%d %s", code, out)
+	}
+	if code, out := runCLI("-config", cfg, "snapshots", "--subscription", "_server", "--unit", "panel-config"); code != 0 {
+		t.Fatalf("%d %s", code, out)
+	}
+	code, out = runCLI("-config", cfg, "status")
+	if code != 0 || !strings.Contains(out, `"panel-config"`) {
+		t.Fatalf("%d %s", code, out)
+	}
+	left, _ := os.ReadDir(filepath.Join(filepath.Dir(cfg), "state", "staging"))
+	if len(left) != 0 {
+		t.Errorf("staging not empty: %v", left)
 	}
 }

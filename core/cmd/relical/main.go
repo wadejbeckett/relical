@@ -28,7 +28,7 @@ commands:
   version
   inventory
   mailboxes --subscription S
-  backup    --subscription S | --all [--unit mail|files|db]
+  backup    --subscription S | --all [--unit mail|files|db|panel-config]
   forget    --subscription S | --all
   check     --subscription S | --all [--read-data-subset 5%]
   snapshots --subscription S [--unit mail|files|db|panel-config]
@@ -55,7 +55,7 @@ var commandFlags = map[string][]string{
 var (
 	units       = map[string]bool{"mail": true, "files": true, "db": true, "panel-config": true}
 	implemented = map[string]map[string]bool{
-		"backup":  {"mail": true, "files": true, "db": true},
+		"backup":  {"mail": true, "files": true, "db": true, "panel-config": true},
 		"restore": {"mail": true},
 	}
 )
@@ -234,8 +234,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return emit(stdout, res, err)
 	}
 
-	// backup, forget, check
+	// backup, forget, check. forget and check --all also cover the panel
+	// configuration's repository when the server backs it up.
 	subs := env.Inv.Subscriptions
+	if *all && env.Inv.Server.Has(job.PanelConfigTag) {
+		subs = append(append([]inventory.Subscription{}, subs...), job.ServerSubscription())
+	}
 	if *subName != "" {
 		sub, err := env.Subscription(*subName)
 		if err != nil {
