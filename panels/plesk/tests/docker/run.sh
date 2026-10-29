@@ -239,14 +239,25 @@ px 'plesk bin extension --exec relical cli.php status' | grep -q '"panel-config"
 px 'plesk bin extension --exec relical cli.php report' > "$WORK/report.json"
 grep -q '"failed": 0' "$WORK/report.json" && grep -q '"ok": 4' "$WORK/report.json" || fail "report"
 ok "mail $MAIL1, files $FILES1, db $DB1 and panel-config backed up (real pleskbackup); no dump on disk; status and report"
-px 'systemctl start relical-notify@relical-backup.service' || fail "relical-notify@relical-backup.service did not run"
-px 'grep -q "relical-notify: relical-backup.service failed" /var/lib/relical/relical.log' || fail "the failure notice is not in the run log"
+# A real failure: a drop-in makes the run fail, and OnFailure= must start
+# relical-notify@relical-backup.service.service (%n is the full unit name).
+NOTIFY=relical-notify@relical-backup.service.service
+[ "$(px 'systemctl show -p OnFailure --value relical-backup.service')" = "$NOTIFY" ] || fail "OnFailure= of relical-backup.service is not $NOTIFY"
+px 'test ! -e /var/lib/relical/last-failure.json && ! grep -q "relical-notify:" /var/lib/relical/relical.log' || fail "a failure notice exists before the forced failure"
+px 'mkdir -p /etc/systemd/system/relical-backup.service.d && printf "%s\n" "[Service]" "ExecStart=" "ExecStart=/bin/false" > /etc/systemd/system/relical-backup.service.d/zz-test-fail.conf && systemctl daemon-reload'
+if px 'systemctl start relical-backup.service'; then fail "relical-backup.service with ExecStart=/bin/false did not fail"; fi
+timeout 120 bash -c "until docker exec $P grep -q 'relical-notify: relical-backup.service failed' /var/lib/relical/relical.log; do sleep 2; done" \
+    || fail "OnFailure= did not write the failure notice to the run log"
+timeout 60 bash -c "while [ \"\$(docker exec $P systemctl show -p ActiveState --value $NOTIFY)\" = activating ]; do sleep 1; done" || true
+px 'rm /etc/systemd/system/relical-backup.service.d/zz-test-fail.conf && rmdir /etc/systemd/system/relical-backup.service.d && systemctl daemon-reload && systemctl reset-failed relical-backup.service'
+px 'systemctl cat relical-backup.service | grep -q "^ExecStart=/usr/local/lib/relical/relical "' || fail "the failing drop-in was not removed"
 [ "$(px 'stat -c %a:%U /var/lib/relical/last-failure.json')" = 600:root ] || fail "last-failure.json is not 0600 root"
-px 'journalctl -u relical-notify@relical-backup.service --no-pager -n 20' | tee "$WORK/notify.txt" | grep -q '"logged":true' || fail "notify.php did not log: $(cat "$WORK/notify.txt")"
+px 'grep -q "\"unit\":\"relical-backup.service\"" /var/lib/relical/last-failure.json' || fail "last-failure.json does not name relical-backup.service"
+px "journalctl -u $NOTIFY --no-pager -n 20" | tee "$WORK/notify.txt" | grep -q '"logged":true' || fail "notify.php did not log: $(cat "$WORK/notify.txt")"
 grep -o '"mailed":[a-z]*,"to":"[^"]*"' "$WORK/notify.txt" || true   # mail delivery is reported, not required here
 get admin /modules/relical/index.php "$WORK/admin-failed.html" >/dev/null
 grep -q 'Last failed run' "$WORK/admin-failed.html" && grep -q 'Last successful backup' "$WORK/admin-failed.html" || fail "the settings page does not show the last failure and success"
-ok "relical-notify@ logs the failure, keeps last-failure.json, the settings page shows it"
+ok "a failing run starts $NOTIFY, which logs it and writes last-failure.json (0600 root); the settings page shows it"
 
 # ---------------------------------------------------------------------------
 say "6. restores (as restore-run.php is started by the customer screens)"

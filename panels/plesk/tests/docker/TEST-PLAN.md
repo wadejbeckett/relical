@@ -248,8 +248,11 @@ has not yet seen. Each line is open until the next `run.sh` run.
       subscription's Plesk disk quota (whole-branch review finding 4). Not
       done for the pilot; the daily limit and the five-copy cap bound how
       much a customer can add. Revisit with `pm_Domain` limits.
-- [ ] Failure notice: both services carry `OnFailure=relical-notify@%n.service`;
-      `systemctl start relical-notify@relical-backup.service` appends
+- [ ] Failure notice: both services carry `OnFailure=relical-notify@%n.service`,
+      which systemd expands to `relical-notify@relical-backup.service.service`
+      (`systemctl show -p OnFailure relical-backup.service`). A run made to
+      fail by a drop-in (`ExecStart=/bin/false`, removed afterwards) starts
+      that instance, which appends
       "relical-notify: relical-backup.service failed" to the run log, writes
       `/var/lib/relical/last-failure.json` (0600 root) and the settings page
       shows "Last failed run" and "Last successful backup" (`run.sh` step 5).
