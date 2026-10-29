@@ -230,7 +230,7 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 	var folder string
 	if req.Folder != "" {
 		folder = sourceFolder(req.Folder, env.Cfg.MailFolderPrefix)
-		if !stagedFolderExists(filepath.Join(stage, box.Path), folder, env.Cfg.MailFolderPrefix) {
+		if !stagedFolderExists(stage, box.Path, folder, env.Cfg.MailFolderPrefix) {
 			return res, fmt.Errorf("folder %q is not in snapshot %s of %s", req.Folder, snap.Short(), box.Login)
 		}
 	}
@@ -375,11 +375,18 @@ func chownChildren(dirfd int, path string, uid, gid int) error {
 
 // stagedFolderExists reports whether folder (a name in the staged copy's
 // default namespace, see sourceFolder) is in the restored Maildir at
-// maildir. In the Maildir++ layout INBOX is the Maildir itself and every
-// other folder is a directory "." + its name, with "." between levels and
-// non-ASCII names in modified UTF-7 (RFC 3501); a prefix ending in "/"
-// means the live namespace separates levels with "/".
-func stagedFolderExists(maildir, folder, prefix string) bool {
+// maildir, a path below stage. In the Maildir++ layout INBOX is the
+// Maildir itself and every other folder is a directory "." + its name,
+// with "." between levels and non-ASCII names in modified UTF-7 (RFC
+// 3501); a prefix ending in "/" means the live namespace separates levels
+// with "/".
+//
+// The folder is the customer's free text, and the lookup runs as root, so
+// it never leaves the staged Maildir: a name that would not be one
+// directory entry in it ("/" left after the mapping, or ".." or "." as the
+// entry) is not there, and the walk from stage down to the folder opens
+// each directory with O_NOFOLLOW, so no symlink is followed.
+func stagedFolderExists(stage, maildir, folder, prefix string) bool {
 	if strings.EqualFold(folder, "INBOX") {
 		return true
 	}
@@ -389,12 +396,44 @@ func stagedFolderExists(maildir, folder, prefix string) bool {
 	}
 	for _, n := range names {
 		for _, enc := range []string{n, encodeMUTF7(n)} {
-			if fi, err := os.Lstat(filepath.Join(maildir, "."+enc)); err == nil && fi.IsDir() {
+			entry := "." + enc
+			if strings.ContainsRune(entry, '/') || entry == ".." {
+				continue
+			}
+			if dirExistsNoFollow(stage, filepath.Join(maildir, entry)) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// dirExistsNoFollow reports whether rel, a path below root, is a directory
+// reached without following any symlink and without leaving root: each
+// component is opened with openat(O_DIRECTORY|O_NOFOLLOW) from the one
+// before, and "." and ".." components are refused.
+func dirExistsNoFollow(root, rel string) bool {
+	fd, err := syscall.Open(root, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return false
+	}
+	for _, c := range strings.Split(rel, "/") {
+		if c == "" {
+			continue
+		}
+		if c == "." || c == ".." {
+			syscall.Close(fd)
+			return false
+		}
+		next, err := syscall.Openat(fd, c, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+		syscall.Close(fd)
+		if err != nil {
+			return false
+		}
+		fd = next
+	}
+	syscall.Close(fd)
+	return true
 }
 
 // encodeMUTF7 encodes s as IMAP modified UTF-7 (RFC 3501 5.1.3), as

@@ -510,17 +510,61 @@ func TestRestoreFolderNotInSnapshot(t *testing.T) {
 	}
 }
 
+// The folder is the customer's free text and the lookup runs as root: it
+// never leaves the staged Maildir and never follows a symlink, so it
+// cannot tell the customer whether a directory exists elsewhere.
+func TestStagedFolderStaysInTheMaildir(t *testing.T) {
+	stage := t.TempDir()
+	m := filepath.Join(stage, "box", "Maildir")
+	os.MkdirAll(filepath.Join(m, ".Sent"), 0o700)
+	os.Symlink("/etc", filepath.Join(m, ".Link"))
+	os.Symlink(m, filepath.Join(stage, "alias"))
+	for _, prefix := range []string{"INBOX.", "INBOX/", ""} {
+		for _, folder := range []string{
+			"../../../../etc", strings.Repeat("../", 30) + "etc", "./../../etc", "/etc", "..", ".", "Sent/../../..", "Link",
+		} {
+			if stagedFolderExists(stage, "box/Maildir", folder, prefix) {
+				t.Errorf("prefix %q: folder %q found", prefix, folder)
+			}
+		}
+		if !stagedFolderExists(stage, "box/Maildir", "Sent", prefix) {
+			t.Errorf("prefix %q: Sent not found", prefix)
+		}
+		// A Maildir reached through a symlink is not looked into.
+		if stagedFolderExists(stage, "alias", "Sent", prefix) {
+			t.Errorf("prefix %q: Sent found through a symlinked Maildir", prefix)
+		}
+	}
+}
+
+// Probe: a restore asking for a folder that climbs out of the staged
+// Maildir to a directory that exists gets the same "not in snapshot"
+// error as any missing folder, and doveadm import never runs.
+func TestRestoreFolderTraversalIsNotInSnapshot(t *testing.T) {
+	e, _, log := setup(t)
+	e.Cfg.MailFolderPrefix = "INBOX."
+	for _, f := range []string{"../../../../etc", strings.Repeat("../", 30) + "etc"} {
+		_, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest", Folder: f})
+		if err == nil || !strings.Contains(err.Error(), "is not in snapshot fedcba98 of alice@example.test") {
+			t.Errorf("%s: err = %v", f, err)
+		}
+	}
+	if strings.Contains(log(), "import ") {
+		t.Errorf("doveadm import ran:\n%s", log())
+	}
+}
+
 func TestStagedFolderNamesOnDisk(t *testing.T) {
 	m := t.TempDir()
 	for _, d := range []string{".Sent", ".Archive.2025", ".Entw&APw-rfe", ".A&-B"} {
 		os.Mkdir(filepath.Join(m, d), 0o700)
 	}
 	for folder, want := range map[string]bool{"Sent": true, "INBOX": true, "inbox": true, "Archive.2025": true, "Entwürfe": true, "A&B": true, "Drafts": false} {
-		if got := stagedFolderExists(m, folder, "INBOX."); got != want {
+		if got := stagedFolderExists(m, "", folder, "INBOX."); got != want {
 			t.Errorf("%s: %v", folder, got)
 		}
 	}
-	if !stagedFolderExists(m, "Archive/2025", "INBOX/") {
+	if !stagedFolderExists(m, "", "Archive/2025", "INBOX/") {
 		t.Error("a / separated folder")
 	}
 	for in, want := range map[string]string{"Entwürfe": "Entw&APw-rfe", "A&B": "A&-B", "日本語": "&ZeVnLIqe-", "plain": "plain"} {
