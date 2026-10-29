@@ -322,6 +322,21 @@ final class CommandTest extends TestCase
         self::assertSame('$(echo injected)|a;b|`id`|', stream_get_contents($out));
     }
 
+    public function testProcessRunFeedsMemoryStreamsThroughPipes(): void
+    {
+        foreach (['php://memory', 'php://temp'] as $kind) {
+            $out = fopen($kind, 'w+');
+            $err = fopen($kind, 'w+');
+            $code = Process::run(['/bin/sh', '-c', 'printf out; printf err >&2; exit 3'], $out, $err);
+
+            rewind($out);
+            rewind($err);
+            self::assertSame(3, $code, $kind);
+            self::assertSame('out', stream_get_contents($out), $kind);
+            self::assertSame('err', stream_get_contents($err), $kind);
+        }
+    }
+
     public function testProcessReturnsTheChildExitCode(): void
     {
         $out = tmpfile();

@@ -25,16 +25,52 @@ final class Process
     {
         self::checkArgv($argv);
 
-        $process = proc_open(
+        // proc_open hands the child a file descriptor, which a php://memory
+        // or php://temp stream does not have (install-timers.php collects
+        // its steps in one); such streams are fed through pipes instead.
+        $direct = self::hasDescriptor($stdout) && self::hasDescriptor($stderr);
+        $process = @proc_open(
             array_values($argv),
-            [0 => ['file', '/dev/null', 'r'], 1 => $stdout, 2 => $stderr],
+            [0 => ['file', '/dev/null', 'r'], 1 => $direct ? $stdout : ['pipe', 'w'], 2 => $direct ? $stderr : ['pipe', 'w']],
             $pipes
         );
         if (!is_resource($process)) {
             throw new RuntimeException(sprintf('could not start %s', $argv[0]));
         }
+        if (!$direct) {
+            $open = [1 => $pipes[1], 2 => $pipes[2]];
+            $targets = [1 => $stdout, 2 => $stderr];
+            while ($open !== []) {
+                $read = array_values($open);
+                $write = $except = null;
+                if (@stream_select($read, $write, $except, null) === false) {
+                    break;
+                }
+                foreach ($open as $n => $pipe) {
+                    $chunk = fread($pipe, 65536);
+                    if (is_string($chunk) && $chunk !== '') {
+                        fwrite($targets[$n], $chunk);
+                    }
+                    if (feof($pipe)) {
+                        fclose($pipe);
+                        unset($open[$n]);
+                    }
+                }
+            }
+            foreach ($open as $pipe) {
+                fclose($pipe);
+            }
+        }
 
         return proc_close($process);
+    }
+
+    /** @param resource $stream */
+    private static function hasDescriptor($stream): bool
+    {
+        $meta = stream_get_meta_data($stream);
+
+        return ($meta['stream_type'] ?? '') === 'STDIO';
     }
 
     /**
