@@ -5,9 +5,10 @@ declare(strict_types=1);
 /**
  * Prints the inventory the core reads (its `inventory_command`).
  *
- * The core runs this as root through
- * `/usr/sbin/plesk bin extension --exec relical inventory.php` and parses
- * stdout. On success stdout is the inventory JSON and the exit code is 0; on
+ * The core runs this as root through sbin/relical-root
+ * (`relical-root inventory.php`, Paths::inventoryCommand) and parses
+ * stdout; `plesk bin extension --exec relical inventory.php` hands itself
+ * over to relical-root. On success stdout is the inventory JSON and the exit code is 0; on
  * any failure stdout is `{"error": "..."}`, the same message goes to stderr
  * and the exit code is 1, so the core never backs up from a partial list.
  */
@@ -17,6 +18,7 @@ use Noiz\Relical\Inventory;
 use Noiz\Relical\Paths;
 use Noiz\Relical\PleskSource;
 use Noiz\Relical\RootFile;
+use Noiz\Relical\ScriptIO;
 use Noiz\Relical\Settings;
 
 // Plesk runs every plib/scripts/* file (install hooks, `plesk bin extension
@@ -38,6 +40,8 @@ if (class_exists('pm_Context')) {
 }
 
 require_once __DIR__ . '/../library/autoload.php';
+
+ScriptIO::requireRoot('inventory.php');
 
 try {
     $scope = Settings::fromPlesk()->scope();

@@ -8,8 +8,8 @@ use Throwable;
 
 /**
  * How the administrator screens run the root scripts: through
- * `plesk bin extension --exec relical <script> [args]` (Command::rootArgv,
- * argv, no shell), waiting at most $timeout seconds, or detached in the
+ * sbin/relical-root and Plesk's mod_wrapper (Command::rootArgv, argv, no
+ * shell), waiting at most $timeout seconds, or detached in the
  * background for a backup run (Command::detached, as Cloudflare DNS Sync
  * starts its syncs). The web process itself never runs relical, restic or
  * ssh.

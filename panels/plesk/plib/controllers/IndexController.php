@@ -19,7 +19,7 @@ use Noiz\Relical\Status;
  *
  * Administrators only. The controller never runs relical, restic or ssh
  * itself: every privileged step goes through a root script
- * (`plesk bin extension --exec relical <script>`, argv, validated by
+ * (sbin/relical-root through Plesk's mod_wrapper, argv, validated by
  * Command), and backups start detached in the background. Every change is a
  * POST through a pm_Form (with Plesk's forgery token); GET pages only read.
  */

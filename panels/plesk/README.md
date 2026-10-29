@@ -6,6 +6,13 @@ restic repositories on an SFTP Storage Box, and restores them beside the
 live data without overwriting it. The extension bundles the `relical` core
 and a pinned restic release, so the server needs nothing else.
 
+## Requirements
+
+Plesk Obsidian 18.0.55 or later on Linux, with systemd and the OpenSSH
+client tools (`ssh`, `sftp`, `ssh-keyscan`, `ssh-keygen`; package
+`openssh-client` on Debian and Ubuntu, which the `plesk/plesk` Docker
+image lacks). Mail restores use Plesk's Dovecot (2.3 or 2.4).
+
 ## Installing
 
 Install `relical-<version>.zip` from Extensions > My Extensions > Upload
@@ -102,9 +109,16 @@ Extensions > Relical Backup is for administrators only. It holds:
   restarted). A blank path or backup time takes its default (`relical`,
   01:00).
 
-Every privileged step runs as root through
-`plesk bin extension --exec relical <script>` with checked arguments; the
-panel itself never runs the backup tools.
+Every privileged step runs as root through the extension's
+`sbin/relical-root` with checked arguments; the panel itself never runs
+the backup tools. Plesk installs it as
+`/opt/psa/admin/sbin/modules/relical/relical-root` and lets the panel
+start it as root through its `mod_wrapper` (the mechanism of
+`pm_ApiCli::callSbin`). It runs only the extension's own scripts, by name.
+`plesk bin extension --exec relical <script>` runs scripts as the panel
+user, so each root script started that way hands itself to
+`relical-root` with the same arguments: the commands in this README work
+either way, and as root `relical-root <script>` runs one directly.
 
 ## Restores for customers
 

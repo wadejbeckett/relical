@@ -5,7 +5,8 @@ declare(strict_types=1);
 /**
  * The extension's only way to run the core binary.
  *
- * Run as root through `plesk bin extension --exec relical cli.php <command> [flags]`.
+ * Runs as root through sbin/relical-root (`plesk bin extension --exec relical
+ * cli.php <command> [flags]` hands itself over to it, ScriptIO::requireRoot).
  * Relical\Command accepts only the commands and flags of the CLI contract
  * and validates every value; the core then runs from an argv array (no
  * shell), its JSON goes straight to stdout and its exit code is this

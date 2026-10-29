@@ -5,8 +5,9 @@ declare(strict_types=1);
 /**
  * Writes the core's configuration from the extension's settings.
  *
- * Run as root through `plesk bin extension --exec relical write-config.php`
- * (by post-install and whenever the settings are saved). It writes
+ * Runs as root through sbin/relical-root, whenever the settings are saved
+ * (`plesk bin extension --exec relical write-config.php` hands itself over
+ * to it). It writes
  * /etc/relical/config.json and /etc/relical/mysql.cnf, both 0600, each
  * atomically. The MySQL option file carries Plesk's database admin password
  * from /etc/psa/.psa.shadow; the password is never printed.
@@ -47,6 +48,7 @@ try {
 } catch (InvalidArgumentException $e) {
     ScriptIO::fail('refused: ' . $e->getMessage(), 2);
 }
+ScriptIO::requireRoot('write-config.php');
 
 try {
     ConfigFiles::write(Settings::fromPlesk()->configInput(), (string) gethostname());
