@@ -12,11 +12,11 @@ use RuntimeException;
  * process reads it only through root scripts:
  *
  * - `<id>.json` (0600): one record per restore (RestoreRecord).
- * - `<subscription>.lock`: held (flock) by restore-run.php for as long as
- *   the subscription's restore runs; stops a second one.
+ * - `run-<subscription>.lock`: held (flock) by restore-run.php for as long
+ *   as the subscription's restore runs; stops a second one.
  * - `slot-<n>.lock`: SLOTS of them, one held by each running restore;
  *   caps the restores running on the whole server.
- * - `<subscription>.read.lock`: held while restore-read.php asks the core
+ * - `read-<subscription>.lock`: held while restore-read.php asks the core
  *   about the subscription's backups; a second request meanwhile is told
  *   to wait instead of opening another Storage Box connection.
  * - `read-slot-<n>.lock`: READ_SLOTS of them, one held by each running
@@ -77,12 +77,12 @@ final class RestoreStore
 
     public function lockPath(string $subscription): string
     {
-        return $this->dir . '/' . Command::domain($subscription) . '.lock';
+        return $this->dir . '/run-' . Command::domain($subscription) . '.lock';
     }
 
     public function readLockPath(string $subscription): string
     {
-        return $this->dir . '/' . Command::domain($subscription) . '.read.lock';
+        return $this->dir . '/read-' . Command::domain($subscription) . '.lock';
     }
 
     /** @param string $key what else the answer depends on: '' for snapshots and mailboxes, the restore point and folder for ls */

@@ -96,6 +96,37 @@ final class CommandTest extends TestCase
         self::assertSame(1, preg_match_all('/^\s*exec\b/m', $sbin), 'one exec only');
     }
 
+    /** @return iterable<string, array{string, list<string>, bool}> */
+    public static function hookArguments(): iterable
+    {
+        yield 'inventory' => ['inventory.php', [], true];
+        yield 'inventory with an argument' => ['inventory.php', ['--subscription'], false];
+        yield 'pre-uninstall' => ['pre-uninstall.php', [], true];
+        yield 'pre-uninstall with an argument' => ['pre-uninstall.php', ['x'], false];
+        yield 'post-install' => ['post-install.php', [], true];
+        yield 'post-install upgrade' => ['post-install.php', ['upgrade'], true];
+        yield 'post-install upgrade version' => ['post-install.php', ['upgrade', '0.2.0'], true];
+        yield 'post-install upgrade version release' => ['post-install.php', ['upgrade', '0.2.0', '1'], true];
+        yield 'post-install upgrade dashed version' => ['post-install.php', ['upgrade', '0.2.0-1'], true];
+        yield 'post-install something else' => ['post-install.php', ['install'], false];
+        yield 'post-install upgrade an option' => ['post-install.php', ['upgrade', '--x'], false];
+        yield 'post-install upgrade too many' => ['post-install.php', ['upgrade', '1', '2', '3'], false];
+        yield 'post-install upgrade with a space' => ['post-install.php', ['upgrade', '1 2'], false];
+        yield 'not a hook' => ['cli.php', [], false];
+    }
+
+    /**
+     * @dataProvider hookArguments
+     * @param list<string> $args
+     */
+    public function testHooksRefuseExtraArguments(string $script, array $args, bool $ok): void
+    {
+        if (!$ok) {
+            $this->expectException(InvalidArgumentException::class);
+        }
+        self::assertSame($args, Command::hookArgs($script, $args));
+    }
+
     public function testRunEverythingNowStartsTheNightlyUnit(): void
     {
         self::assertSame(

@@ -29,6 +29,7 @@ declare(strict_types=1);
  * completed, the steps not done, and the command to run it all again.
  */
 
+use Noiz\Relical\Command;
 use Noiz\Relical\InstallRunner;
 use Noiz\Relical\Installer;
 use Noiz\Relical\LocalProbe;
@@ -56,6 +57,12 @@ if (class_exists('pm_Context')) {
 }
 
 require_once __DIR__ . '/../library/autoload.php';
+
+try {
+    Command::hookArgs('post-install.php', array_slice($argv, 1));
+} catch (InvalidArgumentException $e) {
+    ScriptIO::fail('refused: ' . $e->getMessage(), 2);
+}
 
 // Plesk runs the install hooks as its panel user (psaadm), not root, so the
 // work is handed to sbin/relical-root through Plesk's mod_wrapper, with the

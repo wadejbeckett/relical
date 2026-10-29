@@ -17,6 +17,7 @@ declare(strict_types=1);
  * be removed and is named on stderr (Plesk then stops the removal).
  */
 
+use Noiz\Relical\Command;
 use Noiz\Relical\InstallRunner;
 use Noiz\Relical\Installer;
 use Noiz\Relical\LocalProbe;
@@ -42,6 +43,12 @@ if (class_exists('pm_Context')) {
 }
 
 require_once __DIR__ . '/../library/autoload.php';
+
+try {
+    Command::hookArgs('pre-uninstall.php', array_slice($argv, 1));
+} catch (InvalidArgumentException $e) {
+    ScriptIO::fail('refused: ' . $e->getMessage(), 2);
+}
 
 // Plesk runs the install hooks as its panel user (psaadm), not root, so the
 // work is handed to sbin/relical-root through Plesk's mod_wrapper, with the

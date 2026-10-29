@@ -212,6 +212,44 @@ final class Command
     }
 
     /**
+     * The arguments of the scripts only relical-root and Plesk run (never
+     * the screens): inventory.php none (the core runs it), pre-uninstall.php
+     * none, post-install.php none or `upgrade` with at most two version
+     * words (Plesk's previous version and release).
+     *
+     * @param list<string> $args
+     * @return list<string> the arguments, unchanged
+     * @throws InvalidArgumentException naming what was refused
+     */
+    public static function hookArgs(string $script, array $args): array
+    {
+        $args = array_values(array_map('strval', $args));
+        switch ($script) {
+            case 'inventory.php':
+            case 'pre-uninstall.php':
+                if ($args !== []) {
+                    throw new InvalidArgumentException(sprintf('%s takes no arguments', $script));
+                }
+                return $args;
+            case 'post-install.php':
+                if ($args === []) {
+                    return $args;
+                }
+                if ($args[0] !== 'upgrade' || count($args) > 3) {
+                    throw new InvalidArgumentException('post-install.php takes nothing or "upgrade [<version> [<release>]]"');
+                }
+                foreach (array_slice($args, 1) as $word) {
+                    if (preg_match('/^[0-9A-Za-z][0-9A-Za-z.+~_-]{0,63}$/D', $word) !== 1) {
+                        throw new InvalidArgumentException('post-install.php upgrade takes a version, not "' . self::printable($word) . '"');
+                    }
+                }
+                return $args;
+            default:
+                throw new InvalidArgumentException(sprintf('script "%s" is not a hook', self::printable($script)));
+        }
+    }
+
+    /**
      * The argv that runs a root script as root, for Process (no shell),
      * through Plesk's mod_wrapper link to sbin/relical-root
      * (Paths::rootCommand()).

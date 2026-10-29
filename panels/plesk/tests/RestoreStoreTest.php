@@ -253,6 +253,17 @@ final class RestoreStoreTest extends TestCase
         self::assertSame([], glob($this->dir . '/*.cache'));
     }
 
+    public function testRunAndReadLocksNeverShareAFile(): void
+    {
+        $store = new RestoreStore($this->dir);
+
+        self::assertSame($this->dir . '/run-example.test.lock', $store->lockPath('example.test'));
+        self::assertSame($this->dir . '/read-example.test.lock', $store->readLockPath('example.test'));
+        // The old names made x.example.read's restore lock the read lock of x.example.
+        self::assertNotSame($store->lockPath('x.example.read'), $store->readLockPath('x.example'));
+        self::assertNotSame($store->lockPath('read-x.example'), $store->readLockPath('x.example'));
+    }
+
     public function testRecordsAreReadForTheDailyCount(): void
     {
         $store = new RestoreStore($this->dir);

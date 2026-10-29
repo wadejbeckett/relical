@@ -13,6 +13,7 @@ declare(strict_types=1);
  * and the exit code is 1, so the core never backs up from a partial list.
  */
 
+use Noiz\Relical\Command;
 use Noiz\Relical\ConfigFiles;
 use Noiz\Relical\Coverage;
 use Noiz\Relical\Inventory;
@@ -41,6 +42,12 @@ if (class_exists('pm_Context')) {
 }
 
 require_once __DIR__ . '/../library/autoload.php';
+
+try {
+    Command::hookArgs('inventory.php', array_slice($argv, 1));
+} catch (InvalidArgumentException $e) {
+    ScriptIO::fail('refused: ' . $e->getMessage(), 2);
+}
 
 ScriptIO::requireRoot('inventory.php');
 

@@ -275,3 +275,11 @@ has not yet seen. Each line is open until the next `run.sh` run.
       the unit), so the run has the timer's priority, retention, cgroup and
       `OnFailure=`; without systemd it falls back to a detached
       `backup --all` (not testable in this image, which runs systemd).
+- [ ] Lock and cache names in `restores/`: `run-<subscription>.lock`,
+      `read-<subscription>.lock`, `read-slot-<n>.lock` (at most four
+      customer reads on the server) and
+      `cache-<subscription>_<kind>[_<hash>].cache` (snapshots, mailboxes
+      and each ls folder, five minutes). `post-install.php upgrade 0.2.0`
+      still runs; `inventory.php` and `pre-uninstall.php` refuse arguments
+      (confirm Plesk passes none to pre-uninstall: `plesk bin extension -u`
+      in step 8).
