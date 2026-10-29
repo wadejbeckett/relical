@@ -40,8 +40,11 @@ what PHPUnit covers. Each line names the assumption and where it lives.
       `{"redirect": ...}` and the status messages appear after it; a POST
       without Plesk's forgery token is refused; `hidden` and `radio`
       elements render and submit.
-- [ ] GET `probe` and an invalid GET `backup` redirect back with their
-      message (`_redirect`).
+- [ ] An invalid GET `backup` or `adopt` redirects back with its message
+      (`_redirect`); GET `probe` only shows the "Test connection" form.
+- [ ] "Adopt repository" appears on a status row whose last error names
+      `relical adopt`, and the POST records the owner so the next backup
+      of that subscription runs.
 - [ ] "Back up now" and "Run everything now" start a run that outlives the
       request (`... < /dev/null > /dev/null 2>&1 &`) and show up in the
       status table; a second click while it runs gets the "already in

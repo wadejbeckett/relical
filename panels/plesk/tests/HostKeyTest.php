@@ -41,6 +41,26 @@ final class HostKeyTest extends TestCase
         self::assertSame('[u000000-sub1.your-storagebox.example]:23 ssh-ed25519 ' . self::KEY . "\n", $key->knownHostsLine(self::destination()));
     }
 
+    public function testTrustPinsOnlyTheConfirmedKey(): void
+    {
+        $scan = '[u000000-sub1.your-storagebox.example]:23 ssh-ed25519 ' . self::KEY . "\n";
+
+        self::assertSame(
+            '[u000000-sub1.your-storagebox.example]:23 ssh-ed25519 ' . self::KEY . "\n",
+            HostKey::trustedLine($scan, self::destination(), self::FINGERPRINT)
+        );
+    }
+
+    public function testAChangedKeyBetweenScanAndTrustPinsNothing(): void
+    {
+        // The administrator confirmed OTHER_FINGERPRINT; the host now offers KEY.
+        $scan = '[u000000-sub1.your-storagebox.example]:23 ssh-ed25519 ' . self::KEY . "\n";
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('nothing was pinned');
+        HostKey::trustedLine($scan, self::destination(), self::OTHER_FINGERPRINT);
+    }
+
     public function testOtherKeyTypesAreIgnored(): void
     {
         $output = "u000000-sub1.your-storagebox.example ssh-rsa AAAAB3NzaC1yc2E=\n"

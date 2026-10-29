@@ -49,7 +49,8 @@ ScriptIO::requireRoot('hostkey.php');
 
 const RELICAL_KEYSCAN_TIMEOUT = 15;
 
-function relical_scan(Destination $destination): HostKey
+/** ssh-keyscan's output for the destination. */
+function relical_scan(Destination $destination): string
 {
     $keyscan = Installer::findTool(new LocalProbe(), Paths::SSH_KEYSCAN);
     $result = Process::capture($destination->keyscanArgv($keyscan, 10), RELICAL_KEYSCAN_TIMEOUT);
@@ -57,15 +58,16 @@ function relical_scan(Destination $destination): HostKey
         throw new RuntimeException(sprintf('%s did not answer within %d seconds', $destination->knownHostsName(), RELICAL_KEYSCAN_TIMEOUT));
     }
 
-    return HostKey::fromKeyscan($result['stdout'], $destination);
+    return $result['stdout'];
 }
 
 try {
     $destination = Destination::fromInput(Settings::fromPlesk()->configInput());
-    $key = relical_scan($destination);
-    $line = $key->knownHostsLine($destination);
+    $scan = relical_scan($destination);
 
     if ($args[0] === 'scan') {
+        $key = HostKey::fromKeyscan($scan, $destination);
+        $line = $key->knownHostsLine($destination);
         $pinned = !is_link(Paths::KNOWN_HOSTS) && is_file(Paths::KNOWN_HOSTS) && @file_get_contents(Paths::KNOWN_HOSTS) === $line;
         ScriptIO::ok([
             'host' => $destination->host,
@@ -75,16 +77,11 @@ try {
         ]);
     }
 
-    if (!$key->matches($args[1])) {
-        throw new RuntimeException(sprintf(
-            '%s now offers a key with the fingerprint %s, not the one confirmed; nothing was pinned. Check the connection again.',
-            $destination->knownHostsName(),
-            $key->fingerprint()
-        ));
-    }
+    // Throws, and nothing is written, unless the fresh scan has the confirmed key.
+    $line = HostKey::trustedLine($scan, $destination, $args[1]);
     RootFile::ensureDir(Paths::SSH_DIR, 0700);
     RootFile::write(Paths::KNOWN_HOSTS, $line, 0600);
-    ScriptIO::ok(['ok' => true, 'fingerprint' => $key->fingerprint()]);
+    ScriptIO::ok(['ok' => true, 'fingerprint' => $args[1]]);
 } catch (Throwable $e) {
     ScriptIO::fail('hostkey: ' . $e->getMessage());
 }

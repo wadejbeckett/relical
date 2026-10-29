@@ -125,12 +125,31 @@ class IndexController extends pm_Controller_Action
         $this->view->form = $form;
     }
 
-    /** GET: tests the connection (an sftp session that changes nothing) and returns to the settings. */
+    /**
+     * GET: offers to test the connection. POST: tests it (an sftp session
+     * that lists the backup path and changes nothing) and returns to the
+     * settings with the result. A POST, so a link from elsewhere cannot make
+     * the server connect out (Task 8 review finding 9).
+     */
     public function probeAction()
     {
-        $this->reportProbe();
-        $this->_helper->viewRenderer->setNoRender(true);
-        $this->_redirect(pm_Context::getBaseUrl());
+        $form = new pm_Form_Simple();
+        $form->setAction(pm_Context::getActionUrl('index', 'probe'));
+        $form->addControlButtons([
+            'sendTitle' => 'Test connection',
+            'cancelLink' => pm_Context::getBaseUrl(),
+        ]);
+
+        if ($this->getRequest()->isPost()) {
+            if ($form->isValid($this->getRequest()->getPost())) {
+                $this->reportProbe();
+            }
+            $this->_helper->json(['redirect' => pm_Context::getBaseUrl()]);
+            return;
+        }
+
+        $this->view->pageTitle = 'Relical Backup: test connection';
+        $this->view->form = $form;
     }
 
     /**

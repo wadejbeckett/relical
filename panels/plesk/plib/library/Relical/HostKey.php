@@ -71,6 +71,28 @@ final class HostKey
     }
 
     /**
+     * The known_hosts line to pin, from a fresh ssh-keyscan, only when the
+     * host still offers the key the administrator confirmed. hostkey.php
+     * writes nothing unless this returns.
+     *
+     * @throws InvalidArgumentException when the scan holds no single ed25519 key for the destination
+     * @throws \RuntimeException when the scanned key's fingerprint is not the confirmed one
+     */
+    public static function trustedLine(string $scanOutput, Destination $destination, string $confirmed): string
+    {
+        $key = self::fromKeyscan($scanOutput, $destination);
+        if (!$key->matches($confirmed)) {
+            throw new \RuntimeException(sprintf(
+                '%s now offers a key with the fingerprint %s, not the one confirmed; nothing was pinned. Check the connection again.',
+                $destination->knownHostsName(),
+                $key->fingerprint()
+            ));
+        }
+
+        return $key->knownHostsLine($destination);
+    }
+
+    /**
      * The extension's own public key file: one line, `ssh-ed25519 <key>`
      * and an optional printable comment.
      *

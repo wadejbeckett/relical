@@ -14,6 +14,7 @@ declare(strict_types=1);
 
 use Noiz\Relical\Command;
 use Noiz\Relical\Process;
+use Noiz\Relical\ScriptIO;
 
 // Plesk runs every plib/scripts/* file (install hooks, `plesk bin extension
 // --exec`, scheduled tasks) with its SDK prepended (`php
@@ -42,6 +43,8 @@ try {
     echo json_encode(['error' => 'refused: ' . $e->getMessage()], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE), "\n";
     exit(2);
 }
+// The core needs root anyway; this only makes the error plain.
+ScriptIO::requireRoot('cli.php');
 
 try {
     exit(Process::run($command->argv(), STDOUT, STDERR));

@@ -27,6 +27,10 @@ final class LogTail
         if (!file_exists($path)) {
             return null;
         }
+        if (!is_file($path)) {
+            // A FIFO or device would block the read until the script is killed.
+            throw new RuntimeException(sprintf('%s is not a regular file', $path));
+        }
         $handle = @fopen($path, 'rb');
         if ($handle === false) {
             throw new RuntimeException(sprintf('could not read %s', $path));

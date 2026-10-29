@@ -42,7 +42,8 @@ $e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES 
 <p class="relical-muted">
     "Check connection" reads the Storage Box's host key so you can compare
     its fingerprint and trust it. "Test connection" logs in with the key
-    above and the trusted host key, and changes nothing.
+    above and the trusted host key, lists the backup path, and changes
+    nothing.
 </p>
 <?php else: ?>
 <p class="relical-muted">Save the Storage Box host, user and path above to check the connection.</p>

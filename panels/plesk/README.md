@@ -83,13 +83,22 @@ Extensions > Relical Backup is for administrators only. It holds:
   "Trust this host key" pins it in `/etc/relical/ssh/known_hosts`, but only
   if the host still offers a key with that fingerprint, then tests the
   connection. Test connection opens an SFTP session with the extension's
-  key and the pinned host key and changes nothing.
+  key and the pinned host key, lists the backup path and changes nothing.
+- "Adopt repository" on a subscription whose repository key has no
+  recorded owner (the core then refuses to back it up and names
+  `relical adopt`): records the subscription as the owner, after a
+  confirmation.
 - The status of each subscription: the units backed up, the last success,
   the last error and the space used. "Back up now" backs up one
   subscription and "Run everything now" backs up all of them and the Plesk
   configuration, in the background. Neither starts while another run is in
   progress.
 - The last report and the last 200 lines of `/var/lib/relical/relical.log`.
+  The key, the status and the report come from one root call
+  (`overview.php`), each core call cut off after a few seconds.
+- Every save also re-installs the timers (only changed units are
+  restarted). A blank path or backup time takes its default (`relical`,
+  01:00).
 
 Every privileged step runs as root through
 `plesk bin extension --exec relical <script>` with checked arguments; the
