@@ -721,6 +721,30 @@ func Lock(stateDir string) (func(), error) {
 	}, nil
 }
 
+// LockPoll is how often LockWait tries the run lock again; a variable so
+// that tests can shorten it.
+var LockPoll = 10 * time.Second
+
+// LockWait takes the run lock like Lock, waiting up to max for another run
+// to release it, or until ctx is cancelled.
+func LockWait(ctx context.Context, stateDir string, max time.Duration) (func(), error) {
+	deadline := time.Now().Add(max)
+	for {
+		unlock, err := Lock(stateDir)
+		if err == nil || time.Now().Add(LockPoll).After(deadline) {
+			if err != nil {
+				err = fmt.Errorf("%w (waited %s)", err, max)
+			}
+			return unlock, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("%w (stopped waiting: %v)", err, ctx.Err())
+		case <-time.After(LockPoll):
+		}
+	}
+}
+
 // State is state.json: subscription -> unit key (see Result.StateKey) ->
 // action -> the last result.
 type State map[string]map[string]map[string]Result

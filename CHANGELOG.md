@@ -32,6 +32,7 @@ Phase 2: full backup per hosting subscription, and the core the Plesk extension 
 - `server_id` is passed as `--host` on `backup` only; `RESTIC_HOST` is no longer set, since restic 0.17 also takes it as the host filter of `snapshots`, `forget` and restores, which hid (and never pruned) the snapshots of an earlier `server_id`.
 - `backup`, `forget` and `check` record each subscription's results in `state.json` and the run log as soon as they are known, not only when the run ends.
 - Mail restores pass `--` before doveadm's positional arguments (`import`, `mailbox delete`, `mailbox status`), refuse a `--folder` that is not in the restored copy with a clear error before importing, and glob-escape the mailbox path in restic's `--include`.
+- `snapshots`, `ls`, restores, `dump` and `stats` wait up to 2 minutes for a repository lock (`--retry-lock 2m`), and restic's exit 11 reads "the backup is being checked or pruned, try again in a few minutes". `check --all` waits up to 2 hours for Relical's run lock instead of failing at once. Retention still prunes every night.
 - In `--all` runs, a destination that three subscriptions in a row could not connect to is given up on: the rest fail at once with "destination NAME unreachable; not tried". `relical-backup.service` has `TimeoutStartSec=20h` as a last resort.
 
 ### Changed

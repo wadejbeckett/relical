@@ -542,3 +542,36 @@ func TestInvalidSubscriptionIsLeftOutOfTheRun(t *testing.T) {
 		t.Errorf("%d %s", code, out)
 	}
 }
+
+// check --all waits for a run lock that is released within the wait, and
+// gives up once the wait is over; other commands fail at once.
+func TestCheckAllWaitsForTheRunLock(t *testing.T) {
+	cfg := cliSetup(t)
+	oldPoll, oldWait := job.LockPoll, checkLockWait
+	job.LockPoll, checkLockWait = 50*time.Millisecond, 3*time.Second
+	t.Cleanup(func() { job.LockPoll, checkLockWait = oldPoll, oldWait })
+	state := filepath.Join(filepath.Dir(cfg), "state")
+	os.MkdirAll(state, 0o711)
+	unlock, err := job.Lock(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, out := runCLI("-config", cfg, "check", "--subscription", "example.test"); code != 1 || !strings.Contains(out, "holds the lock") {
+		t.Fatalf("check --subscription: %d %s", code, out)
+	}
+	time.AfterFunc(400*time.Millisecond, unlock)
+	start := time.Now()
+	code, out := runCLI("-config", cfg, "check", "--all")
+	if code != 0 || time.Since(start) < 300*time.Millisecond {
+		t.Fatalf("check --all: %d after %s: %s", code, time.Since(start), out)
+	}
+	unlock, err = job.Lock(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	checkLockWait = 300 * time.Millisecond
+	if code, out := runCLI("-config", cfg, "check", "--all"); code != 1 || !strings.Contains(out, "waited 300ms") {
+		t.Fatalf("check --all after the wait: %d %s", code, out)
+	}
+}

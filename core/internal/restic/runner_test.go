@@ -2,6 +2,7 @@ package restic
 
 import (
 	"context"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -141,7 +142,7 @@ func TestStats(t *testing.T) {
 	if err != nil || n != 123456 {
 		t.Fatalf("%d %v", n, err)
 	}
-	if got := strings.TrimSpace(log()); got != "stats --mode raw-data --json" {
+	if got := strings.TrimSpace(log()); got != "--retry-lock 2m stats --mode raw-data --json" {
 		t.Errorf("args = %q", got)
 	}
 	env["FAKE_STATS_EXIT"] = "1"
@@ -266,5 +267,35 @@ func TestIsConnectionFailure(t *testing.T) {
 		if got := IsConnectionFailure(msg); got != want {
 			t.Errorf("IsConnectionFailure(%q) = %v", msg, got)
 		}
+	}
+}
+
+// The reads a customer waits on wait 2 minutes for a lock held by a check
+// or a prune; backup, check and forget wait 30.
+func TestReadsRetryTheLock(t *testing.T) {
+	r, _, log := fake(t)
+	ctx := context.Background()
+	r.Snapshots(ctx, "")
+	r.Ls(ctx, "fedcba98", "/x", 10)
+	r.Restore(ctx, "fedcba98", t.TempDir(), []string{"/x"})
+	r.Dump(ctx, "fedcba98", "/x.sql", io.Discard)
+	r.RestoreSize(ctx, "fedcba98", "")
+	r.RestoreSize(ctx, "fedcba98", "/x")
+	r.Check(ctx, "")
+	r.Unlock(ctx)
+	for _, want := range []string{"--retry-lock 2m snapshots ", "--retry-lock 2m ls --json fedcba98", "--retry-lock 2m restore fedcba98",
+		"--retry-lock 2m dump fedcba98", "--retry-lock 2m stats --mode restore-size", "--retry-lock 2m ls --json --recursive",
+		"--retry-lock 30m check", "\nunlock"} {
+		if !strings.Contains("\n"+log(), want) {
+			t.Errorf("missing %q:\n%s", want, log())
+		}
+	}
+}
+
+// Exit 11 (the repository is locked) says what is going on.
+func TestLockedExplains(t *testing.T) {
+	err := &ExitError{Command: "restore", Code: ExitLocked, Stderr: "Fatal: unable to create lock in backend: repository is already locked exclusively by PID 1"}
+	if !strings.Contains(err.Error(), "restic restore: the backup is being checked or pruned, try again in a few minutes (exit 11: Fatal: unable") {
+		t.Errorf("%s", err)
 	}
 }

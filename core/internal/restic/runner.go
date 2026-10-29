@@ -39,6 +39,9 @@ func (e *ExitError) Error() string {
 	if len(lines) > 5 {
 		lines = lines[len(lines)-5:]
 	}
+	if e.Code == ExitLocked && e.Cancelled == nil {
+		return fmt.Sprintf("restic %s: %s (exit %d: %s)", e.Command, LockedMessage, e.Code, strings.Join(lines, " | "))
+	}
 	if e.Cancelled != nil {
 		return fmt.Sprintf("restic %s: cancelled (%v): exit %d: %s", e.Command, e.Cancelled, e.Code, strings.Join(lines, " | "))
 	}
@@ -98,11 +101,22 @@ func (s Snapshot) Short() string {
 }
 
 // RetryLock is how long backup, check and forget wait for a repository
-// lock held by another live restic process before giving up.
-const RetryLock = "30m"
+// lock held by another live restic process before giving up; ReadRetryLock
+// is the same for the reads a customer waits on (snapshots, ls, restore,
+// dump, stats), which a weekly check or a nightly prune holds up.
+const (
+	RetryLock     = "30m"
+	ReadRetryLock = "2m"
+)
 
-// retriesLock lists the commands that get --retry-lock.
-var retriesLock = map[string]bool{"backup": true, "check": true, "forget": true}
+// retriesLock gives the --retry-lock of each command that gets one.
+var retriesLock = map[string]string{
+	"backup": RetryLock, "check": RetryLock, "forget": RetryLock,
+	"snapshots": ReadRetryLock, "ls": ReadRetryLock, "restore": ReadRetryLock, "dump": ReadRetryLock, "stats": ReadRetryLock,
+}
+
+// LockedMessage explains restic's exit 11 (the repository is locked).
+const LockedMessage = "the backup is being checked or pruned, try again in a few minutes"
 
 // SSHDefaults are the ssh options every sftp: repository gets unless its
 // sftp_args set them: without a connect timeout and keepalives, a
@@ -192,8 +206,8 @@ func (r Runner) command(ctx context.Context, args ...string) *exec.Cmd {
 	if r.LimitUploadKiB > 0 {
 		full = append(full, "--limit-upload", strconv.Itoa(r.LimitUploadKiB))
 	}
-	if len(args) > 0 && retriesLock[args[0]] {
-		full = append(full, "--retry-lock", RetryLock)
+	if len(args) > 0 && retriesLock[args[0]] != "" {
+		full = append(full, "--retry-lock", retriesLock[args[0]])
 	}
 	full = append(full, args...)
 	name := r.Bin

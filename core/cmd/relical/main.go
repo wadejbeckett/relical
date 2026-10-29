@@ -326,7 +326,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (code int
 		}
 		subs = []inventory.Subscription{sub}
 	}
-	unlock, err := job.Lock(cfg.StateDir)
+	lock := job.Lock
+	if cmd == "check" && *all {
+		// The weekly check often starts while the nightly backup and its
+		// retention are still running: it waits for them.
+		lock = func(dir string) (func(), error) { return job.LockWait(ctx, dir, checkLockWait) }
+	}
+	unlock, err := lock(cfg.StateDir)
 	if err != nil {
 		return emit(stdout, nil, err)
 	}
@@ -403,6 +409,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (code int
 	}
 	return code
 }
+
+// checkLockWait is how long check --all waits for the run lock; a
+// variable so that tests can shorten it.
+var checkLockWait = 2 * time.Hour
 
 // logged are the commands whose runs are written to the run log.
 var logged = map[string]bool{"backup": true, "forget": true, "check": true, "adopt": true, "restore": true}
