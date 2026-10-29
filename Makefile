@@ -20,8 +20,8 @@ build:
 	cd core && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" \
 		-o ../dist/relical ./cmd/relical
 
-# The Plesk extension package; build/build-panel.sh arrives with the
-# panel-plesk branch.
-plesk-ext: build
-	@if [ -x build/build-panel.sh ]; then build/build-panel.sh plesk $(VERSION); \
-	else echo "build/build-panel.sh is not in this tree (it comes with the panel-plesk branch)" >&2; exit 1; fi
+# The Plesk extension package (dist/relical-$(VERSION).zip). build-panel.sh
+# builds the core and the extension from `git archive` of one commit
+# (BUILD_REF, default HEAD), never from the working tree: commit first.
+plesk-ext:
+	build/build-panel.sh plesk $(VERSION)
