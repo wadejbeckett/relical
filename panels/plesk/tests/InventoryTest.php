@@ -41,12 +41,24 @@ final class InventoryTest extends TestCase
             'features' => ['mail', 'files', 'db'],
             'mail_domains' => ['example.test', 'shop.example.test'],
             'files' => ['/var/www/vhosts/example.test'],
-            'file_excludes' => ['logs/**', 'statistics/logs/**', 'tmp/**', '.cagefs/**'],
+            'file_excludes' => ['logs/**', 'statistics/logs/**', 'tmp/**', '.cagefs/**', 'restored-*'],
             'databases' => [['type' => 'mysql', 'name' => 'example_wp']],
             'destination' => '',
             'retention' => null,
         ]], $inventory['subscriptions']);
         self::assertSame([], $inventory['skipped']);
+    }
+
+    public function testDefaultExcludesMatchTheCoresAndLeaveOutRestoredCopies(): void
+    {
+        self::assertContains('restored-*', Inventory::DEFAULT_FILE_EXCLUDES);
+        $core = dirname(__DIR__, 3) . '/core/internal/inventory/inventory.go';
+        if (!is_file($core)) {
+            self::markTestSkipped('the core source is not beside the extension');
+        }
+        self::assertSame(1, preg_match('/^var DefaultFileExcludes = \[\]string\{(.*)\}$/m', (string) file_get_contents($core), $m));
+        preg_match_all('/"([^"]*)"/', $m[1], $words);
+        self::assertSame($words[1], Inventory::DEFAULT_FILE_EXCLUDES);
     }
 
     public function testServerBlockRunsAConfigurationOnlyPleskBackup(): void

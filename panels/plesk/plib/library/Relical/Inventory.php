@@ -36,8 +36,14 @@ final class Inventory
 {
     public const VERSION = 2;
 
-    /** @var list<string> applied when a subscription lists no excludes of its own */
-    public const DEFAULT_FILE_EXCLUDES = ['logs/**', 'statistics/logs/**', 'tmp/**', '.cagefs/**'];
+    /**
+     * Applied when a subscription lists no excludes of its own; the same as
+     * the core's DefaultFileExcludes. restored-* are the copies file and
+     * database restores leave in the home directory, not backed up again.
+     *
+     * @var list<string>
+     */
+    public const DEFAULT_FILE_EXCLUDES = ['logs/**', 'statistics/logs/**', 'tmp/**', '.cagefs/**', 'restored-*'];
 
     /**
      * @param list<array<string, mixed>> $webspaces

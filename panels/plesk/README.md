@@ -127,7 +127,9 @@ the extension's var directory (`restores/`, root only). A customer only
 ever reaches their own subscription, and never the Plesk configuration;
 one whose plan does not include Relical sees a page that says so. A
 customer cannot start a files or database restore while five `restored-*`
-copies are in the home directory. The screens' answers about restore points
+copies are in the home directory. The nightly files backup leaves those
+`restored-*` copies out (beside `logs/`, `statistics/logs/`, `tmp/` and
+`.cagefs/`), so a restored copy is not backed up again. The screens' answers about restore points
 and mailboxes are reused for five minutes, and only one read of a
 subscription's backups runs at a time, so reloading the page cannot tie up
 the Storage Box's connections (`cache-clear.php [<subscription>]` forgets
