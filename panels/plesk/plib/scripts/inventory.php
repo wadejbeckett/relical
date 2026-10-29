@@ -19,8 +19,23 @@ use Noiz\Relical\PleskSource;
 use Noiz\Relical\RootFile;
 use Noiz\Relical\Settings;
 
-pm_Loader::registerAutoload();
-pm_Context::init('relical');
+// Plesk runs every plib/scripts/* file (install hooks, `plesk bin extension
+// --exec`, scheduled tasks) with its SDK prepended (`php
+// -dauto_prepend_file=sdk.php`), so the pm_* classes autoload. Neither the
+// Extensions guide nor pm-api-stubs says whether the module context is set
+// for these scripts. Cloudflare DNS Sync's post-install reads pm_Settings and
+// pm_Context::getVarDir() without calling init() and works on Plesk 18.0.81,
+// so Plesk sets it at least for install hooks. init() with the extension's
+// own id only names the module, so it is called here in every script to make
+// pm_Settings safe either way; the class_exists() guards keep the script
+// loadable without the SDK (php -l, tests). The Docker Plesk test confirms
+// both points (tests/docker/TEST-PLAN.md).
+if (class_exists('pm_Loader')) {
+    pm_Loader::registerAutoload();
+}
+if (class_exists('pm_Context')) {
+    pm_Context::init('relical');
+}
 
 require_once __DIR__ . '/../library/autoload.php';
 
