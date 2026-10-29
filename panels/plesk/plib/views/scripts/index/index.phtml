@@ -104,6 +104,12 @@ $e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES 
     <?php endforeach; ?>
     </tbody>
 </table>
+<?php if ($this->report['warnings'] !== []): ?>
+<p>Warnings:</p>
+<ul>
+    <?php foreach ($this->report['warnings'] as $warning): ?><li class="relical-error"><?php echo $e($warning); ?></li><?php endforeach; ?>
+</ul>
+<?php endif; ?>
 <?php if ($this->report['failures'] !== []): ?>
 <p>Failures:</p>
 <ul>

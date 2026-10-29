@@ -18,10 +18,13 @@ use Throwable;
  *
  *     {generated, subscriptions, ok, failed, skipped, stored_bytes,
  *      rows: [{subscription, unit, ok, time, error, stored_bytes}],
- *      renamed: [{name, renamed_from}]}
+ *      renamed: [{name, renamed_from, note}],
+ *      warnings: [string]}
  *
- * `renamed` is the plan's "report also lists the inventory's renamed
- * entries". Unknown keys are ignored.
+ * as core/internal/job/report.go builds it (TestReportShape pins the keys
+ * there; tests/fixtures/report.json is a copy of that shape). Warnings are
+ * a stale backup or check, or an inventory that could not be loaded.
+ * Unknown keys are ignored.
  */
 final class Report
 {
@@ -34,11 +37,11 @@ final class Report
     ];
 
     /**
-     * @return array{available: bool, message: string, generated: string, summary: list<array{label: string, value: string}>, failures: list<string>, renamed: list<string>}
+     * @return array{available: bool, message: string, generated: string, summary: list<array{label: string, value: string}>, warnings: list<string>, failures: list<string>, renamed: list<string>}
      */
     public static function fromCli(int $code, string $stdout, string $stderr): array
     {
-        $empty = ['available' => false, 'message' => '', 'generated' => '', 'summary' => [], 'failures' => [], 'renamed' => []];
+        $empty = ['available' => false, 'message' => '', 'generated' => '', 'summary' => [], 'warnings' => [], 'failures' => [], 'renamed' => []];
 
         if ($code === 2 && str_contains($stderr, 'unknown command')) {
             return ['message' => 'This version of the Relical core has no report yet.'] + $empty;
@@ -84,7 +87,8 @@ final class Report
         $renamed = [];
         foreach (is_array($data['renamed'] ?? null) ? $data['renamed'] : [] as $entry) {
             if (is_array($entry) && is_string($entry['name'] ?? null) && is_string($entry['renamed_from'] ?? null)) {
-                $renamed[] = sprintf('%s was %s; the old repository is kept', $entry['name'], $entry['renamed_from']);
+                $renamed[] = sprintf('%s was %s; the old repository is kept', $entry['name'], $entry['renamed_from'])
+                    . (is_string($entry['note'] ?? null) && $entry['note'] !== '' ? ' (' . $entry['note'] . ')' : '');
             } elseif (is_string($entry)) {
                 $renamed[] = $entry;
             }
@@ -95,6 +99,7 @@ final class Report
             'message' => '',
             'generated' => is_string($data['generated'] ?? null) ? $data['generated'] : '',
             'summary' => $summary,
+            'warnings' => array_values(array_filter(is_array($data['warnings'] ?? null) ? $data['warnings'] : [], static fn ($w): bool => is_string($w) && $w !== '')),
             'failures' => $failures,
             'renamed' => $renamed,
         ];

@@ -25,24 +25,12 @@ final class ReportTest extends TestCase
         self::assertSame('The report could not be made: state.json: unexpected end of JSON input', $report['message']);
     }
 
-    public function testSummaryFailuresAndRenames(): void
+    public function testTheCoresReportShape(): void
     {
-        $json = json_encode([
-            'generated' => '2026-10-28T02:10:00Z',
-            'subscriptions' => 3, 'ok' => 7, 'failed' => 1, 'skipped' => 0,
-            'stored_bytes' => 1536,
-            'rows' => [
-                ['subscription' => 'example.test', 'unit' => 'mail', 'ok' => true, 'time' => '2026-10-28T01:00:09Z', 'error' => '', 'stored_bytes' => 1024],
-                ['subscription' => 'example.test', 'unit' => 'db:example_wp', 'ok' => false, 'time' => '2026-10-28T01:03:00Z', 'error' => 'mysqldump: exit 2', 'stored_bytes' => 0],
-                ['subscription' => 'other.example.test', 'unit' => 'files', 'ok' => false, 'time' => '', 'error' => ''],
-            ],
-            'renamed' => [['name' => 'new.example.test', 'renamed_from' => 'old.example.test']],
-        ]);
-
-        $report = Report::fromCli(0, (string) $json, '');
+        $report = Report::fromCli(0, (string) file_get_contents(__DIR__ . '/fixtures/report.json'), '');
 
         self::assertTrue($report['available']);
-        self::assertSame('2026-10-28T02:10:00Z', $report['generated']);
+        self::assertSame('2026-10-29T06:00:00Z', $report['generated']);
         self::assertSame([
             ['label' => 'Subscriptions', 'value' => '3'],
             ['label' => 'Succeeded', 'value' => '7'],
@@ -50,8 +38,26 @@ final class ReportTest extends TestCase
             ['label' => 'Skipped', 'value' => '0'],
             ['label' => 'Stored', 'value' => '1.5 KiB'],
         ], $report['summary']);
-        self::assertSame(['example.test db:example_wp: mysqldump: exit 2 (2026-10-28T01:03:00Z)', 'other.example.test files: failed'], $report['failures']);
-        self::assertSame(['new.example.test was old.example.test; the old repository is kept'], $report['renamed']);
+        self::assertSame(['example.test db:example_wp: mysqldump: exit 2 (2026-10-29T01:03:00Z)'], $report['failures']);
+        self::assertSame(['new.example.test was old.example.test; the old repository is kept (backups go to a new repository; the old one is kept)'], $report['renamed']);
+        self::assertSame([
+            'other.example.test files: the last backup (2026-10-26T01:02:00Z) is older than 48 hours',
+            'example.test: backed up since 2026-10-20T01:00:00Z but never checked',
+        ], $report['warnings']);
+    }
+
+    public function testWarningsThatAreNotTextAreSkipped(): void
+    {
+        $report = Report::fromCli(0, (string) json_encode(['warnings' => ['stale', 3, null, '', ['x']], 'rows' => []]), '');
+
+        self::assertSame(['stale'], $report['warnings']);
+    }
+
+    public function testAFailedRowWithoutAnErrorSaysFailed(): void
+    {
+        $report = Report::fromCli(0, (string) json_encode(['rows' => [['subscription' => 'other.example.test', 'unit' => 'files', 'ok' => false, 'time' => '', 'error' => '']]]), '');
+
+        self::assertSame(['other.example.test files: failed'], $report['failures']);
     }
 
     public function testGarbageIsNotAReport(): void
