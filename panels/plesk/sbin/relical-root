@@ -23,7 +23,7 @@ script="${1:-}"
 case "$script" in
     cli.php|write-config.php|install-timers.php|overview.php|hostkey.php|\
     probe.php|log-tail.php|running.php|restore-run.php|restore-result.php|\
-    restore-running.php|restore-read.php|cache-clear.php|inventory.php|\
+    restore-running.php|restore-read.php|cache-clear.php|run-all.php|inventory.php|\
     post-install.php|pre-uninstall.php|notify.php)
         shift
         ;;

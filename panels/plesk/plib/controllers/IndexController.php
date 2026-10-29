@@ -223,9 +223,17 @@ class IndexController extends pm_Controller_Action
             if ($form->isValid($request->getPost())) {
                 if ($this->runInProgress()) {
                     $this->_status->addMessage('warning', 'A backup run is already in progress (from the nightly timer or an earlier "Back up now"). Start this one when it has finished; the status table shows when it is done.');
+                } elseif ($all) {
+                    // The nightly unit itself (run-all.php), so the run is the timer's in every respect.
+                    $result = RootScripts::run('run-all.php', [], self::SCRIPT_TIMEOUT);
+                    if ($result['code'] === 0) {
+                        $this->_status->addMessage('info', 'A backup of every subscription has started in the background. The status table shows the result when it has finished.');
+                    } else {
+                        $this->_status->addMessage('error', 'Run everything now: ' . RootScripts::error($result));
+                    }
                 } else {
                     RootScripts::startInBackground($args);
-                    $this->_status->addMessage('info', ($all ? 'A backup of every subscription' : sprintf('A backup of %s', $subscription))
+                    $this->_status->addMessage('info', sprintf('A backup of %s', $subscription)
                         . ' has started in the background. The status table shows the result when it has finished.');
                 }
             }

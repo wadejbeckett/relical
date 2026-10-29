@@ -96,6 +96,21 @@ final class CommandTest extends TestCase
         self::assertSame(1, preg_match_all('/^\s*exec\b/m', $sbin), 'one exec only');
     }
 
+    public function testRunEverythingNowStartsTheNightlyUnit(): void
+    {
+        self::assertSame(
+            ['mode' => 'systemd', 'argv' => ['/usr/bin/systemctl', 'start', '--no-block', 'relical-backup.service']],
+            Command::runAll('/usr/bin/systemctl')
+        );
+        $detached = Command::runAll(null);
+        self::assertSame('detached', $detached['mode']);
+        self::assertSame(['/usr/local/lib/relical/relical', '-config', '/etc/relical/config.json', 'backup', '--all'], $detached['argv']);
+        self::assertSame(
+            "'/usr/local/lib/relical/relical' '-config' '/etc/relical/config.json' 'backup' '--all' < /dev/null > /dev/null 2>&1 &",
+            Command::background($detached['argv'])
+        );
+    }
+
     public function testTheRootEntryPointRefusesOtherScripts(): void
     {
         foreach (['', 'zz.php', '../scripts/cli.php', 'cli.php/../x', '-x'] as $script) {
@@ -390,6 +405,7 @@ final class CommandTest extends TestCase
         yield 'restore-run by an administrator' => ['restore-run.php', [self::RESTORE_ID, '--admin', 'restore', '--subscription', 'example.test', '--unit', 'files', '--snapshot', 'abcdef12']];
         yield 'restore-result' => ['restore-result.php', [self::RESTORE_ID]];
         yield 'restore-running' => ['restore-running.php', ['example.test']];
+        yield 'run-all' => ['run-all.php', []];
         yield 'restore-read snapshots' => ['restore-read.php', ['snapshots', 'example.test']];
         yield 'restore-read mailboxes' => ['restore-read.php', ['mailboxes', 'example.test']];
         yield 'restore-read ls top' => ['restore-read.php', ['ls', 'example.test', 'abcdef12']];
@@ -447,6 +463,7 @@ final class CommandTest extends TestCase
         yield 'restore-result with a path' => ['restore-result.php', ['../../etc/shadow']];
         yield 'restore-result twice' => ['restore-result.php', [self::RESTORE_ID, self::RESTORE_ID]];
         yield 'restore-running of the server' => ['restore-running.php', ['_server']];
+        yield 'run-all with an argument' => ['run-all.php', ['--all']];
         yield 'restore-running without a subscription' => ['restore-running.php', []];
         yield 'restore-running with a path' => ['restore-running.php', ['../x']];
         yield 'restore-read nothing' => ['restore-read.php', []];

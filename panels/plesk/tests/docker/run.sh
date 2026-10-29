@@ -335,7 +335,8 @@ post admin "/modules/relical/index.php/index/backup?all=1" "$WORK/run.html" 'all
 get admin /modules/relical/index.php "$WORK/after-run.html" >/dev/null
 grep -q 'already in progress' "$WORK/after-run.html" || fail "a second Run everything now while one runs"
 timeout 600 bash -c "while docker exec $P pgrep -f 'relical -config /etc/relical/config.json backup' >/dev/null; do sleep 3; done" || fail "the background run did not finish"
-ok "Run everything now starts a detached run; a second click says a run is already in progress"
+px 'journalctl -u relical-backup.service --no-pager | grep -q "Relical nightly backup"' || fail "Run everything now did not start relical-backup.service"
+ok "Run everything now starts relical-backup.service (run-all.php); a second click says a run is already in progress"
 
 if px 'grep -i "fatal\|warning\|exception" /var/log/plesk/panel.log | grep -i relical | grep -v "Permission denied"' > "$WORK/panel-errors.txt"; then
     cat "$WORK/panel-errors.txt"; fail "panel.log has PHP errors from the extension"

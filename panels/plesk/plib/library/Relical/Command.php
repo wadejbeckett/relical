@@ -31,7 +31,7 @@ final class Command
         'cli.php', 'write-config.php', 'install-timers.php', 'overview.php',
         'hostkey.php', 'probe.php', 'log-tail.php', 'running.php',
         'restore-run.php', 'restore-result.php', 'restore-running.php',
-        'restore-read.php', 'cache-clear.php',
+        'restore-read.php', 'cache-clear.php', 'run-all.php',
     ];
 
     /** restore-run.php's marker for a restore an administrator started (not held to the daily limit). */
@@ -229,6 +229,35 @@ final class Command
     }
 
     /**
+     * How run-all.php starts "Run everything now" as root: the timer's own
+     * unit when systemd runs this server (same priority, retention, cgroup
+     * and OnFailure= as the nightly run, and systemd refuses a second start
+     * while it runs), else the core's `backup --all` detached.
+     *
+     * @param ?string $systemctl systemctl's path, or null when systemd is not running
+     * @return array{mode: string, argv: list<string>}
+     */
+    public static function runAll(?string $systemctl): array
+    {
+        if ($systemctl !== null) {
+            return ['mode' => 'systemd', 'argv' => [$systemctl, 'start', '--no-block', Units::BACKUP_SERVICE]];
+        }
+
+        return ['mode' => 'detached', 'argv' => self::parse(['backup', '--all'])->argv()];
+    }
+
+    /**
+     * An argv as a shell command run in the background, detached from the
+     * caller: every word quoted, no input or output.
+     *
+     * @param list<string> $argv
+     */
+    public static function background(array $argv): string
+    {
+        return implode(' ', array_map([self::class, 'shellQuote'], $argv)) . ' < /dev/null > /dev/null 2>&1 &';
+    }
+
+    /**
      * A shell command that starts `cli.php <args>` as root in the background
      * and returns at once, as Cloudflare DNS Sync starts its syncs: every
      * word escaped, no input or output, detached with `&`. The web request
@@ -249,9 +278,7 @@ final class Command
      */
     public static function detachedScript(string $script, array $args): string
     {
-        $words = array_map([self::class, 'shellQuote'], self::rootArgv($script, $args));
-
-        return implode(' ', $words) . ' < /dev/null > /dev/null 2>&1 &';
+        return self::background(self::rootArgv($script, $args));
     }
 
     /**

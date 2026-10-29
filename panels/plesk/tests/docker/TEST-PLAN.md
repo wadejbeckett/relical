@@ -270,3 +270,8 @@ has not yet seen. Each line is open until the next `run.sh` run.
       (settings empty, old `config.json` kept), the settings page says
       backups still go to the old destination (from `overview.php`'s
       `config_destination`) until the settings are saved.
+- [ ] "Run everything now" goes through `run-all.php`, which runs
+      `systemctl start --no-block relical-backup.service` (the journal shows
+      the unit), so the run has the timer's priority, retention, cgroup and
+      `OnFailure=`; without systemd it falls back to a detached
+      `backup --all` (not testable in this image, which runs systemd).
