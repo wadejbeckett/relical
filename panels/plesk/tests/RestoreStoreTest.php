@@ -253,6 +253,22 @@ final class RestoreStoreTest extends TestCase
         self::assertSame([], glob($this->dir . '/*.cache'));
     }
 
+    public function testRecordsAreReadForTheDailyCount(): void
+    {
+        $store = new RestoreStore($this->dir);
+        $store->ensure();
+        $args = ['restore', '--subscription', 'example.test', '--unit', 'files', '--snapshot', 'abcdef12'];
+        $now = strtotime('2026-10-29T12:00:00Z');
+        foreach (['20261029110000-000000000000000000000001', '20261029110100-000000000000000000000002', '20261029110200-000000000000000000000003'] as $id) {
+            $store->write(RestoreRecord::running($id, $args, $now - 600));
+        }
+        file_put_contents($this->dir . '/20261029110300-000000000000000000000004.json', 'not json');
+        symlink($this->dir . '/20261029110000-000000000000000000000001.json', $this->dir . '/20261029110400-000000000000000000000005.json');
+
+        self::assertCount(3, $store->records(), 'malformed records and links are left out');
+        self::assertSame(3, RestoreRecord::recentCustomerRestores($store->records(), 'example.test', $now));
+    }
+
     public function testRestoredFoldersAreCountedByName(): void
     {
         mkdir($this->dir, 0700);

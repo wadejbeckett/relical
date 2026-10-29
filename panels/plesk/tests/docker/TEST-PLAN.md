@@ -232,3 +232,19 @@ Legend: [x] checked here (the result says what was and was not covered),
 - [x] `$this->render('restore/_style.phtml')` finds the partial from every
       restore view.
       **Result (2026-10-29):** Confirmed for the index, files, status and not-covered pages (styles rendered, no error in panel.log).
+
+## Pre-pilot fixes (branch `ext-fixes`, 29 October 2026): to re-verify
+
+Changes from the whole-branch review that PHPUnit pins but the Docker run
+has not yet seen. Each line is open until the next `run.sh` run.
+
+- [ ] Daily restore limit: a customer's fourth files or database restore of
+      one subscription within 24 hours is refused with "This subscription
+      has had 3 website or database restores in the last 24 hours", both on
+      the form (`restore-running.php` returns `recent_restores`) and in
+      `restore-run.php` as root; mail restores and an administrator's
+      (`restore-run.php <id> --admin restore ...`) are not counted or held.
+- [~] Plesk disk quota: a restore is not checked against the
+      subscription's Plesk disk quota (whole-branch review finding 4). Not
+      done for the pilot; the daily limit and the five-copy cap bound how
+      much a customer can add. Revisit with `pm_Domain` limits.

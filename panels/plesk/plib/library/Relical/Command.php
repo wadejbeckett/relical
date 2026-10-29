@@ -34,6 +34,9 @@ final class Command
         'restore-read.php', 'cache-clear.php',
     ];
 
+    /** restore-run.php's marker for a restore an administrator started (not held to the daily limit). */
+    public const ADMIN_FLAG = '--admin';
+
     /** The units a customer restores (the panel configuration is the administrator's). */
     public const CUSTOMER_UNITS = ['mail', 'files', 'db'];
 
@@ -141,8 +144,9 @@ final class Command
     /**
      * Validates a root script's arguments (each script calls this on its own
      * argv as well): cli.php as parse() does, hostkey.php `scan` or
-     * `trust <SHA256 fingerprint>`, restore-run.php `<id> restore ...` (a
-     * customer restore, see customerRestore()), restore-result.php `<id>`,
+     * `trust <SHA256 fingerprint>`, restore-run.php `<id> [--admin] restore ...`
+     * (a customer restore, see customerRestore(); `--admin` when an
+     * administrator started it), restore-result.php `<id>`,
      * restore-running.php `<subscription>`, every other script none.
      *
      * @param list<string> $args the arguments after the script name
@@ -169,11 +173,12 @@ final class Command
                 }
                 throw new InvalidArgumentException('hostkey.php takes "scan" or "trust <fingerprint>"');
             case 'restore-run.php':
-                if (count($args) < 2) {
-                    throw new InvalidArgumentException('restore-run.php takes <id> restore <flags>');
+                $rest = array_slice($args, ($args[1] ?? '') === self::ADMIN_FLAG ? 2 : 1);
+                if (count($args) < 2 || $rest === []) {
+                    throw new InvalidArgumentException('restore-run.php takes <id> [--admin] restore <flags>');
                 }
                 self::restoreId($args[0]);
-                self::customerRestore(array_slice($args, 1));
+                self::customerRestore($rest);
                 return $args;
             case 'restore-result.php':
                 if (count($args) !== 1) {

@@ -5,7 +5,7 @@ declare(strict_types=1);
 /**
  * Runs one customer restore and records its outcome:
  *
- *     plesk bin extension --exec relical restore-run.php <id> restore --subscription S --unit mail|files|db ...
+ *     plesk bin extension --exec relical restore-run.php <id> [--admin] restore --subscription S --unit mail|files|db ...
  *
  * The restore screens start it detached (Command::detachedScript). It takes
  * the subscription's restore lock (so a second restore of the same
@@ -15,6 +15,11 @@ declare(strict_types=1);
  * same argv cli.php would build (Command::parse, no shell), and replaces
  * the record with the core's JSON or its error. The record is the only
  * place the outcome lands; restore-result.php reads it.
+ *
+ * A subscription gets at most RestoreRecord::MAX_RESTORES_PER_DAY files or
+ * database restores in 24 hours, counted from its records here, so a
+ * customer cannot fill the disk by restoring and renaming copies over and
+ * over. `--admin` (the screens add it for an administrator) is exempt.
  *
  * The arguments are a customer restore only (Command::customerRestore):
  * never `_server`, never the panel configuration.
@@ -47,13 +52,14 @@ try {
 ScriptIO::requireRoot('restore-run.php');
 
 $id = $args[0];
-$cliArgs = array_slice($args, 1);
+$admin = $args[1] === Command::ADMIN_FLAG;
+$cliArgs = array_slice($args, $admin ? 2 : 1);
 
 try {
     $store = RestoreStore::fromPlesk();
     $store->ensure();
     $store->prune(time());
-    $record = RestoreRecord::running($id, $cliArgs, time());
+    $record = RestoreRecord::running($id, $cliArgs, time(), $admin);
     if ($store->read($id) !== null) {
         ScriptIO::fail('restore-run: a restore with this id exists already');
     }
@@ -62,6 +68,12 @@ try {
     if ($lock === null) {
         $store->write(RestoreRecord::failed($record, RestoreRecord::BUSY, time()));
         ScriptIO::fail(RestoreRecord::BUSY);
+    }
+    if (!$admin && $record['unit'] !== 'mail'
+        && RestoreRecord::recentCustomerRestores($store->records(), $record['subscription'], time()) >= RestoreRecord::MAX_RESTORES_PER_DAY) {
+        RestoreStore::unlock($lock);
+        $store->write(RestoreRecord::failed($record, RestoreRecord::TOO_MANY_RESTORES, time()));
+        ScriptIO::fail(RestoreRecord::TOO_MANY_RESTORES);
     }
     // At most RestoreStore::SLOTS customer restores run on the server at once.
     $slot = $store->slot();

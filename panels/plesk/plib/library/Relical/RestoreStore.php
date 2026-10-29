@@ -203,6 +203,27 @@ final class RestoreStore
         );
     }
 
+    /**
+     * Every readable record (malformed ones are left out).
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function records(): array
+    {
+        $out = [];
+        foreach (glob($this->dir . '/*.json') ?: [] as $path) {
+            if (is_link($path) || !is_file($path)) {
+                continue;
+            }
+            $data = json_decode((string) @file_get_contents($path), true);
+            if (is_array($data)) {
+                $out[] = $data;
+            }
+        }
+
+        return $out;
+    }
+
     /** Removes records older than MAX_AGE. @return int how many were removed */
     public function prune(int $now): int
     {

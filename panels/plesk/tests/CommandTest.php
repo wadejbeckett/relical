@@ -371,6 +371,7 @@ final class CommandTest extends TestCase
         yield 'restore-run mail' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'mail', '--domain', 'example.test', '--mailbox', 'info', '--snapshot', 'abcdef12']];
         yield 'restore-run files' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'files', '--snapshot', 'abcdef12', '--path', 'httpdocs']];
         yield 'restore-run db' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'db', '--database', 'example_wp']];
+        yield 'restore-run by an administrator' => ['restore-run.php', [self::RESTORE_ID, '--admin', 'restore', '--subscription', 'example.test', '--unit', 'files', '--snapshot', 'abcdef12']];
         yield 'restore-result' => ['restore-result.php', [self::RESTORE_ID]];
         yield 'restore-running' => ['restore-running.php', ['example.test']];
         yield 'restore-read snapshots' => ['restore-read.php', ['snapshots', 'example.test']];
@@ -417,6 +418,9 @@ final class CommandTest extends TestCase
         yield 'restore-run with a bad id' => ['restore-run.php', ['../x', 'restore', '--subscription', 'example.test', '--unit', 'files']];
         yield 'restore-run with an upper-case id' => ['restore-run.php', ['20261029120000-ABCDEF0123456789ABCDEF01', 'restore', '--subscription', 'example.test', '--unit', 'files']];
         yield 'restore-run without a command' => ['restore-run.php', [self::RESTORE_ID]];
+        yield 'restore-run admin without a command' => ['restore-run.php', [self::RESTORE_ID, '--admin']];
+        yield 'restore-run admin in the wrong place' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--admin', '--subscription', 'example.test', '--unit', 'files']];
+        yield 'restore-run admin twice' => ['restore-run.php', [self::RESTORE_ID, '--admin', '--admin', 'restore', '--subscription', 'example.test', '--unit', 'files']];
         yield 'restore-run a backup' => ['restore-run.php', [self::RESTORE_ID, 'backup', '--subscription', 'example.test']];
         yield 'restore-run the panel configuration' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', '_server', '--unit', 'panel-config']];
         yield 'restore-run in _server' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', '_server', '--unit', 'files']];
