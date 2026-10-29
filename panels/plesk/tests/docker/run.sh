@@ -393,7 +393,50 @@ fi
 ok "no PHP fatal, warning or exception from the extension in panel.log"
 
 # ---------------------------------------------------------------------------
-say "8. install edge cases"
+say "8. a stopped run and a timed-out run"
+# relical exits 4 when SIGTERM stops it and the units list SuccessExitStatus=4,
+# so a deliberate stop is a clean end (Result=success): no forget, no notice.
+# A run that hits TimeoutStartSec= is still a failure (Result=timeout).
+# Pausing the SFTP container keeps a run busy (ssh waits for the server).
+notices() { px 'grep -c "relical-notify: relical-backup.service failed" /var/lib/relical/relical.log || true'; }
+invocation() { px "systemctl show -p InvocationID --value $NOTIFY"; }
+unpause() { docker unpause "$SFTP" >/dev/null 2>&1 || true; }
+running() { timeout 60 bash -c "until [ \"\$(docker exec $P systemctl show -p ActiveState --value relical-backup.service)\" = activating ] && docker exec $P pgrep -f 'relical -config /etc/relical/config.json backup' >/dev/null; do sleep 1; done"; }
+N0=$(notices); I0=$(invocation)
+L0=$(px 'wc -l < /var/lib/relical/relical.log')
+docker pause "$SFTP" >/dev/null
+px 'systemctl start --no-block relical-backup.service'
+running || { unpause; fail "the backup did not start"; }
+sleep 3
+T0=$(date +%s)
+timeout 960 docker exec "$P" systemctl stop relical-backup.service || { unpause; fail "systemctl stop relical-backup did not return within 15 minutes"; }
+T1=$(date +%s)
+unpause
+[ $((T1 - T0)) -le 900 ] || fail "systemctl stop relical-backup took $((T1 - T0)) s"
+RESULT=$(px 'systemctl show -p Result --value relical-backup.service')
+[ "$RESULT" = success ] || fail "a deliberate stop ended with Result=$RESULT, not success (SuccessExitStatus=4 and relical's exit 4)"
+px "tail -n +$((L0 + 1)) /var/lib/relical/relical.log" > "$WORK/stopped.log"
+grep -q '"action":"forget"' "$WORK/stopped.log" && fail "a stopped run ran forget: $(cat "$WORK/stopped.log")"
+sleep 5
+[ "$(notices)" = "$N0" ] && [ "$(invocation)" = "$I0" ] || fail "a deliberate stop started $NOTIFY"
+ok "systemctl stop relical-backup returned in $((T1 - T0)) s with Result=success; no forget, no failure notice"
+
+px 'mkdir -p /etc/systemd/system/relical-backup.service.d && printf "%s\n" "[Service]" "TimeoutStartSec=5s" > /etc/systemd/system/relical-backup.service.d/zz-test-timeout.conf && systemctl daemon-reload'
+docker pause "$SFTP" >/dev/null
+if px 'systemctl start relical-backup.service'; then unpause; fail "a run past TimeoutStartSec=5s did not fail"; fi
+unpause
+RESULT=$(px 'systemctl show -p Result --value relical-backup.service')
+px 'rm /etc/systemd/system/relical-backup.service.d/zz-test-timeout.conf && rmdir /etc/systemd/system/relical-backup.service.d && systemctl daemon-reload'
+[ "$RESULT" = timeout ] || fail "a run past TimeoutStartSec= ended with Result=$RESULT, not timeout"
+timeout 120 bash -c "until [ \"\$(docker exec $P grep -c 'relical-notify: relical-backup.service failed' /var/lib/relical/relical.log)\" -gt $N0 ]; do sleep 2; done" \
+    || fail "a timed-out run did not start $NOTIFY"
+[ "$(invocation)" != "$I0" ] || fail "a timed-out run did not start $NOTIFY (same invocation)"
+px 'systemctl reset-failed relical-backup.service'
+px 'systemctl show -p TimeoutStartUSec --value relical-backup.service' | grep -q '^20h$' || fail "the timeout drop-in was not removed"
+ok "a run past TimeoutStartSec= fails with Result=timeout and starts $NOTIFY"
+
+# ---------------------------------------------------------------------------
+say "9. install edge cases"
 px 'printf "%s\n" "<?php" "pm_Context::init(\"relical\");" "pm_Settings::set(\"sftp_port\", \$argv[1]);" > /opt/psa/admin/plib/modules/relical/scripts/zz-test-set.php'
 px '/opt/psa/admin/bin/php -dauto_prepend_file=sdk.php /opt/psa/admin/plib/modules/relical/scripts/zz-test-set.php 0'
 before=$(px 'stat -c %Y /etc/relical/config.json')

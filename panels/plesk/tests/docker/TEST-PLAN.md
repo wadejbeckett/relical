@@ -268,7 +268,13 @@ has not yet seen. Each line is open until the next `run.sh` run.
 - [ ] Bounded runs: `TimeoutStartSec=20h` (not `RuntimeMaxSec=`, which
       systemd ignores for oneshot units) and `TimeoutStopSec=15min`;
       `systemctl stop relical-backup` during a run returns within the
-      timeout and starts no forget (core finding 5).
+      timeout and starts no forget (core finding 5). relical exits 4
+      ("interrupted") on SIGINT or SIGTERM and both units list
+      `SuccessExitStatus=4`, so the stop ends with `Result=success` and
+      starts no `relical-notify@` instance; a run that hits
+      `TimeoutStartSec=` (a 5 s drop-in on a run kept busy by pausing the
+      SFTP container) still ends with `Result=timeout` and starts the
+      notice (`run.sh` step 8).
 - [ ] `relical-root` starts PHP with `env -i PATH=... LANG=C.UTF-8`: every
       root script, the install hooks and the core's `inventory.php` still
       work with the empty environment (does Plesk's SDK need HOME or
@@ -294,4 +300,4 @@ has not yet seen. Each line is open until the next `run.sh` run.
       and each ls folder, five minutes). `post-install.php upgrade 0.2.0`
       still runs; `inventory.php` and `pre-uninstall.php` refuse arguments
       (confirm Plesk passes none to pre-uninstall: `plesk bin extension -u`
-      in step 8).
+      in step 9).
