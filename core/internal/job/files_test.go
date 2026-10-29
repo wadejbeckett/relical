@@ -24,7 +24,7 @@ func TestBackupFilesArgs(t *testing.T) {
 	}
 	l := logLines(log())
 	got := l[len(l)-1]
-	want := "backup --json --one-file-system --exclude-caches --tag files" +
+	want := "backup --json --host host.example.test --one-file-system --exclude-caches --tag files" +
 		" --exclude /var/www/vhosts/example.test/logs/** --exclude /var/www/vhosts/example.test/tmp/**" +
 		` --exclude /var/www/vhosts/odd\[1]\*.example.test/logs/** --exclude /var/www/vhosts/odd\[1]\*.example.test/tmp/**` +
 		" /var/www/vhosts/example.test /var/www/vhosts/odd[1]*.example.test"

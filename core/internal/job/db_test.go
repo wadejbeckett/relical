@@ -30,7 +30,7 @@ func TestDumpStreamsThroughStdin(t *testing.T) {
 	}
 	l := logLines(log())
 	got := l[len(l)-1]
-	want := "backup --json --stdin-from-command --stdin-filename example_wp.sql --tag db --tag db:example_wp -- " +
+	want := "backup --json --host host.example.test --stdin-from-command --stdin-filename example_wp.sql --tag db --tag db:example_wp -- " +
 		e.Cfg.MysqldumpBin + " --defaults-file=" + e.Cfg.MySQL.DefaultsFile +
 		" --single-transaction --quick --routines --triggers --events --no-tablespaces -- example_wp"
 	if got != want {

@@ -55,9 +55,12 @@ func ExitCode(err error) int {
 }
 
 type Runner struct {
-	Bin            string
-	Repository     string
-	PasswordFile   string
+	Bin          string
+	Repository   string
+	PasswordFile string
+	// Host is the host name backups are recorded under (backup --host).
+	// It is never a filter: snapshots, ls, restore, forget and stats see
+	// every snapshot in the repository, whichever host made it.
 	Host           string
 	CacheDir       string
 	Env            map[string]string
@@ -205,7 +208,6 @@ func (r Runner) command(ctx context.Context, args ...string) *exec.Cmd {
 		"PATH=" + os.Getenv("PATH"),
 		"RESTIC_REPOSITORY=" + r.Repository,
 		"RESTIC_PASSWORD_FILE=" + r.PasswordFile,
-		"RESTIC_HOST=" + r.Host,
 		"RESTIC_CACHE_DIR=" + r.CacheDir,
 	}
 	for k, v := range r.Env {
@@ -250,7 +252,8 @@ func (r Runner) Init(ctx context.Context) error {
 // and the ExitError together, because the snapshot was saved. extra are
 // further backup flags, such as --exclude-caches.
 func (r Runner) Backup(ctx context.Context, paths, tags, excludes []string, extra ...string) (BackupSummary, error) {
-	args := []string{"backup", "--json", "--one-file-system"}
+	args := append([]string{"backup", "--json"}, r.hostArgs()...)
+	args = append(args, "--one-file-system")
 	args = append(args, extra...)
 	for _, t := range tags {
 		args = append(args, "--tag", t)
@@ -279,7 +282,8 @@ func (r Runner) BackupStdin(ctx context.Context, command []string, filename stri
 	if len(command) == 0 {
 		return BackupSummary{}, errors.New("restic backup: no command for --stdin-from-command")
 	}
-	args := []string{"backup", "--json", "--stdin-from-command", "--stdin-filename", filename}
+	args := append([]string{"backup", "--json"}, r.hostArgs()...)
+	args = append(args, "--stdin-from-command", "--stdin-filename", filename)
 	for _, t := range tags {
 		args = append(args, "--tag", t)
 	}
@@ -290,6 +294,17 @@ func (r Runner) BackupStdin(ctx context.Context, command []string, filename stri
 		return BackupSummary{}, err
 	}
 	return parseSummary(out)
+}
+
+// hostArgs is --host for backup. The host is passed on backup only, never
+// as RESTIC_HOST: since restic 0.17 that variable is also the default
+// host filter of snapshots, forget and every snapshot lookup, which would
+// hide (and never prune) the snapshots made under an earlier server_id.
+func (r Runner) hostArgs() []string {
+	if r.Host == "" {
+		return nil
+	}
+	return []string{"--host", r.Host}
 }
 
 func parseSummary(out []byte) (BackupSummary, error) {
@@ -337,7 +352,9 @@ func (r Runner) Snapshots(ctx context.Context, tag string) ([]Snapshot, error) {
 
 // Forget applies keep to every group of snapshots (groupBy, for example
 // "tags", so mail, files and each database are kept apart) and prunes
-// when prune is set. It considers every snapshot in the repository.
+// when prune is set. It considers every snapshot in the repository,
+// whichever host made it: the runner sets no RESTIC_HOST, which restic
+// would take as a host filter.
 func (r Runner) Forget(ctx context.Context, groupBy string, keep config.Retention, prune bool) error {
 	args := []string{"forget", "--group-by", groupBy,
 		"--keep-daily", strconv.Itoa(keep.Daily),

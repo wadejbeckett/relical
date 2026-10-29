@@ -29,6 +29,7 @@ Phase 2: full backup per hosting subscription, and the core the Plesk extension 
 - A subscription whose inventory entry is invalid, or that conflicts with another (both are left out), is listed under `skipped` with `"invalid": true` and its reasons instead of failing the whole inventory; `--all` runs report it as a failed result and exit 1, and `report` gives it a failed `inventory` row. Only `server` errors and malformed output stay fatal.
 - `report` lists the inventory's `skipped` subscriptions (`skipped: [{"name", "reason"}]`), and `--all` runs write them to the run log (`"event": "skipped"`). The count of rows skipped for an unsupported database type moves from `skipped` to `skipped_rows`.
 - System user names may contain `.` (Plesk allows `john.smith`), still never as the first character.
+- `server_id` is passed as `--host` on `backup` only; `RESTIC_HOST` is no longer set, since restic 0.17 also takes it as the host filter of `snapshots`, `forget` and restores, which hid (and never pruned) the snapshots of an earlier `server_id`.
 - In `--all` runs, a destination that three subscriptions in a row could not connect to is given up on: the rest fail at once with "destination NAME unreachable; not tried". `relical-backup.service` has `RuntimeMaxSec=20h` as a last resort.
 
 ### Changed

@@ -44,7 +44,7 @@ func TestPanelConfigStagingIsDeleted(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 	l := logLines(log())
-	if want := "backup --json --one-file-system --tag panel-config " + out; l[len(l)-1] != want {
+	if want := "backup --json --host host.example.test --one-file-system --tag panel-config " + out; l[len(l)-1] != want {
 		t.Errorf("got  %s\nwant %s", l[len(l)-1], want)
 	}
 	if !strings.Contains(repoEnv(env), "RESTIC_REPOSITORY=/repo/_server") {

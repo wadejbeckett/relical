@@ -301,6 +301,7 @@ A restore that is killed (SIGKILL, out of memory, power loss) can leave its stag
 Copy `packaging/config.example.json` to `/etc/relical/config.json` and set mode `0600`; Relical refuses a configuration readable by others. Unknown keys are rejected. The main settings:
 
 - `version`: must be `2`. A version 1 configuration (with `domains` and `{domain}` repositories) is refused; there is no automatic migration.
+- `server_id` (required): the host name every backup is recorded under (`restic backup --host`). It is only a label: `snapshots`, `ls`, restores and `forget` see every snapshot in a subscription's repository, whichever `server_id` made it, so changing it, or moving a subscription to another server that writes to the same repository, hides nothing and leaves nothing unpruned.
 - `roots`: the directories inventory paths must lie under: `files` (default `["/var/www/vhosts"]`) and `mail` (default `["/var/qmail/mailnames"]`).
 - `mailbox_pattern`: where a mail domain's mailboxes live, with `{domain}` and `{mailbox}` once each, under a mail root (default `/var/qmail/mailnames/{domain}/{mailbox}/Maildir`, the Plesk layout).
 - `mail_folder_prefix`: the prefix of Dovecot's inbox namespace, put in front of the `Restored <date> <id>` folder a mail restore creates. Plesk's Dovecot needs `"INBOX."` (its folders are `INBOX.Sent` and the like); empty (the default) suits Dovecot's default namespace. A `--folder` given with this prefix (`INBOX.Sent`) is the same as without it (`Sent`).

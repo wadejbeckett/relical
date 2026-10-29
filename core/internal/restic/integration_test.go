@@ -484,3 +484,44 @@ func TestRealRestoreIncludeSiblingsAndEscapes(t *testing.T) {
 		t.Errorf("httpdocs2: %d %v", n, err)
 	}
 }
+
+// TestEveryHostIsSeen: a repository holding snapshots from two hosts (a
+// changed server_id, or a subscription moved to another server on the
+// same destination). snapshots lists both and forget, grouped by tags,
+// keeps by retention across them, because the runner passes the host on
+// backup only and never sets RESTIC_HOST.
+func TestEveryHostIsSeen(t *testing.T) {
+	ctx := context.Background()
+	old := realRunner(t, filepath.Join(t.TempDir(), "repo"))
+	old.Host = "oldhost"
+	if err := old.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	m := maildir(t)
+	if _, err := old.Backup(ctx, []string{m}, []string{"mail"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	cur := old
+	cur.Host = "newhost"
+	if _, err := cur.Backup(ctx, []string{m}, []string{"mail"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	snaps, err := cur.Snapshots(ctx, "mail")
+	if err != nil || len(snaps) != 2 {
+		t.Fatalf("%+v %v", snaps, err)
+	}
+	hosts := map[string]bool{}
+	for _, s := range snaps {
+		hosts[s.Hostname] = true
+	}
+	if !hosts["oldhost"] || !hosts["newhost"] {
+		t.Errorf("hosts %v", hosts)
+	}
+	if err := cur.Forget(ctx, "tags", config.Retention{Daily: 1}, true); err != nil {
+		t.Fatal(err)
+	}
+	snaps, err = cur.Snapshots(ctx, "")
+	if err != nil || len(snaps) != 1 || snaps[0].Hostname != "newhost" {
+		t.Fatalf("after forget: %+v %v", snaps, err)
+	}
+}

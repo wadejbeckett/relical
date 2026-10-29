@@ -28,7 +28,7 @@ func TestBackupParsesSummaryAndBuildsArgs(t *testing.T) {
 		t.Errorf("summary = %+v", sum)
 	}
 	got := log()
-	want := "--retry-lock 30m backup --json --one-file-system --tag backup --exclude **/dovecot.index* /m/a/Maildir /m/b/Maildir"
+	want := "--retry-lock 30m backup --json --host host.example.test --one-file-system --tag backup --exclude **/dovecot.index* /m/a/Maildir /m/b/Maildir"
 	if !strings.Contains(got, want) {
 		t.Errorf("args:\n%s\nwant %s", got, want)
 	}
@@ -36,10 +36,15 @@ func TestBackupParsesSummaryAndBuildsArgs(t *testing.T) {
 		t.Error("parent RESTIC_PASSWORD leaked into restic's environment")
 	}
 	envLog, _ := os.ReadFile(env["FAKE_LOG"] + ".env")
-	for _, w := range []string{"RESTIC_REPOSITORY=/repo/example.test", "RESTIC_PASSWORD_FILE=/keys/example.test.key", "RESTIC_HOST=host.example.test", "RESTIC_CACHE_DIR=/cache"} {
+	for _, w := range []string{"RESTIC_REPOSITORY=/repo/example.test", "RESTIC_PASSWORD_FILE=/keys/example.test.key", "RESTIC_CACHE_DIR=/cache"} {
 		if !strings.Contains(string(envLog), w) {
 			t.Errorf("env missing %s:\n%s", w, envLog)
 		}
+	}
+	// The host is backup's --host, never RESTIC_HOST, which restic would
+	// also take as a filter for snapshots, forget and restores.
+	if strings.Contains(string(envLog), "RESTIC_HOST") {
+		t.Errorf("RESTIC_HOST is set:\n%s", envLog)
 	}
 }
 
@@ -102,7 +107,7 @@ func TestBackupExtraFlags(t *testing.T) {
 	if _, err := r.Backup(context.Background(), []string{"/w"}, []string{"files"}, []string{"/w/tmp/**"}, "--exclude-caches"); err != nil {
 		t.Fatal(err)
 	}
-	want := "--retry-lock 30m backup --json --one-file-system --exclude-caches --tag files --exclude /w/tmp/** /w"
+	want := "--retry-lock 30m backup --json --host host.example.test --one-file-system --exclude-caches --tag files --exclude /w/tmp/** /w"
 	if got := strings.TrimSpace(log()); got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
@@ -114,7 +119,7 @@ func TestBackupStdinArgsAndFailure(t *testing.T) {
 	if err != nil || sum.SnapshotID == "" {
 		t.Fatalf("%+v %v", sum, err)
 	}
-	want := "--retry-lock 30m backup --json --stdin-from-command --stdin-filename db1.sql --tag db --tag db:db1 -- /bin/echo -- dump"
+	want := "--retry-lock 30m backup --json --host host.example.test --stdin-from-command --stdin-filename db1.sql --tag db --tag db:db1 -- /bin/echo -- dump"
 	if got := strings.TrimSpace(log()); got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
