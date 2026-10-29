@@ -167,7 +167,10 @@ final class PleskSource
             foreach ($response->xpath('//mail/get_prefs/result') ?: [] as $result) {
                 $siteId = (int) $result->{'site-id'};
                 if ((string) $result->status !== 'ok') {
-                    $this->noteError($result, $domainNames[$siteId] ?? ('domain id ' . $siteId), 'mail status');
+                    if (self::hasNoMailService((string) $result->errtext)) {
+                        continue;
+                    }
+                    $this->noteError($result, $domainNames[$siteId] ?? '', 'mail status');
                     continue;
                 }
                 if (strtolower(trim((string) $result->prefs->mailservice)) === 'true') {
@@ -177,6 +180,17 @@ final class PleskSource
         }
 
         return $on;
+    }
+
+    /**
+     * Whether a failed mail get_prefs result only says the domain has no
+     * mail service: a subdomain on Plesk 18.0.81 answers "There is no
+     * DSMail service for domain with id = N" (errcode 1002, and no site-id).
+     * Its mail is off, which is not a problem to report.
+     */
+    public static function hasNoMailService(string $errtext): bool
+    {
+        return preg_match('/\bno DSMail service\b/i', $errtext) === 1;
     }
 
     /**
