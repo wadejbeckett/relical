@@ -25,7 +25,9 @@ func DumpFilename(db string) string { return db + ".sql" }
 func (e Env) MysqldumpCommand(db string) []string {
 	cmd := []string{e.Cfg.MysqldumpBin, "--defaults-file=" + e.Cfg.MySQL.DefaultsFile}
 	cmd = append(cmd, mysqldumpFlags...)
-	return append(cmd, db)
+	// The inventory refuses a name starting with -; "--" ends the options
+	// all the same, so a name is never read as one.
+	return append(cmd, "--", db)
 }
 
 // asRoot reports whether relical runs as root; a variable so that tests

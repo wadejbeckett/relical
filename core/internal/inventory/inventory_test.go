@@ -428,6 +428,13 @@ func TestInventoryRejectsForeignAndSystemDatabases(t *testing.T) {
 			t.Errorf("system database %s: %v", name, err)
 		}
 	}
+	// A leading - or $ would reach mysqldump's argv as (part of) an option.
+	for _, name := range []string{"-rx", "-Tx", "--all", "$x"} {
+		_, err := Load(context.Background(), cfgWith(list(sub(db(name)))))
+		if err == nil || !strings.Contains(err.Error(), "starting with a letter, digit or _") {
+			t.Errorf("database name %s: %v", name, err)
+		}
+	}
 	// Names that only contain a reserved word are customers' own.
 	for _, name := range []string{"psa_shop", "my_sys", "wp_mysql", "horde2"} {
 		if _, err := Load(context.Background(), cfgWith(list(sub(db(name))))); err != nil {

@@ -56,7 +56,8 @@ func TestRestoreDBRefusesForeignName(t *testing.T) {
 		{"mysql", "latest", "not a valid"},
 		{"psa", "latest", "not a valid"},
 		{"../x", "latest", "not a valid"},
-		{"-x", "latest", ""},
+		{"-x", "latest", "not a valid"},
+		{"-rx", "latest", "not a valid"},
 		{"", "latest", "not a valid"},
 		{"example_wp", "aaaaaaaa", "not found among the backups of database example_wp"}, // a files snapshot
 	} {

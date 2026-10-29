@@ -173,7 +173,7 @@ var (
 
 var (
 	sysUserRE  = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
-	dbNameRE   = regexp.MustCompile(`^[A-Za-z0-9_$-]{1,64}$`)
+	dbNameRE   = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_$-]{0,63}$`) // never a leading - (mysqldump would read an option)
 	dbTypeRE   = regexp.MustCompile(`^[a-z0-9]{1,16}$`)
 	idRE       = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 	configExRE = regexp.MustCompile(`^[a-z0-9]{1,8}$`)
@@ -465,7 +465,7 @@ func validateSubscription(cfg *config.Config, s *Subscription, requireID bool) [
 			add(fmt.Sprintf("databases[%d].type", i), fmt.Errorf("%q is not a valid database type", d.Type))
 		}
 		if !dbNameRE.MatchString(d.Name) {
-			add(fmt.Sprintf("databases[%d].name", i), fmt.Errorf("%q must be 1-64 of A-Z a-z 0-9 _ $ -", d.Name))
+			add(fmt.Sprintf("databases[%d].name", i), fmt.Errorf("%q must be 1-64 of A-Z a-z 0-9 _ $ -, starting with a letter, digit or _", d.Name))
 		} else if reservedDB(d.Name) {
 			add(fmt.Sprintf("databases[%d].name", i), fmt.Errorf("%q is a server or panel database and never belongs to a subscription", d.Name))
 		} else if dbs[d.Type+"/"+d.Name] {
