@@ -29,6 +29,10 @@ func (e Env) Mailboxes(sub inventory.Subscription) ([]locator.Mailbox, error) {
 	return all, nil
 }
 
+// NoMailboxesNote is the note of a mail backup of a subscription whose
+// mail domains have no mailbox.
+const NoMailboxesNote = "no mailboxes"
+
 // BackupMail backs up the subscription's mail, across all its mail
 // domains, into one snapshot tagged mail in the subscription's repository.
 func (e Env) BackupMail(ctx context.Context, sub inventory.Subscription) Result {
@@ -43,7 +47,11 @@ func (e Env) BackupMail(ctx context.Context, sub inventory.Subscription) Result 
 		return failed(res, err)
 	}
 	if len(boxes) == 0 {
-		return failed(res, errors.New("no mailboxes found"))
+		// Panels switch the mail service on by default, so a website-only
+		// subscription often has mail domains without a single mailbox.
+		res.OK = true
+		res.Note = NoMailboxesNote
+		return res
 	}
 	r, err := e.openRepo(ctx, sub)
 	if err != nil {

@@ -99,9 +99,24 @@ func TestBackupMissingMailDomainDirIsSkipped(t *testing.T) {
 	if r := e.BackupMail(context.Background(), mustSub(t, e, "example.test")); !r.OK || r.Mailboxes != 2 {
 		t.Fatalf("%+v", r)
 	}
+}
+
+// A subscription with mail on but no mailbox (a website-only customer on
+// a panel that switches mail on by default) is OK with a note, every
+// night, and restic never runs for it.
+func TestBackupMailWithoutMailboxesIsANote(t *testing.T) {
+	e, _, log := setup(t, "local")
 	sub := mustSub(t, e, "example.test")
-	sub.MailDomains = []string{"shop.example.test"}
-	if r := e.BackupMail(context.Background(), sub); r.OK || !strings.Contains(r.Error, "no mailboxes") {
-		t.Fatalf("%+v", r)
+	sub.MailDomains = []string{"shop.example.test"} // no mail directory at all
+	os.MkdirAll(filepath.Join(filepath.Dir(e.Cfg.StateDir), "mail", "empty.example.test"), 0o700)
+	for _, domains := range [][]string{{"shop.example.test"}, {"empty.example.test"}, {}} {
+		sub.MailDomains = domains
+		r := e.BackupMail(context.Background(), sub)
+		if !r.OK || r.Note != NoMailboxesNote || r.Error != "" || r.Snapshot != "" {
+			t.Fatalf("%v: %+v", domains, r)
+		}
+	}
+	if log() != "" {
+		t.Errorf("restic ran:\n%s", log())
 	}
 }
