@@ -151,6 +151,32 @@ if mysql -e "SELECT 1 FROM example_wp.posts" 2>/dev/null; then fail "the dump wa
 mysql -e "CREATE DATABASE scratch" && mysql scratch < "$RD"
 [ "$(mysql -N -e 'SELECT title FROM scratch.posts WHERE id=1')" = 'hello e2e' ] || fail "dump does not load"
 
+# The restored folders are built in root-only staging next to the homes.
+[ "$(stat -c %U:%a /var/www/vhosts/.relical)" = root:700 ] || fail ".relical is $(stat -c %U:%a /var/www/vhosts/.relical)"
+[ -z "$(ls -A /var/www/vhosts/.relical)" ] || fail "restore staging left behind"
+
+# Set-id bits are dropped and device nodes refused. restored-* folders are
+# not backed up again.
+mkdir -p $W/setid/dir $W/devs
+cp /bin/true $W/setid/suid && chmod 4755 $W/setid/suid && chmod 2755 $W/setid/dir
+mknod $W/devs/null c 1 3
+chown -R exampleuser: $W/setid $W/devs
+$R backup --subscription example.test --unit files | tee /tmp/backup-setid.json
+grep -q '"ok": true' /tmp/backup-setid.json || fail "files backup with set-id files"
+SETID_SNAP=$(sed -n 's/^ *"snapshot": "\([0-9a-f]*\)",*$/\1/p' /tmp/backup-setid.json)
+[ -n "$SETID_SNAP" ] || fail "no snapshot id from the files backup"
+if $R ls --subscription example.test --snapshot "$SETID_SNAP" --path "${RF#$W/}" > /tmp/ls-restored.json; then fail "a restored-* folder was backed up"; fi
+if $R restore --subscription example.test --unit files --snapshot "$SETID_SNAP" --path devs > /tmp/restore-dev.json; then fail "a device node was restored"; fi
+grep -q 'device node devs/null' /tmp/restore-dev.json || fail "device refusal does not name the node"
+if ls -d $W/restored-* | grep -v -e "^$RF\$" -e "^$(dirname "$RD")\$"; then fail "a refused restore left a folder"; fi
+[ -z "$(ls -A /var/www/vhosts/.relical)" ] || fail "refused restore left staging behind"
+$R restore --subscription example.test --unit files --snapshot "$SETID_SNAP" --path setid | tee /tmp/restore-setid.json
+RS=$(sed -n 's/^ *"restored_to": "\(.*\)",*$/\1/p' /tmp/restore-setid.json)
+[ "$(stat -c %a "$RS/setid/suid")" = 755 ] || fail "set-user-id kept: $(stat -c %a "$RS/setid/suid")"
+[ "$(stat -c %a "$RS/setid/dir")" = 755 ] || fail "set-group-id kept on a directory: $(stat -c %a "$RS/setid/dir")"
+[ "$(stat -c %U "$RS/setid/suid")" = exampleuser ] || fail "set-id file owner"
+rm -rf $W/setid $W/devs
+
 $R restore --subscription _server --unit panel-config | tee /tmp/restore-panel.json
 grep -q 'pleskrestore' /tmp/restore-panel.json
 RP=$(sed -n 's/^ *"restored_to": "\(.*\)",*$/\1/p' /tmp/restore-panel.json)

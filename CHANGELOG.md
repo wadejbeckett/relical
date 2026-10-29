@@ -20,12 +20,19 @@ Phase 2: full backup per hosting subscription, and the core the Plesk extension 
 - `sftp_args` for `sftp:` destinations (passed as `-o sftp.args=`), and a Hetzner Storage Box example in the README.
 - `prune: remote` reports the exact `restic forget` command the destination host must run, with credentials redacted.
 - `forget` and `check` report a repository not yet created as a note rather than a failure, and fail on a lost key.
+- File and database restores build the finished `restored-<date>-<id>` folder in root-only staging, `<files root>/.relical/`, and move it into the webspace with one `renameat2(RENAME_NOREPLACE)`, so a customer cannot swap the folder for another directory while it is filled; the fallback for another file system or an old kernel accepts only the empty, root-owned 0700 directory it made.
+- Restores clear set-user-id and set-group-id bits, leave out fifos and sockets and refuse device nodes.
+- Restores refuse to start without room for the estimated size plus 10% plus 256 MiB.
+- Staging left by a killed restore is removed after 24 hours, by the next restore or `backup --all`.
 
 ### Changed
 
 - The systemd units run `/usr/local/lib/relical/relical`, at `Nice=19` and `IOSchedulingClass=idle`; the weekly check runs on Sunday at 03:00.
 - `relical-check.service` passes `--read-data-subset 5%%`, since a bare `%` in a unit file is a specifier.
 - `restic_bin`, `doveadm_bin` and `mysqldump_bin` must be clean absolute paths when given.
+- Database names must start with a letter, a digit or `_`, and `mysqldump` gets `--` before the name.
+- Repository URLs are redacted from `://` to the last `@` (`***`), whatever the user information holds.
+- `restored-*` is among the default `file_excludes`.
 - The version is set at build time by the Makefile (`VERSION`, default 0.2.0); a build without it reports `0.2.0-dev`.
 
 ### Removed
