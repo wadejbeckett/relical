@@ -18,7 +18,7 @@ final class CommandTest extends TestCase
     /** The resolved `extension` utility, quoted as the detached command quotes it. */
     private static function utility(): string
     {
-        return implode(' ', array_map('escapeshellarg', Paths::extensionCommand()));
+        return implode(' ', array_map([Command::class, 'shellQuote'], Paths::extensionCommand()));
     }
 
     /**
@@ -408,6 +408,28 @@ final class CommandTest extends TestCase
             self::utility() . " '--exec' 'relical' 'restore-run.php' '" . self::RESTORE_ID . "' 'restore' '--subscription' 'example.test' '--unit' 'files' '--path' 'my '\\''file'\\''' < /dev/null > /dev/null 2>&1 &",
             Command::detachedScript('restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'files', '--path', "my 'file'"])
         );
+    }
+
+    public function testBackgroundQuotingKeepsEveryByteUnderTheCLocale(): void
+    {
+        $previous = setlocale(LC_CTYPE, '0');
+        setlocale(LC_CTYPE, 'C');
+        try {
+            $files = [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'files', '--snapshot', 'abcdef12', '--path', 'fotos/año'];
+            $mail = [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'mail', '--domain', 'example.test', '--mailbox', 'info', '--snapshot', 'abcdef12', '--folder', "Envoyés d'été"];
+            foreach ([$files, $mail] as $args) {
+                $command = Command::detachedScript('restore-run.php', $args);
+                $words = substr($command, 0, -strlen(' < /dev/null > /dev/null 2>&1 &'));
+                // What sh hands the program, one NUL-terminated word each.
+                $result = Process::capture(['/bin/sh', '-c', 'printf "%s\0" ' . $words], 5);
+                self::assertSame(
+                    implode("\0", array_merge(Paths::extensionCommand(), ['--exec', 'relical', 'restore-run.php'], $args)) . "\0",
+                    $result['stdout']
+                );
+            }
+        } finally {
+            setlocale(LC_CTYPE, (string) $previous);
+        }
     }
 
     public function testBackgroundRestoreRefusesWhatRestoreRunRefuses(): void

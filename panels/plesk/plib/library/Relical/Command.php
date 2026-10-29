@@ -230,9 +230,19 @@ final class Command
      */
     public static function detachedScript(string $script, array $args): string
     {
-        $words = array_map('escapeshellarg', self::rootArgv($script, $args));
+        $words = array_map([self::class, 'shellQuote'], self::rootArgv($script, $args));
 
         return implode(' ', $words) . ' < /dev/null > /dev/null 2>&1 &';
+    }
+
+    /**
+     * One word for sh, in single quotes, byte for byte. Not escapeshellarg():
+     * under a C locale it silently drops multibyte characters ("Envoyés"
+     * becomes "Envoys"), which would restore the wrong folder.
+     */
+    public static function shellQuote(string $word): string
+    {
+        return "'" . str_replace("'", "'\\''", $word) . "'";
     }
 
     /**
