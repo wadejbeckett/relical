@@ -14,6 +14,14 @@ Wants=network-online.target
 Type=oneshot
 # "%%" is a literal "%" in a unit file.
 ExecStart=/usr/local/lib/relical/relical check --all --read-data-subset 5%%
+# A stop sends SIGTERM: relical stops restic, records what it has and
+# exits. 15 minutes covers that; restic gets 60 seconds to remove its lock
+# before it is killed.
+TimeoutStopSec=15min
+# A hung check must not run into the next week's (every sftp: destination
+# already gets ssh connect and keepalive timeouts). For Type=oneshot the
+# start timeout is the one that applies; RuntimeMaxSec= is ignored.
+TimeoutStartSec=20h
 Nice=19
 IOSchedulingClass=idle
 # relical exits 4 when it is stopped (systemctl stop, a reboot): a
