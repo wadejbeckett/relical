@@ -21,7 +21,8 @@ import (
 	"github.com/wadejbeckett/relical/core/internal/restore"
 )
 
-var version = "0.1.0-dev"
+// version is set by the Makefile (-X main.version).
+var version = "0.2.0-dev"
 
 const usage = `usage: relical [-config PATH] COMMAND [flags]
 commands:
@@ -38,6 +39,7 @@ commands:
   restore   --subscription S --unit db --database D [--snapshot ID]
   restore   --subscription _server --unit panel-config [--snapshot ID]
   status
+  report
   adopt     --subscription S`
 
 // commandFlags lists the flags each command accepts.
@@ -45,6 +47,7 @@ var commandFlags = map[string][]string{
 	"version":   {},
 	"inventory": {},
 	"status":    {},
+	"report":    {},
 	"mailboxes": {"subscription"},
 	"backup":    {"subscription", "all", "unit"},
 	"forget":    {"subscription", "all"},
@@ -71,7 +74,7 @@ func main() {
 	os.Exit(run(ctx, os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func emit(w io.Writer, v any, err error) int {
+func emitJSON(w io.Writer, v any, err error) int {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	if err != nil {
@@ -105,7 +108,16 @@ func usageError(stderr io.Writer, msg string) int {
 	return 2
 }
 
-func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func run(ctx context.Context, args []string, stdout, stderr io.Writer) (code int) {
+	// lg is the run log of a logged command (see logged); emit records
+	// in it what the command prints.
+	var lg *job.Log
+	emit := func(w io.Writer, v any, err error) int {
+		if lg != nil {
+			logOutput(lg, v, err)
+		}
+		return emitJSON(w, v, err)
+	}
 	global := flag.NewFlagSet("relical", flag.ContinueOnError)
 	global.SetOutput(stderr)
 	cfgPath := global.String("config", "/etc/relical/config.json", "configuration file")
@@ -203,6 +215,22 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return emit(stdout, nil, fmt.Errorf("unit %s is not supported by this version of relical", *unit))
 	}
 	env := job.Env{Cfg: cfg, Locator: locator.Pattern(cfg.MailboxPattern), Now: time.Now, ExtraEnv: fakeEnvFromProcess()}
+	if logged[cmd] {
+		// The state directory holds the log, so it is prepared first.
+		if err := env.Prepare(); err != nil {
+			return emit(stdout, nil, err)
+		}
+		lg = job.OpenLog(cfg, cmd, args, env.Now)
+		defer func() {
+			lg.End(code)
+			if lg.Err != nil {
+				fmt.Fprintln(stderr, "warning: the run log could not be written:", lg.Err)
+			}
+		}()
+	}
+	if cmd == "report" {
+		return report(ctx, env, stdout)
+	}
 	if cmd != "status" {
 		if env.Inv, err = inventory.Load(ctx, cfg); err != nil {
 			return emit(stdout, nil, err)
@@ -254,7 +282,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if err := env.Record([]job.Result{res}); err != nil {
 			fmt.Fprintln(stderr, "warning: state not saved:", err)
 		}
-		code := emit(stdout, []job.Result{res}, nil)
+		code = emit(stdout, []job.Result{res}, nil)
 		if !res.OK {
 			code = 1
 		}
@@ -322,7 +350,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err := env.Record(results); err != nil {
 		fmt.Fprintln(stderr, "warning: state not saved:", err)
 	}
-	code := emit(stdout, results, nil)
+	code = emit(stdout, results, nil)
 	for _, r := range results {
 		if !r.OK {
 			code = 1
@@ -335,6 +363,25 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return code
 }
 
+// logged are the commands whose runs are written to the run log.
+var logged = map[string]bool{"backup": true, "forget": true, "check": true, "adopt": true, "restore": true}
+
+// logOutput writes what a command prints to its run log: one line per
+// result, or the error.
+func logOutput(lg *job.Log, v any, err error) {
+	if err != nil {
+		lg.Error(err)
+		return
+	}
+	if rs, ok := v.([]job.Result); ok {
+		for _, r := range rs {
+			lg.Result(r)
+		}
+		return
+	}
+	lg.Result(v)
+}
+
 func contains(list []string, s string) bool {
 	for _, v := range list {
 		if v == s {
@@ -342,4 +389,20 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// report prints the summary of the state file. It never fails on the
+// inventory: an inventory that cannot be loaded becomes a warning in the
+// report. Only an unreadable state file is an error.
+func report(ctx context.Context, env job.Env, stdout io.Writer) int {
+	st, err := job.ReadState(env.Cfg.StateDir)
+	if err != nil {
+		return emitJSON(stdout, nil, err)
+	}
+	var inv *inventory.Inventory
+	loaded, invErr := inventory.Load(ctx, env.Cfg)
+	if invErr == nil {
+		inv = &loaded
+	}
+	return emitJSON(stdout, job.BuildReport(st, inv, invErr, env.Now()), nil)
 }

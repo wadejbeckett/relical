@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -388,5 +389,69 @@ func TestLockedCommandsRemoveStaleStaging(t *testing.T) {
 		if _, err := os.Stat(stale); err == nil {
 			t.Errorf("%q kept the stale staging file", args)
 		}
+	}
+}
+
+func TestReportCommand(t *testing.T) {
+	cfg := cliSetup(t)
+	if code, out := runCLI("-config", cfg, "backup", "--all"); code != 0 {
+		t.Fatalf("%d %s", code, out)
+	}
+	code, out := runCLI("-config", cfg, "report")
+	var rep job.Report
+	if code != 0 || json.Unmarshal([]byte(out), &rep) != nil || rep.Subscriptions != 1 || rep.OK != 1 ||
+		rep.StoredBytes != 4096 || len(rep.Rows) != 1 || rep.Rows[0].Unit != "mail" {
+		t.Fatalf("%d %s", code, out)
+	}
+	if code, _ := runCLI("-config", cfg, "report", "--all"); code != 2 {
+		t.Errorf("report --all: exit %d, want 2", code)
+	}
+}
+
+func TestReportSurvivesInventoryFailure(t *testing.T) {
+	cfg := cliSetupWith(t, map[string]any{"inventory_command": []string{testutil.FakeInventoryFailing(t)}})
+	code, out := runCLI("-config", cfg, "report")
+	if code != 0 || !strings.Contains(out, "the inventory could not be loaded") {
+		t.Fatalf("%d %s", code, out)
+	}
+	// An unreadable state file is the one error.
+	var c map[string]any
+	b, _ := os.ReadFile(cfg)
+	json.Unmarshal(b, &c)
+	state := c["state_dir"].(string)
+	os.MkdirAll(state, 0o700)
+	os.WriteFile(filepath.Join(state, "state.json"), []byte("{not json"), 0o600)
+	if code, out := runCLI("-config", cfg, "report"); code != 1 || !strings.Contains(out, `"error"`) {
+		t.Fatalf("%d %s", code, out)
+	}
+}
+
+func TestRunLogWritten(t *testing.T) {
+	cfg := cliSetup(t)
+	runCLI("-config", cfg, "backup", "--all")
+	runCLI("-config", cfg, "check", "--subscription", "nope.test") // fails before any result
+	runCLI("-config", cfg, "status")                               // not logged
+	var c map[string]any
+	b, _ := os.ReadFile(cfg)
+	json.Unmarshal(b, &c)
+	raw, err := os.ReadFile(filepath.Join(c["state_dir"].(string), job.LogName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []string
+	for _, ln := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var l job.LogLine
+		if err := json.Unmarshal([]byte(ln), &l); err != nil {
+			t.Fatalf("%v: %s", err, ln)
+		}
+		ev := l.Command + " " + l.Event
+		if l.Code != nil {
+			ev += fmt.Sprintf(" %d", *l.Code)
+		}
+		events = append(events, ev)
+	}
+	want := "backup start,backup result,backup result,backup end 0,check start,check result,check end 1"
+	if got := strings.Join(events, ","); got != want {
+		t.Errorf("log events\n got %s\nwant %s", got, want)
 	}
 }
