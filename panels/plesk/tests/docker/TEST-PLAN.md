@@ -301,3 +301,64 @@ has not yet seen. Each line is open until the next `run.sh` run.
       still runs; `inventory.php` and `pre-uninstall.php` refuse arguments
       (confirm Plesk passes none to pre-uninstall: `plesk bin extension -u`
       in step 9).
+
+## Docker Plesk run, 29 October 2026 (final)
+
+`run.sh`, unmodified, passed on `main` at `4f00a6c` ("Command refuses ls
+--subscription _server with --path, as the core does"), with the fixes from
+the pre-pilot section above in place. Commands, in order:
+
+    make tools
+    make plesk-ext
+    panels/plesk/tests/docker/run.sh
+
+It exited 0 on the first attempt (47 lines of output). `run.sh` runs under
+`set -euo pipefail`, stops at the first failed check, and prints `PASS`
+only after the last step, so exit 0 means every step passed:
+
+1. containers (Plesk with systemd, `atmoz/sftp` as the Storage Box)
+2. Plesk and test data
+3. install: binaries match `SHA256SUMS`; modes on `/etc/relical`, the keys,
+   ssh and `mysql.cnf`; timers enabled; no `config.json` yet; `OnFailure=`
+   and `relical-notify@` in place; `plesk bin extension --exec relical`
+   reaches root; `relical-root` clears the environment (`PHP_INI_SCAN_DIR`
+   and `PHPRC` do not reach PHP)
+4. settings, host key, probe: the settings page shows the key and the
+   unconfigured status; the forgery token is required, field errors show,
+   saving writes `config.json` 0600, the inventory resolves and the timer
+   moves to 02:15; the host key scan matches `ssh-keygen -l`, a changed key
+   pins nothing, `known_hosts` is 0600, the probe fails and then connects
+5. backup: mail, files, database and panel-config backed up with the real
+   `pleskbackup`, no dump left on disk, status and report; the deliberately
+   failed run (the "Job for relical-backup.service failed" lines in the log
+   are this step) starts the failure notice
+6. restores, as the customer screens start `restore-run.php`
+7. HTTP: administrator and customer screens, with the `panel.log` check
+8. a stopped run and a timed-out run
+9. install edge cases (reinstall and removal)
+
+The same commit passed the other suites:
+
+- `gofmt`: 0 files to format
+- `go vet` and `go vet -tags integration`: clean
+- `make test`: 218 top-level tests (259 with subtests) pass, 0 fail
+- `make integration`: 232 top-level tests (273 with subtests) pass, 0 fail
+- `make e2e` (`--network host`): E2E PASS
+- `composer test`: OK, 718 tests, 1579 assertions
+- `php -l`: 97 of 97 files OK
+- `bash -n`: 6 of 6 scripts OK
+- `sh -n`: 1 of 1 script OK
+
+Checks made while closing the pre-pilot fixes:
+
+- `go test ./...` (core): all ok
+- `go test -race -run TargetAppears ./internal/restore`: PASS (the
+  `renameat2` and EXDEV-fallback subtests)
+- `composer test`: OK, 718 tests, 1579 assertions
+- the step 7 `panel.log` grep logic, simulated on a sample `panel.log`: 4
+  cases, all as intended
+- a PHP probe of `RestoreRecord::recentCustomerRestores` and
+  `customerError`: the race, the pre-check, root-owned files, the database
+  rename and 7 leak negatives
+- a differential probe of 13 `ls` argument vectors against the built core
+  binary and `Command::parse`
