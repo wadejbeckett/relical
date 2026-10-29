@@ -50,6 +50,10 @@ what PHPUnit covers. Each line names the assumption and where it lives.
       status table; a second click while it runs gets the "already in
       progress" message (`running.php` reads the core's flock from
       `/proc/locks`).
+- [ ] GET `connection` runs nothing (no `ssh-keyscan` in the process
+      list); its "Check connection" POST scans and comes back with the
+      fingerprint in the URL; a fingerprint typed into the URL is shown but
+      pins nothing unless the host really offers that key.
 - [ ] "Check connection" against the SFTP container on a port other than
       22: `ssh-keyscan -p <port> -t ed25519 -T 10 <host>` prints
       `[host]:port ssh-ed25519 ...`, the fingerprint matches

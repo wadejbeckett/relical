@@ -75,54 +75,87 @@ class IndexController extends pm_Controller_Action
     }
 
     /**
-     * GET: scans the Storage Box's host key and shows its fingerprint with a
-     * "Trust this host key" form. POST: pins the key only if a fresh scan
-     * still has the fingerprint shown, then tests the connection.
+     * Checking and trusting the Storage Box's host key, in POSTs only, so a
+     * link from elsewhere cannot make the server connect out:
+     *
+     * - GET: a "Check connection" form.
+     * - POST without a fingerprint: scans the host key (hostkey.php scan)
+     *   and goes to GET `?fingerprint=...&pinned=0|1`.
+     * - GET with a fingerprint: shows it with a "Trust this host key" form.
+     *   It runs nothing, so a fingerprint typed into the URL can do no harm:
+     * - POST with a fingerprint: pins the key only if a fresh scan still has
+     *   that fingerprint (HostKey::trustedLine), then tests the connection.
      */
     public function connectionAction()
     {
-        $form = new pm_Form_Simple();
-        $form->setAction(pm_Context::getActionUrl('index', 'connection'));
-        $form->addElement('hidden', 'fingerprint', ['required' => true]);
-        $form->addControlButtons([
-            'sendTitle' => 'Trust this host key',
-            'cancelLink' => pm_Context::getBaseUrl(),
-        ]);
+        $request = $this->getRequest();
+        $url = pm_Context::getActionUrl('index', 'connection');
 
-        if ($this->getRequest()->isPost()) {
-            if ($form->isValid($this->getRequest()->getPost())) {
-                $this->trustHostKey((string) $form->getValue('fingerprint'));
+        $trust = new pm_Form_Simple();
+        $trust->setAction($url);
+        $trust->addElement('hidden', 'fingerprint', ['required' => true]);
+        $trust->addControlButtons(['sendTitle' => 'Trust this host key', 'cancelLink' => pm_Context::getBaseUrl()]);
+
+        $check = new pm_Form_Simple();
+        $check->setAction($url);
+        $check->addElement('hidden', 'scan', ['value' => '1']);
+        $check->addControlButtons(['sendTitle' => 'Check connection', 'cancelLink' => pm_Context::getBaseUrl()]);
+
+        if ($request->isPost()) {
+            $post = $request->getPost();
+            if (isset($post['fingerprint'])) {
+                if ($trust->isValid($post)) {
+                    $this->trustHostKey((string) $trust->getValue('fingerprint'));
+                }
+                $this->_helper->json(['redirect' => pm_Context::getBaseUrl()]);
+                return;
             }
-            $this->_helper->json(['redirect' => pm_Context::getBaseUrl()]);
+            $this->_helper->json(['redirect' => $check->isValid($post) ? $this->scanHostKey($url) : $url]);
             return;
         }
 
         $this->view->pageTitle = 'Relical Backup: Storage Box connection';
         $this->view->backUrl = pm_Context::getBaseUrl();
         $this->view->scan = null;
-        $this->view->scanError = '';
-        $this->view->form = null;
+        $this->view->form = $check;
 
-        $result = RootScripts::run('hostkey.php', ['scan'], self::SCRIPT_TIMEOUT);
-        $data = $result['data'];
-        if ($result['code'] !== 0 || !is_array($data) || !is_string($data['fingerprint'] ?? null)) {
-            $this->view->scanError = RootScripts::error($result);
+        $fingerprint = (string) $request->getParam('fingerprint');
+        if ($fingerprint === '') {
             return;
         }
         try {
-            $fingerprint = HostKey::fingerprintArg($data['fingerprint']);
+            $fingerprint = HostKey::fingerprintArg($fingerprint);
+            $destination = Destination::fromInput(Settings::fromPlesk()->configInput());
         } catch (InvalidArgumentException $e) {
-            $this->view->scanError = $e->getMessage();
+            $this->_status->addMessage('error', $e->getMessage());
             return;
         }
         $this->view->scan = [
-            'host' => (string) ($data['host'] ?? ''),
-            'port' => (int) ($data['port'] ?? 0),
+            'host' => $destination->host,
+            'port' => $destination->port,
             'fingerprint' => $fingerprint,
-            'pinned' => ($data['pinned'] ?? false) === true,
+            'pinned' => (string) $request->getParam('pinned') === '1',
         ];
-        $form->getElement('fingerprint')->setValue($fingerprint);
-        $this->view->form = $form;
+        $trust->getElement('fingerprint')->setValue($fingerprint);
+        $this->view->form = $trust;
+    }
+
+    /** Scans the host key; returns where to go next (the fingerprint page, or back with an error). */
+    private function scanHostKey(string $url): string
+    {
+        $result = RootScripts::run('hostkey.php', ['scan'], self::SCRIPT_TIMEOUT);
+        $data = $result['data'];
+        try {
+            if ($result['code'] !== 0 || !is_array($data) || !is_string($data['fingerprint'] ?? null)) {
+                throw new InvalidArgumentException('The host key could not be read: ' . RootScripts::error($result));
+            }
+            $fingerprint = HostKey::fingerprintArg($data['fingerprint']);
+        } catch (InvalidArgumentException $e) {
+            $this->_status->addMessage('error', $e->getMessage());
+            return $url;
+        }
+
+        return $url . '?' . http_build_query(['fingerprint' => $fingerprint, 'pinned' => ($data['pinned'] ?? false) === true ? '1' : '0'], '', '&', PHP_QUERY_RFC3986);
     }
 
     /**
