@@ -67,6 +67,34 @@ It keeps `/etc/relical` and `/var/lib/relical`. The repository keys in
 copy away from the server, for as long as the backups matter. Reinstalling
 the extension carries on with the same keys and repositories.
 
+## Settings and status
+
+Extensions > Relical Backup is for administrators only. It holds:
+
+- The settings: which subscriptions are backed up (every subscription, or
+  those whose plan includes a Relical plan item), the Storage Box host,
+  SFTP port (23), user and path (`relical`), how many daily, weekly and
+  monthly backups are kept, the backup time and an upload limit. Saving
+  writes `/etc/relical/config.json`; a new backup time also updates the
+  timers.
+- The extension's public key, to add to the Storage Box's
+  `authorized_keys`.
+- Check connection: shows the fingerprint of the Storage Box's host key.
+  "Trust this host key" pins it in `/etc/relical/ssh/known_hosts`, but only
+  if the host still offers a key with that fingerprint, then tests the
+  connection. Test connection opens an SFTP session with the extension's
+  key and the pinned host key and changes nothing.
+- The status of each subscription: the units backed up, the last success,
+  the last error and the space used. "Back up now" backs up one
+  subscription and "Run everything now" backs up all of them and the Plesk
+  configuration, in the background. Neither starts while another run is in
+  progress.
+- The last report and the last 200 lines of `/var/lib/relical/relical.log`.
+
+Every privileged step runs as root through
+`plesk bin extension --exec relical <script>` with checked arguments; the
+panel itself never runs the backup tools.
+
 ## Building
 
 From the repository root, with Go, zip and the pinned tools (`make tools`):
