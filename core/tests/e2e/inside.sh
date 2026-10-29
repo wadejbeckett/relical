@@ -204,4 +204,13 @@ if grep -q '"ok": false' /tmp/forget.json; then fail "forget --all"; fi
 $R check --all --read-data-subset 100% | tee /tmp/check.json
 if grep -q '"ok": false' /tmp/check.json; then fail "check --all"; fi
 grep -q '"subscription": "_server"' /tmp/check.json || fail "check --all skipped _server"
+
+# The report reads the state the runs above left, and every run is in the log.
+$R report | tee /tmp/report.json
+grep -q '"failed": 0' /tmp/report.json || fail "report counts a failure"
+grep -q '"unit": "panel-config"' /tmp/report.json || fail "report lacks the panel-config row"
+[ "$(stat -c %a /var/lib/relical/relical.log)" = 600 ] || fail "relical.log is not 0600"
+for c in backup restore forget check; do
+  grep -q "\"event\":\"end\",\"command\":\"$c\"" /var/lib/relical/relical.log || fail "no end line for $c in relical.log"
+done
 echo "E2E PASS"
