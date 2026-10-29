@@ -12,22 +12,24 @@ use Throwable;
  * arrives with core Task 5; until then the core answers "unknown command"
  * and the block says the report is not available yet.
  *
- * The shape is the one core Task 5 defines (plan
- * docs/plans/2026-10-23-phase-2-full-backup-plesk-extension.md, Task 5;
- * Task 8 review finding 8):
+ * The shape is core/internal/job/report.go's Report (TestReportShape pins
+ * the keys there; tests/fixtures/report.json is that core's own output for
+ * a sample state, written by its TestReportSample):
  *
- *     {generated, subscriptions, ok, failed, skipped, stored_bytes,
+ *     {generated, subscriptions, ok, failed, skipped_rows, stored_bytes,
  *      rows: [{subscription, unit, ok, time, error, stored_bytes}],
- *      skipped: [{name, reason}],
  *      renamed: [{name, renamed_from, note}],
+ *      skipped: [{name, reason}],
  *      warnings: [string]}
  *
- * as core/internal/job/report.go builds it (TestReportShape pins the keys
- * there; tests/fixtures/report.json is a copy of that shape). Warnings are
- * a stale backup or check, or an inventory that could not be loaded.
- * `skipped` is the inventory's list of what was left out and why (core
- * review findings 2 and 7); an older core sends a count there instead, and
- * both are read. Unknown keys are ignored.
+ * `skipped` is the inventory's list of subscriptions left out and why: by
+ * the adapter, or by validation (an invalid inventory entry, which also
+ * has a failed row with unit `inventory`; its time is the report's, so it
+ * is not shown). An older core sends a count there instead, and both are
+ * read. `skipped_rows` counts the units that were skipped rather than
+ * backed up (a database of a type the core cannot dump). Warnings are a
+ * stale backup or check, or an inventory that could not be loaded.
+ * Unknown keys are ignored.
  */
 final class Report
 {
@@ -37,14 +39,18 @@ final class Report
         'ok' => 'Succeeded',
         'failed' => 'Failed',
         'skipped' => 'Skipped',
+        'skipped_rows' => 'Units skipped',
     ];
 
+    /** The unit of a failed row for an invalid inventory entry (core job.InventoryUnit). */
+    public const INVENTORY_UNIT = 'inventory';
+
     /**
-     * @return array{available: bool, message: string, generated: string, summary: list<array{label: string, value: string}>, warnings: list<string>, failures: list<string>, renamed: list<string>, skipped: list<string>, skipped_count: int, failed_count: int}
+     * @return array{available: bool, message: string, generated: string, summary: list<array{label: string, value: string}>, warnings: list<string>, failures: list<string>, renamed: list<string>, skipped: list<string>, skipped_count: int, skipped_rows: int, failed_count: int}
      */
     public static function fromCli(int $code, string $stdout, string $stderr): array
     {
-        $empty = ['available' => false, 'message' => '', 'generated' => '', 'summary' => [], 'warnings' => [], 'failures' => [], 'renamed' => [], 'skipped' => [], 'skipped_count' => 0, 'failed_count' => 0];
+        $empty = ['available' => false, 'message' => '', 'generated' => '', 'summary' => [], 'warnings' => [], 'failures' => [], 'renamed' => [], 'skipped' => [], 'skipped_count' => 0, 'skipped_rows' => 0, 'failed_count' => 0];
 
         if ($code === 2 && str_contains($stderr, 'unknown command')) {
             return ['message' => 'This version of the Relical core has no report yet.'] + $empty;
@@ -65,7 +71,7 @@ final class Report
         if (is_array($data['skipped'] ?? null)) {
             foreach ($data['skipped'] as $entry) {
                 if (is_array($entry) && is_string($entry['name'] ?? null) && is_string($entry['reason'] ?? null)) {
-                    $skipped[] = ($entry['name'] !== '' ? $entry['name'] . ': ' : '') . $entry['reason'];
+                    $skipped[] = implode(': ', array_filter([$entry['name'], $entry['reason']], static fn (string $s): bool => $s !== ''));
                 }
             }
             $data['skipped'] = count($skipped);
@@ -86,12 +92,14 @@ final class Report
             if (!is_array($row) || ($row['ok'] ?? true) !== false) {
                 continue;
             }
+            // An invalid inventory entry: the error says so, and the time is the report's own.
+            $entry = ($row['unit'] ?? null) === self::INVENTORY_UNIT;
             $what = implode(' ', array_filter([
                 is_string($row['subscription'] ?? null) ? $row['subscription'] : '',
-                is_string($row['unit'] ?? null) ? $row['unit'] : '',
+                is_string($row['unit'] ?? null) && !$entry ? $row['unit'] : '',
             ], static fn (string $s): bool => $s !== ''));
-            $error = is_string($row['error'] ?? null) && $row['error'] !== '' ? $row['error'] : 'failed';
-            if (is_string($row['time'] ?? null) && $row['time'] !== '') {
+            $error = is_string($row['error'] ?? null) && $row['error'] !== '' ? $row['error'] : ($entry ? 'invalid inventory entry' : 'failed');
+            if (!$entry && is_string($row['time'] ?? null) && $row['time'] !== '') {
                 $error .= ' (' . $row['time'] . ')';
             }
             $failures[] = ($what !== '' ? $what . ': ' : '') . $error;
@@ -117,6 +125,7 @@ final class Report
             'renamed' => $renamed,
             'skipped' => $skipped,
             'skipped_count' => is_int($data['skipped'] ?? null) ? max(0, $data['skipped']) : 0,
+            'skipped_rows' => is_int($data['skipped_rows'] ?? null) ? max(0, $data['skipped_rows']) : 0,
             'failed_count' => is_int($data['failed'] ?? null) ? max(0, $data['failed']) : count($failures),
         ];
     }

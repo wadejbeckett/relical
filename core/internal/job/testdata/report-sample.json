@@ -1,0 +1,87 @@
+{
+  "generated": "2026-10-29T06:00:00Z",
+  "subscriptions": 3,
+  "ok": 4,
+  "failed": 2,
+  "skipped_rows": 1,
+  "stored_bytes": 1536,
+  "rows": [
+    {
+      "subscription": "example.test",
+      "unit": "db:example_wp",
+      "ok": false,
+      "time": "2026-10-29T01:03:00Z",
+      "error": "mysqldump: exit 2",
+      "stored_bytes": 1024
+    },
+    {
+      "subscription": "example.test",
+      "unit": "files",
+      "ok": true,
+      "time": "2026-10-29T01:02:00Z",
+      "error": "",
+      "stored_bytes": 1024
+    },
+    {
+      "subscription": "example.test",
+      "unit": "mail",
+      "ok": true,
+      "time": "2026-10-29T01:01:00Z",
+      "error": "",
+      "stored_bytes": 1024
+    },
+    {
+      "subscription": "new.example.test",
+      "unit": "mail",
+      "ok": true,
+      "time": "2026-10-29T01:00:00Z",
+      "error": "",
+      "stored_bytes": 0
+    },
+    {
+      "subscription": "other.example.test",
+      "unit": "db:legacy",
+      "ok": true,
+      "time": "2026-10-29T01:00:00Z",
+      "error": "",
+      "stored_bytes": 512
+    },
+    {
+      "subscription": "other.example.test",
+      "unit": "files",
+      "ok": true,
+      "time": "2026-10-26T02:00:00Z",
+      "error": "",
+      "stored_bytes": 512
+    },
+    {
+      "subscription": "bad.example.test",
+      "unit": "inventory",
+      "ok": false,
+      "time": "2026-10-29T06:00:00Z",
+      "error": "invalid inventory entry: databases[0].name: \"phpmyadmin_old\" is a server or panel database and never belongs to a subscription",
+      "stored_bytes": 0
+    }
+  ],
+  "renamed": [
+    {
+      "name": "new.example.test",
+      "renamed_from": "old.example.test",
+      "note": "renamed from old.example.test: backups now go to a new repository for new.example.test; the repository for old.example.test is kept as it is and is no longer backed up, pruned or checked"
+    }
+  ],
+  "skipped": [
+    {
+      "name": "bad.example.test",
+      "reason": "invalid inventory entry: databases[0].name: \"phpmyadmin_old\" is a server or panel database and never belongs to a subscription"
+    },
+    {
+      "name": "mailonly.example.test",
+      "reason": "nothing to back up: the subscription has no system user (no web hosting)"
+    }
+  ],
+  "warnings": [
+    "other.example.test files: the last backup (2026-10-26T02:00:00Z) is older than 48 hours",
+    "other.example.test: the last check (2026-10-18T06:00:00Z) is older than 10 days"
+  ]
+}
