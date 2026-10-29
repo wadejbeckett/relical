@@ -35,10 +35,7 @@ final class ConfigWriter
         $host = self::host((string) ($input['sftp_host'] ?? ''), 'Storage Box host');
         $serverId = self::host(strtolower($serverId), 'server name');
         $port = self::port($input['sftp_port'] ?? null);
-        $user = (string) ($input['sftp_user'] ?? '');
-        if (preg_match(self::USER, $user) !== 1) {
-            throw new InvalidArgumentException('Storage Box user must be lower-case letters, digits, "_" or "-"');
-        }
+        $user = self::user((string) ($input['sftp_user'] ?? ''));
         $path = self::path((string) ($input['sftp_path'] ?? ''));
         $retention = self::retention($input['retention'] ?? null);
         self::time((string) ($input['backup_time'] ?? ''));
@@ -107,7 +104,9 @@ final class ConfigWriter
         return "[client]\nuser=admin\npassword=" . $quoted . "\n";
     }
 
-    private static function host(string $host, string $what): string
+    // ----- validators, public so the settings screen and Destination use the same rules -----
+
+    public static function host(string $host, string $what = 'Storage Box host'): string
     {
         if (preg_match(self::HOST, $host) !== 1 || str_contains($host, '..')) {
             throw new InvalidArgumentException(sprintf('%s must be a lower-case host name', $what));
@@ -116,8 +115,17 @@ final class ConfigWriter
         return $host;
     }
 
+    public static function user(string $user): string
+    {
+        if (preg_match(self::USER, $user) !== 1) {
+            throw new InvalidArgumentException('Storage Box user must be lower-case letters, digits, "_" or "-"');
+        }
+
+        return $user;
+    }
+
     /** @param mixed $port */
-    private static function port($port): int
+    public static function port($port): int
     {
         if (!is_int($port) || $port < 1 || $port > 65535) {
             throw new InvalidArgumentException('Storage Box port must be between 1 and 65535');
@@ -126,7 +134,8 @@ final class ConfigWriter
         return $port;
     }
 
-    private static function path(string $path): string
+    /** The repository base path on the Storage Box, without a trailing "/". */
+    public static function path(string $path): string
     {
         $path = rtrim($path, '/');
         if (preg_match(self::PATH, $path) !== 1) {
@@ -145,7 +154,7 @@ final class ConfigWriter
      * @param mixed $retention
      * @return array{daily: int, weekly: int, monthly: int}
      */
-    private static function retention($retention): array
+    public static function retention($retention): array
     {
         $out = [];
         foreach (['daily', 'weekly', 'monthly'] as $key) {
@@ -162,7 +171,7 @@ final class ConfigWriter
         return $out;
     }
 
-    private static function time(string $time): void
+    public static function time(string $time): void
     {
         if (preg_match(self::TIME, $time) !== 1) {
             throw new InvalidArgumentException('backup time must be HH:MM (24-hour)');

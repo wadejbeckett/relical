@@ -23,6 +23,13 @@ final class Settings
     public const BACKUP_TIME = 'backup_time';
     public const LIMIT_UPLOAD_KIB = 'limit_upload_kib';
 
+    /** Every setting, in the order the settings form shows them. */
+    public const KEYS = [
+        self::SCOPE, self::SFTP_HOST, self::SFTP_PORT, self::SFTP_USER, self::SFTP_PATH,
+        self::RETENTION_DAILY, self::RETENTION_WEEKLY, self::RETENTION_MONTHLY,
+        self::BACKUP_TIME, self::LIMIT_UPLOAD_KIB,
+    ];
+
     /** @var callable(string, ?string): ?string */
     private $get;
 
@@ -32,6 +39,106 @@ final class Settings
     public function __construct(callable $get)
     {
         $this->get = $get;
+    }
+
+    /**
+     * Checks the values from the settings form, field by field, with the
+     * rules the configuration is rendered with (ConfigWriter).
+     *
+     * @param array<string, mixed> $values setting name => submitted value
+     * @return array<string, string> setting name => what is wrong with it; empty when all is well
+     */
+    public static function errors(array $values): array
+    {
+        $settings = self::fromValues($values);
+        $input = $settings->configInput();
+        $checks = [
+            self::SCOPE => static function () use ($settings): void {
+                if (!Coverage::isValidScope($settings->scope())) {
+                    throw new \InvalidArgumentException('choose which subscriptions are backed up');
+                }
+            },
+            self::SFTP_HOST => static fn () => ConfigWriter::host($input['sftp_host']),
+            self::SFTP_PORT => static fn () => ConfigWriter::port($input['sftp_port']),
+            self::SFTP_USER => static fn () => ConfigWriter::user($input['sftp_user']),
+            self::SFTP_PATH => static fn () => ConfigWriter::path($input['sftp_path']),
+            self::RETENTION_DAILY => static fn () => ConfigWriter::retention($input['retention']),
+            self::BACKUP_TIME => static fn () => ConfigWriter::time($input['backup_time']),
+            self::LIMIT_UPLOAD_KIB => static function () use ($input): void {
+                if ($input['limit_upload_kib'] < 0) {
+                    throw new \InvalidArgumentException('upload limit must be a whole number of KiB/s, 0 for no limit');
+                }
+            },
+        ];
+        $errors = [];
+        foreach ($checks as $key => $check) {
+            try {
+                $check();
+            } catch (\InvalidArgumentException $e) {
+                $errors[$key] = $e->getMessage();
+            }
+        }
+        if (isset($errors[self::RETENTION_DAILY])) {
+            // One message for the three retention fields, on the field it names.
+            $message = $errors[self::RETENTION_DAILY];
+            unset($errors[self::RETENTION_DAILY]);
+            $field = str_contains($message, 'weekly') ? self::RETENTION_WEEKLY : (str_contains($message, 'monthly') ? self::RETENTION_MONTHLY : self::RETENTION_DAILY);
+            $errors[$field] = $message;
+        }
+        if ($errors === []) {
+            try {
+                ConfigWriter::render($input, 'localhost');
+            } catch (\InvalidArgumentException $e) {
+                $errors[self::SFTP_HOST] = $e->getMessage();
+            }
+        }
+
+        return $errors;
+    }
+
+    /**
+     * The submitted values as they are stored, once errors() found nothing:
+     * an empty number takes its default and the host is lower-cased.
+     *
+     * @param array<string, mixed> $values setting name => submitted value
+     * @return array<string, string> setting name => value to store, for every KEYS entry
+     * @throws \InvalidArgumentException with the first error when a value is not valid
+     */
+    public static function validated(array $values): array
+    {
+        $errors = self::errors($values);
+        if ($errors !== []) {
+            throw new \InvalidArgumentException((string) reset($errors));
+        }
+        $settings = self::fromValues($values);
+        $input = $settings->configInput();
+
+        return [
+            self::SCOPE => $settings->scope(),
+            self::SFTP_HOST => $input['sftp_host'],
+            self::SFTP_PORT => (string) $input['sftp_port'],
+            self::SFTP_USER => $input['sftp_user'],
+            self::SFTP_PATH => ConfigWriter::path($input['sftp_path']),
+            self::RETENTION_DAILY => (string) $input['retention']['daily'],
+            self::RETENTION_WEEKLY => (string) $input['retention']['weekly'],
+            self::RETENTION_MONTHLY => (string) $input['retention']['monthly'],
+            self::BACKUP_TIME => $input['backup_time'],
+            self::LIMIT_UPLOAD_KIB => (string) $input['limit_upload_kib'],
+        ];
+    }
+
+    /** @param array<string, mixed> $values */
+    private static function fromValues(array $values): self
+    {
+        $raw = [];
+        foreach (self::KEYS as $key) {
+            $value = $values[$key] ?? '';
+            // Anything but a plain value reads as a control character, which every rule refuses.
+            $raw[$key] = is_scalar($value) ? trim((string) $value) : "\x01";
+        }
+        $raw[self::SFTP_HOST] = strtolower($raw[self::SFTP_HOST]);
+
+        return new self(static fn (string $name, ?string $default): ?string => $raw[$name] ?? $default);
     }
 
     public static function fromPlesk(): self

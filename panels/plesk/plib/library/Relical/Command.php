@@ -21,6 +21,16 @@ final class Command
 {
     public const UNITS = ['mail', 'files', 'db', 'panel-config'];
 
+    /**
+     * The root scripts the administrator screens run through
+     * `plesk bin extension --exec relical <script>`, and the arguments each
+     * takes. cli.php takes what parse() accepts.
+     */
+    public const SCRIPTS = [
+        'cli.php', 'write-config.php', 'install-timers.php', 'show-pubkey.php',
+        'hostkey.php', 'probe.php', 'log-tail.php', 'running.php',
+    ];
+
     private const SNAPSHOT = '/^(latest|[0-9a-f]{8,64})$/D';
     private const MAILBOX = '/^[a-z0-9][a-z0-9._+-]{0,63}$/D';
     private const DATABASE = '/^[A-Za-z0-9_$][A-Za-z0-9_$-]{0,63}$/D';
@@ -110,6 +120,71 @@ final class Command
     public function argv(): array
     {
         return $this->argv;
+    }
+
+    /**
+     * Validates a root script's arguments (each script calls this on its own
+     * argv as well): cli.php as parse() does, hostkey.php `scan` or
+     * `trust <SHA256 fingerprint>`, every other script none.
+     *
+     * @param list<string> $args the arguments after the script name
+     * @return list<string> the arguments, unchanged
+     * @throws InvalidArgumentException naming what was refused
+     */
+    public static function scriptArgs(string $script, array $args): array
+    {
+        $args = array_values(array_map('strval', $args));
+        if (!in_array($script, self::SCRIPTS, true)) {
+            throw new InvalidArgumentException(sprintf('script "%s" is not allowed', self::printable($script)));
+        }
+        switch ($script) {
+            case 'cli.php':
+                self::parse($args);
+                return $args;
+            case 'hostkey.php':
+                if ($args === ['scan']) {
+                    return $args;
+                }
+                if (count($args) === 2 && $args[0] === 'trust') {
+                    HostKey::fingerprintArg($args[1]);
+                    return $args;
+                }
+                throw new InvalidArgumentException('hostkey.php takes "scan" or "trust <fingerprint>"');
+            default:
+                if ($args !== []) {
+                    throw new InvalidArgumentException(sprintf('%s takes no arguments', $script));
+                }
+                return $args;
+        }
+    }
+
+    /**
+     * The argv that runs a root script as root, for Process (no shell).
+     *
+     * @param list<string> $args
+     * @return list<string>
+     */
+    public static function rootArgv(string $script, array $args = []): array
+    {
+        return array_merge(
+            [Paths::PLESK, 'bin', 'extension', '--exec', Paths::EXTENSION_ID, $script],
+            self::scriptArgs($script, $args)
+        );
+    }
+
+    /**
+     * A shell command that starts `cli.php <args>` as root in the background
+     * and returns at once, as Cloudflare DNS Sync starts its syncs: every
+     * word escaped, no input or output, detached with `&`. The web request
+     * never waits for the run; its outcome lands in the state file and log.
+     *
+     * @param list<string> $cliArgs validated by parse()
+     */
+    public static function detached(array $cliArgs): string
+    {
+        $words = array_map('escapeshellarg', self::rootArgv('cli.php', $cliArgs));
+
+        return implode(' ', $words) . ' < /dev/null > /dev/null 2>&1 &';
     }
 
     // ----- validators (public so the restore screens can reuse them) -----

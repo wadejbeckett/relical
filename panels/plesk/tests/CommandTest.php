@@ -247,4 +247,110 @@ final class CommandTest extends TestCase
         $this->expectException(RuntimeException::class);
         Process::run(['printf', 'x'], STDOUT, STDERR);
     }
+
+    // ----- root scripts of the administrator screens -----
+
+    private const FINGERPRINT = 'SHA256:mKqU+0K8OhKmA8bBQi9Rz0Q5l7/g160hIP+rJYSTNj4';
+
+    /** @return iterable<string, array{string, list<string>}> */
+    public static function allowedScripts(): iterable
+    {
+        yield 'write-config' => ['write-config.php', []];
+        yield 'install-timers' => ['install-timers.php', []];
+        yield 'show-pubkey' => ['show-pubkey.php', []];
+        yield 'probe' => ['probe.php', []];
+        yield 'log-tail' => ['log-tail.php', []];
+        yield 'running' => ['running.php', []];
+        yield 'hostkey scan' => ['hostkey.php', ['scan']];
+        yield 'hostkey trust' => ['hostkey.php', ['trust', self::FINGERPRINT]];
+        yield 'cli status' => ['cli.php', ['status']];
+        yield 'cli backup one' => ['cli.php', ['backup', '--subscription', 'example.test']];
+    }
+
+    /**
+     * @dataProvider allowedScripts
+     * @param list<string> $args
+     */
+    public function testRootScriptsRunThroughPleskAsArgv(string $script, array $args): void
+    {
+        self::assertSame(
+            array_merge(['/usr/sbin/plesk', 'bin', 'extension', '--exec', 'relical', $script], $args),
+            Command::rootArgv($script, $args)
+        );
+    }
+
+    /** @return iterable<string, array{string, list<string>}> */
+    public static function refusedScripts(): iterable
+    {
+        yield 'unknown script' => ['inventory.php', []];
+        yield 'post-install from the screens' => ['post-install.php', []];
+        yield 'path in the name' => ['../scripts/cli.php', ['status']];
+        yield 'argument to a no-argument script' => ['write-config.php', ['--force']];
+        yield 'show-pubkey with a path' => ['show-pubkey.php', ['/etc/relical/ssh/id_ed25519']];
+        yield 'log-tail with a count' => ['log-tail.php', ['1000']];
+        yield 'hostkey without an action' => ['hostkey.php', []];
+        yield 'hostkey unknown action' => ['hostkey.php', ['remove']];
+        yield 'hostkey trust without a fingerprint' => ['hostkey.php', ['trust']];
+        yield 'hostkey trust a bad fingerprint' => ['hostkey.php', ['trust', 'SHA256:x']];
+        yield 'hostkey trust an option' => ['hostkey.php', ['trust', '-oProxyCommand=id']];
+        yield 'hostkey scan with a host' => ['hostkey.php', ['scan', 'other.example.test']];
+        yield 'hostkey trust twice' => ['hostkey.php', ['trust', self::FINGERPRINT, self::FINGERPRINT]];
+        yield 'cli not allowed' => ['cli.php', ['version']];
+        yield 'cli probe' => ['cli.php', ['probe']];
+        yield 'cli bad value' => ['cli.php', ['backup', '--subscription', '-x']];
+    }
+
+    /**
+     * @dataProvider refusedScripts
+     * @param list<string> $args
+     */
+    public function testRootScriptArgumentsAreRefused(string $script, array $args): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        Command::rootArgv($script, $args);
+    }
+
+    public function testBackgroundRunIsFullyEscapedAndDetached(): void
+    {
+        self::assertSame(
+            "'/usr/sbin/plesk' 'bin' 'extension' '--exec' 'relical' 'cli.php' 'backup' '--subscription' 'example.test' < /dev/null > /dev/null 2>&1 &",
+            Command::detached(['backup', '--subscription', 'example.test'])
+        );
+        self::assertSame(
+            "'/usr/sbin/plesk' 'bin' 'extension' '--exec' 'relical' 'cli.php' 'backup' '--all' < /dev/null > /dev/null 2>&1 &",
+            Command::detached(['backup', '--all'])
+        );
+    }
+
+    public function testBackgroundRunRefusesWhatCliRefuses(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        Command::detached(['backup', '--subscription', "example.test'; id; '"]);
+    }
+
+    public function testCaptureCollectsOutputWithoutAShell(): void
+    {
+        $result = Process::capture(['/usr/bin/printf', '%s|', '$(echo injected)', 'a;b'], 5);
+
+        self::assertSame(['code' => 0, 'stdout' => '$(echo injected)|a;b|', 'stderr' => '', 'timed_out' => false], $result);
+    }
+
+    public function testCaptureFeedsStdinAndKeepsStderrAndTheExitCode(): void
+    {
+        self::assertSame("pwd\n", Process::capture(['/bin/cat'], 5, "pwd\n")['stdout']);
+
+        $result = Process::capture(['/bin/sh', '-c', 'echo oops >&2; exit 3'], 5);
+        self::assertSame(3, $result['code']);
+        self::assertSame("oops\n", $result['stderr']);
+    }
+
+    public function testCaptureKillsACommandThatRunsTooLong(): void
+    {
+        $start = microtime(true);
+        $result = Process::capture(['/bin/sleep', '30'], 0.3);
+
+        self::assertTrue($result['timed_out']);
+        self::assertSame(-1, $result['code']);
+        self::assertLessThan(5, microtime(true) - $start);
+    }
 }

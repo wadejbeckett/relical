@@ -35,8 +35,17 @@ final class Paths
      * (a file, because pm_Settings values are capped at 5,000 characters).
      */
     public const KNOWN_NAMES = self::STATE_DIR . '/inventory-names.json';
+    /** The core's log of each run (core Task 5) and its run lock. */
+    public const LOG = self::STATE_DIR . '/relical.log';
+    public const LOCK = self::STATE_DIR . '/relical.lock';
 
     public const DOVEADM_BIN = '/usr/bin/doveadm';
+
+    /** Where the OpenSSH tools may be (Plesk runs scripts with a minimal PATH). */
+    public const SSH_KEYSCAN = ['/usr/bin/ssh-keyscan', '/bin/ssh-keyscan'];
+    public const SFTP = ['/usr/bin/sftp', '/bin/sftp'];
+    public const SYSTEMCTL = ['/usr/bin/systemctl', '/bin/systemctl'];
+    public const SSH_KEYGEN = ['/usr/bin/ssh-keygen', '/bin/ssh-keygen'];
     public const MAILBOX_PATTERN = '/var/qmail/mailnames/{domain}/{mailbox}/Maildir';
     public const FILES_ROOT = '/var/www/vhosts';
     public const MAIL_ROOT = '/var/qmail/mailnames';
