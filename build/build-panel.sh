@@ -7,7 +7,10 @@
 #
 # Everything comes from `git archive` of one ref, never from the working
 # tree, so only committed files ship and the core inside matches the
-# extension. restic is extracted from the release archive cached by
+# extension. The core is compiled by the archived Makefile's `build` target
+# (`make build VERSION=<version>`), so its flags are defined in one place;
+# this script only fixes the target platform (linux/amd64) and
+# GOFLAGS=-mod=readonly through the environment. restic is extracted from the release archive cached by
 # tools/fetch.sh (`make tools`) after checking it against
 # tools/SHA256SUMS.pinned from the same ref.
 #
@@ -31,7 +34,7 @@ die() { echo "build-panel: $*" >&2; exit 1; }
 
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$ ]] || die "version '$VERSION' is not like 0.2.0"
 [[ "$PANEL" =~ ^[a-z0-9-]+$ ]] || die "panel '$PANEL' is not a plain name"
-for tool in git go zip bunzip2 sha256sum tar; do
+for tool in git go make zip bunzip2 sha256sum tar; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is not installed"
 done
 
@@ -59,8 +62,8 @@ trap 'rm -rf "$STAGE"' EXIT
 # 1) The committed panel, core and pinned checksums for the ref.
 SRC="$STAGE/src"
 mkdir -p "$SRC"
-git -C "$ROOT" archive --format=tar "$COMMIT" "panels/$PANEL" core tools/SHA256SUMS.pinned | tar -x -C "$SRC" \
-    || die "panels/$PANEL, core or tools/SHA256SUMS.pinned is missing in $REF"
+git -C "$ROOT" archive --format=tar "$COMMIT" Makefile "panels/$PANEL" core tools/SHA256SUMS.pinned | tar -x -C "$SRC" \
+    || die "Makefile, panels/$PANEL, core or tools/SHA256SUMS.pinned is missing in $REF"
 PANEL_DIR="$SRC/panels/$PANEL"
 [ -f "$PANEL_DIR/meta.xml" ] || die "panels/$PANEL/meta.xml is not in $REF"
 
@@ -79,10 +82,11 @@ BIN="$PKG/plib/bin"
 mkdir -p "$BIN"
 rm -f "$BIN/.gitkeep" "$BIN/relical" "$BIN/restic" "$BIN/SHA256SUMS"
 
-# 3) The core, from the archived tree.
-( cd "$SRC/core" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOFLAGS=-mod=readonly \
-    go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$BIN/relical" ./cmd/relical ) \
+# 3) The core, from the archived tree, through its Makefile (writes dist/relical).
+GOOS=linux GOARCH=amd64 GOFLAGS=-mod=readonly make -s -C "$SRC" build VERSION="$VERSION" \
     || die "the core did not build"
+[ -f "$SRC/dist/relical" ] || die "make build did not produce dist/relical"
+cp "$SRC/dist/relical" "$BIN/relical"
 "$BIN/relical" version >/dev/null 2>&1 || die "the built core does not run"
 
 # 4) restic, from the release archive whose sha256 is pinned.
