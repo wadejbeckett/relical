@@ -2,7 +2,7 @@
 
 Backup for hosting servers (mail, website files, databases and the panel configuration), built on restic. A panel-neutral core (`core/`) with thin control-panel adapters (`panels/`, starting with Plesk). Part of the Noiz Déjà Vu backup range.
 
-Status: phase 2 in development (mail, website files and databases are backed up per subscription, and the panel configuration into its own repository; each can be restored next to the live data). Not ready for production.
+Status: phase 2 in development (mail, website files and databases are backed up per subscription, and the panel configuration into its own repository; each can be restored next to the live data). Phase 2 in development: pilot pending.
 
 ## Build and test
 
@@ -18,7 +18,7 @@ Status: phase 2 in development (mail, website files and databases are backed up 
 
     relical [-config PATH] COMMAND [flags]
 
-The configuration file defaults to `/etc/relical/config.json`. Every command prints JSON on stdout, except usage errors (exit code 2), which print plain text to stderr. A panel adapter can call `relical` and parse the result; restic is never run by an adapter. Errors that stop a command before it has results are printed as `{"error": "..."}`.
+The configuration file defaults to `/etc/relical/config.json`. Every command prints JSON on stdout, except usage errors (exit code 2), which print plain text to stderr. A panel adapter calls `relical` and parses the result. **Panel adapters never run restic**: every repository operation goes through the core, which holds the keys. Errors that stop a command before it has results are printed as `{"error": "..."}`.
 
 Relical backs up **subscriptions** (a hosting account, named by its main domain). Each subscription has its own restic repository and key. The list of subscriptions is the inventory (see Configuration).
 
@@ -37,7 +37,8 @@ Relical backs up **subscriptions** (a hosting account, named by its main domain)
 | `restore --subscription _server --unit panel-config` [`--snapshot ID`] | Writes the panel configuration file to `<state_dir>/restore/panel-config-<snapshot date>-<short id>.tar`, readable by root only. |
 | `ls --subscription S --snapshot ID` [`--path P`] | Lists one directory level of a snapshot, at most 5,000 entries (`"truncated": true` when there are more). `P` is relative to `home` for a `files` snapshot and to `/` for a `db` or `mail` one (a `db` snapshot holds `/<name>.sql`); for `_server` it lists the panel configuration file and takes no `--path`. `ID` must be an id (8 to 64 hex characters), not `latest`. A path that is not in the snapshot is an error. |
 | `adopt --subscription S` | Records the inventory's id as the owner of an existing repository that has a key but no owner file, after confirming that the repository opens (see Repository owners). Needed once per such repository when the inventory comes from `inventory_command`. |
-| `status` | Prints the last recorded result per subscription, unit and action, and each repository's stored size from the last `backup --all` (see State). |
+| `status` | Prints the last recorded result per subscription, unit and action, and each repository's stored size from the last `backup --all` (see State, report and log). |
+| `report` | Prints the nightly summary from the state file: counts, failures, stored bytes, a row per subscription and unit, the inventory's renames and warnings (see State, report and log). Never runs restic. |
 
 Units are `mail`, `files`, `db` and `panel-config`. This version backs up and restores all four. `restore` without `--unit` restores mail.
 
@@ -52,7 +53,7 @@ A unit that is not among the subscription's `features` is not run, even if mail 
 
 Each run is recorded in `state.json` in the state directory, which `status` reads. `forget` makes one call per repository with `--group-by tags`, so the mail, files and each database's snapshots are kept by the retention policy independently of each other. `backup`, `forget` and `check` wait up to 30 minutes for a repository lock held by another restic process, and `forget` and `check` first remove stale locks left by a restic that was killed. A subscription whose repository does not exist yet (it has no key, because nothing has been backed up for it, such as a `db`-only subscription without databases) is OK for `forget` and `check`, with the note "no repository yet (nothing has been backed up)"; a key readable by others, a repository recorded as another id's, or an owner file (`<subscription>.id`) without its key (the repository may exist, and its key is lost) still fails. With `prune: remote`, `forget` only reports the command the destination host must run; the repository in that note has any password in its URL replaced by `xxxxx`.
 
-Exit codes: `0` success; `1` an error, or at least one subscription's job failed (the JSON still lists every subscription's result); `2` a usage error: an unknown command, an unexpected argument, a flag the command does not take, an unknown `--unit`, neither or both of `--subscription` and `--all` on `backup`, `forget` or `check`, a missing `--subscription` on `mailboxes`, `snapshots` or `adopt`, a missing `--subscription` or `--snapshot` on `ls`, or a `restore` without the flags its unit needs (`--domain` and `--mailbox` for mail, `--database` for db, `--subscription` for every unit but mail) or with one it does not take (`--folder` is for mail only, `--path` for files only). A subscription that is not in the inventory, or an inventory that fails validation, prints `{"error": ...}` and exits `1`.
+Exit codes: `0` success; `1` an error, or at least one subscription's job failed (the JSON still lists every subscription's result); `2` a usage error: an unknown command, an unexpected argument, a flag the command does not take, an unknown `--unit`, neither or both of `--subscription` and `--all` on `backup`, `forget` or `check`, a missing `--subscription` on `mailboxes`, `snapshots` or `adopt`, any flag on `report`, a missing `--subscription` or `--snapshot` on `ls`, or a `restore` without the flags its unit needs (`--domain` and `--mailbox` for mail, `--database` for db, `--subscription` for every unit but mail) or with one it does not take (`--folder` is for mail only, `--path` for files only). A subscription that is not in the inventory, or an inventory that fails validation, prints `{"error": ...}` and exits `1`.
 
 ### Sample output
 
@@ -228,6 +229,52 @@ Result fields: `subscription`; `unit` (`mail`, `files`, `db`, `panel-config`; ab
       "skipped": []
     }
 
+## State, report and log
+
+`state.json` in the state directory holds the last result per subscription, unit (`mail`, `files`, `db:<name>`, `panel-config`, or `repository` for `forget`, `check` and `stats`) and action. `status` prints it as it is.
+
+`report` summarises it for a panel or a nightly mail. It reads the state file and the inventory and never runs restic:
+
+- `generated`: when the report was made (RFC 3339, UTC).
+- `rows`: the latest `backup` of each subscription's unit, sorted by subscription and then unit, with `ok`, `time`, `error` and `stored_bytes`: the subscription repository's size from its last `stats`, repeated on each of its rows.
+- `ok`, `failed`, `skipped`: those rows counted. A row is skipped when it is OK with a note that starts with "skipped" (a database of an unsupported type); skipped rows are not counted as OK.
+- `subscriptions`: the subscriptions with at least one row, not counting `_server`.
+- `stored_bytes`: every repository's size from its last `stats`, each counted once.
+- `renamed`: the inventory's renames (`name`, `renamed_from`, `note`). A rename starts a new repository under the new name and leaves the old one in place, untouched; `status` does not show this, because it reads only the state file.
+- `warnings`: a backup older than 48 hours, a `check` older than 10 days (or none at all for a subscription first backed up more than 10 days ago), a subscription in the state file that is no longer in the inventory, and an inventory that could not be loaded.
+
+`report` exits 0 whenever the state file can be read; an inventory that fails to load (the `inventory_command` failing, for example) is a warning, so the report always renders. Only an unreadable state file is an error.
+
+Sample `relical report` (one database failed, one of an unsupported type, one subscription removed from the panel, one renamed and not backed up for three days):
+
+    {
+      "generated": "2026-10-29T06:04:40Z",
+      "subscriptions": 3,
+      "ok": 5,
+      "failed": 1,
+      "skipped": 1,
+      "stored_bytes": 1684013056,
+      "rows": [
+        {"subscription": "_server", "unit": "panel-config", "ok": true, "time": "2026-10-29T01:25:00Z", "error": "", "stored_bytes": 20971520},
+        {"subscription": "closed.test", "unit": "mail", "ok": true, "time": "2026-10-29T01:01:00Z", "error": "", "stored_bytes": 0},
+        {"subscription": "example.test", "unit": "db:example_pg", "ok": true, "time": "2026-10-29T01:15:02Z", "error": "", "stored_bytes": 1610612736},
+        {"subscription": "example.test", "unit": "db:example_wp", "ok": false, "time": "2026-10-29T01:15:02Z", "error": "mysqldump: exit status 2: Got error: 1045: Access denied", "stored_bytes": 1610612736},
+        {"subscription": "example.test", "unit": "files", "ok": true, "time": "2026-10-29T01:14:40Z", "error": "", "stored_bytes": 1610612736},
+        {"subscription": "example.test", "unit": "mail", "ok": true, "time": "2026-10-29T01:12:04Z", "error": "", "stored_bytes": 1610612736},
+        {"subscription": "shop.test", "unit": "mail", "ok": true, "time": "2026-10-26T01:05:00Z", "error": "", "stored_bytes": 52428800}
+      ],
+      "renamed": [
+        {"name": "shop.test", "renamed_from": "oldshop.test", "note": "renamed from oldshop.test: backups now go to a new repository for shop.test; the repository for oldshop.test is kept as it is and is no longer backed up, pruned or checked"}
+      ],
+      "warnings": [
+        "closed.test: in the state file but no longer in the inventory; its repository is kept",
+        "example.test: the last check (2026-10-12T03:10:00Z) is older than 10 days",
+        "shop.test mail: the last backup (2026-10-26T01:05:00Z) is older than 48 hours"
+      ]
+    }
+
+`backup`, `forget`, `check`, `adopt` and `restore` also append to the run log, `<state_dir>/relical.log` (mode 0600): one JSON line when the command starts (`"event": "start"`, with its arguments and process id), one per result (`"event": "result"`, the result as the command prints it, or `"error"` when the command stopped before it had results) and one when it ends (`"event": "end"`, with the exit code). Every line has `time` (UTC) and `command`. Passwords in repository URLs, and the values of destination `env` variables whose names contain `PASSWORD`, `SECRET`, `KEY`, `TOKEN` or `CREDENTIAL`, are replaced by `xxxxx`. When the log would grow past 10 MiB it is renamed to `relical.log.1`, replacing the previous one, and a new log is started. A log that cannot be written is a warning on stderr, never a failure.
+
 ## Restores
 
 A restore never overwrites mail. It restores the snapshot into a staging directory and imports it with `doveadm import` into a new IMAP folder named `Restored <snapshot date> <short id>` (with `--folder`, only that folder is imported). The user then copies what they need back. Restoring the same snapshot twice is refused while the first "Restored" folder still exists; delete or rename that folder first. A restore fails, and removes any partial folder it created, if the mailbox is not in the snapshot, if `doveadm` reports that it could not read the restored copy, or if the folder does not exist afterwards. Restores need `doveadm` and run as root.
@@ -257,6 +304,23 @@ Copy `packaging/config.example.json` to `/etc/relical/config.json` and set mode 
 
   A repository can have a key but no `.id` file: it was first backed up from a static inventory without ids, or by a build from before owner files. With a static inventory, the first subscription with an id to use it is recorded as its owner, as before. With `inventory_command`, Relical refuses such a repository (backup, snapshots, restore, forget and check), because it may be an earlier subscription's of the same name; when it is this subscription's, run `relical adopt --subscription S` once. `adopt` confirms that the repository opens with the key, then records the inventory's id; it never creates a key or a repository and never replaces a recorded owner.
 
+### Hetzner Storage Box
+
+A Storage Box is reached over SFTP on port 23, with one sub-account per server so that no server can read or delete another's backups. Install the server's SSH key in the sub-account and pin the Storage Box's host key in a `known_hosts` file, then:
+
+    "destinations": {
+      "storagebox": {
+        "repository": "sftp:u000000-sub1@u000000-sub1.your-storagebox.example:relical/{subscription}",
+        "env": {},
+        "sftp_args": "-p 23 -i /etc/relical/ssh/id_ed25519 -o UserKnownHostsFile=/etc/relical/ssh/known_hosts -o StrictHostKeyChecking=yes",
+        "prune": "local"
+      }
+    }
+
+`relical/{subscription}` is relative to the sub-account's home directory. `packaging/config.example.json` carries this destination as `storagebox`, beside an append-only rest-server one (`archive`); set `default_destination` to the one in use. `StrictHostKeyChecking=yes` refuses a host key that is not in `known_hosts`, rather than trusting it on first use.
+
+A Storage Box cannot run rest-server, so there is no append-only mode: the server's key can delete snapshots, and `prune` is `local`. Protection against deletion by a compromised server comes from the Storage Box itself: its own snapshots (enable automatic snapshots in the Storage Box settings, kept for longer than an attacker is likely to go unnoticed) and the separation of per-server sub-accounts. Where a destination that refuses deletion is needed, use rest-server with `--append-only` and `prune: remote` instead.
+
 ### The inventory
 
 The inventory says which subscriptions are covered. It is given in one of two ways, never both:
@@ -283,7 +347,7 @@ Each subscription has:
 
 ## Scheduling
 
-`packaging/systemd` holds a nightly backup and a weekly check as systemd units and timers. Both timers use the server's local time (the backup starts between 01:00 and 01:30 daily, because of `RandomizedDelaySec=30min`; the check starts Sunday 05:00); override them with `systemctl edit relical-backup.timer`. The backup unit runs `relical forget --all` through `ExecStopPost=`, so retention runs after every backup run, even one where a backup failed. The weekly check fails on Relical's own lock if it starts while a backup is still running, and is then not retried until the next week.
+`packaging/systemd` holds a nightly backup and a weekly check as systemd units and timers, which run `/usr/local/lib/relical/relical` with the default configuration `/etc/relical/config.json`. Both timers use the server's local time: the backup starts between 01:00 and 01:30 daily (`RandomizedDelaySec=30min`), the check on Sunday at 03:00, which reads back 5% of each repository's data. A run missed while the server was off starts at the next boot (`Persistent=true`). Override the times with `systemctl edit relical-backup.timer` or `relical-check.timer`. The backup unit runs `relical forget --all` through `ExecStopPost=`, so retention runs after every backup run, even one where a backup failed, and has no stop timeout because a prune can take long. Both services run with `Nice=19` and `IOSchedulingClass=idle`. The weekly check fails on Relical's own lock if it starts while a backup is still running, and is then not retried until the next week.
 
 Licensed GPLv3.
 
