@@ -57,7 +57,27 @@ type Server struct {
 	Features      []string `json:"features"`
 	ConfigCommand []string `json:"config_command"`
 	ConfigExt     string   `json:"config_ext"`
+	// EncryptWithRepoKey (default true) gives config_command the _server
+	// repository's key as PLESK_BACKUP_PASSWORD, so that the passwords
+	// inside the panel's backup are encrypted with it.
+	EncryptWithRepoKey *bool `json:"encrypt_with_repo_key"`
 }
+
+// Has reports whether feature is among the server's features.
+func (s *Server) Has(feature string) bool {
+	if s == nil {
+		return false
+	}
+	for _, f := range s.Features {
+		if f == feature {
+			return true
+		}
+	}
+	return false
+}
+
+// Encrypt reports whether encrypt_with_repo_key is on (the default).
+func (s *Server) Encrypt() bool { return s.EncryptWithRepoKey == nil || *s.EncryptWithRepoKey }
 
 // Rename is a subscription whose panel name changed. Its backups go to a
 // new repository under the new name; the old repository is left as it is.
@@ -613,6 +633,10 @@ func validate(cfg *config.Config, subs []Subscription, server *Server, requireID
 	}
 	if server != nil {
 		server.Features = orEmpty(server.Features)
+		if server.EncryptWithRepoKey == nil {
+			on := true
+			server.EncryptWithRepoKey = &on
+		}
 		errs = append(errs, validateServer(server)...)
 	}
 	if err := errors.Join(errs...); err != nil {

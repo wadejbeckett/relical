@@ -170,8 +170,12 @@ func TestServerValidation(t *testing.T) {
 	cfg := cfgWith("[]")
 	cfg.Server = json.RawMessage(validServer)
 	inv, err := Load(context.Background(), cfg)
-	if err != nil || inv.Server == nil || inv.Server.ConfigExt != "tar" {
+	if err != nil || inv.Server == nil || inv.Server.ConfigExt != "tar" || !inv.Server.Encrypt() || inv.Server.EncryptWithRepoKey == nil {
 		t.Fatalf("%+v %v", inv.Server, err)
+	}
+	cfg.Server = json.RawMessage(strings.Replace(validServer, `"config_ext"`, `"encrypt_with_repo_key": false, "config_ext"`, 1))
+	if inv, err := Load(context.Background(), cfg); err != nil || inv.Server.Encrypt() {
+		t.Fatalf("encrypt_with_repo_key false: %+v %v", inv.Server, err)
 	}
 	for name, s := range map[string]string{
 		"relative command": strings.Replace(validServer, `"/usr/sbin/plesk"`, `"plesk"`, 1),
