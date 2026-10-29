@@ -155,20 +155,6 @@ final class Inventory
                 $databases[] = ['type' => 'mysql', 'name' => $dbName];
             }
 
-            $mailDomains = [];
-            foreach (self::mailDomains($name, self::stringList($webspace['mail_domains'] ?? [])) as $domain) {
-                if (!CoreRules::validDomain($domain)) {
-                    $skipped[] = self::skip($domain, sprintf('mail of %s: the domain name is not lower-case punycode', $name));
-                    continue;
-                }
-                if (isset($mailOwner[$domain])) {
-                    $skipped[] = self::skip($domain, sprintf('mail of %s: the domain is already listed by %s', $name, $mailOwner[$domain]));
-                    continue;
-                }
-                $mailOwner[$domain] = $name;
-                $mailDomains[] = $domain;
-            }
-
             $names[$name] = true;
             $ids[$id] = $name;
             foreach ($databases as $database) {
@@ -183,13 +169,40 @@ final class Inventory
                 'gid' => $gid,
                 'home' => $home,
                 'features' => $features,
-                'mail_domains' => $mailDomains,
+                'mail_domains' => self::mailDomains($name, self::stringList($webspace['mail_domains'] ?? [])),
                 'files' => $home === '' ? [] : [$home],
                 'file_excludes' => self::DEFAULT_FILE_EXCLUDES,
                 'databases' => $databases,
                 'destination' => '',
                 'retention' => null,
             ];
+        }
+
+        // Mail domains, once every subscription's name is known. The core
+        // refuses both subscriptions when one lists the other's name as a
+        // mail domain, and both when two list the same mail domain, so such
+        // a mail domain is dropped (the first listing of a shared one stays)
+        // and the subscriptions back up without it.
+        foreach ($subscriptions as $i => $subscription) {
+            $name = $subscription['name'];
+            $mailDomains = [];
+            foreach ($subscription['mail_domains'] as $domain) {
+                if (!CoreRules::validDomain($domain)) {
+                    $skipped[] = self::skip($domain, sprintf('mail of %s: the domain name is not lower-case punycode', $name));
+                    continue;
+                }
+                if ($domain !== $name && isset($names[$domain])) {
+                    $skipped[] = self::skip($domain, sprintf('mail of %s: the domain is the name of another subscription', $name));
+                    continue;
+                }
+                if (isset($mailOwner[$domain])) {
+                    $skipped[] = self::skip($domain, sprintf('mail of %s: the domain is already listed by %s', $name, $mailOwner[$domain]));
+                    continue;
+                }
+                $mailOwner[$domain] = $name;
+                $mailDomains[] = $domain;
+            }
+            $subscriptions[$i]['mail_domains'] = $mailDomains;
         }
 
         // The core refuses a renamed_from that is not a domain, is the

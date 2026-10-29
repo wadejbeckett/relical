@@ -347,9 +347,51 @@ final class InventoryTest extends TestCase
         self::assertSame(['example.test', 'third.example.test'], array_column($inventory['subscriptions'], 'name'));
         self::assertSame(['third.example.test'], $inventory['subscriptions'][1]['mail_domains']);
         self::assertSame(
-            ['example.test', 'other.example.test', 'shop.example.test', 'fourth.example.test'],
+            ['example.test', 'other.example.test', 'fourth.example.test', 'shop.example.test'],
             array_column($inventory['skipped'], 'name')
         );
+    }
+
+    /** @return iterable<string, array{0: list<string>}> */
+    public static function bothOrders(): iterable
+    {
+        yield 'lister first' => [['c.example.test', 'd.example.test']];
+        yield 'lister last' => [['d.example.test', 'c.example.test']];
+    }
+
+    /**
+     * The core refuses both subscriptions when one lists the other's name
+     * as a mail domain; the mail domain is dropped and both stay.
+     *
+     * @dataProvider bothOrders
+     * @param list<string> $order
+     */
+    public function testAMailDomainThatIsAnotherSubscriptionsNameIsDropped(array $order): void
+    {
+        $webspaces = [
+            'c.example.test' => self::webspace(['id' => 3, 'name' => 'c.example.test', 'mail_domains' => ['c.example.test', 'd.example.test']]),
+            'd.example.test' => self::webspace(['id' => 4, 'name' => 'd.example.test', 'mail_domains' => ['d.example.test']]),
+        ];
+        $inventory = Inventory::build([$webspaces[$order[0]], $webspaces[$order[1]]], 'all');
+
+        $mail = array_column($inventory['subscriptions'], 'mail_domains', 'name');
+        ksort($mail);
+        self::assertSame(['c.example.test' => ['c.example.test'], 'd.example.test' => ['d.example.test']], $mail, 'both stay, each with its own mail only');
+        self::assertCount(2, $inventory['subscriptions']);
+        self::assertSame(
+            [['name' => 'd.example.test', 'reason' => 'mail of c.example.test: the domain is the name of another subscription']],
+            $inventory['skipped']
+        );
+    }
+
+    public function testAMailDomainNamingASubscriptionThatIsNotEmittedStays(): void
+    {
+        $inventory = Inventory::build([
+            self::webspace(['id' => 3, 'name' => 'c.example.test', 'mail_domains' => ['c.example.test', 'd.example.test']]),
+            self::webspace(['id' => 'bad id!', 'name' => 'd.example.test', 'mail_domains' => []]),
+        ], 'all');
+
+        self::assertSame(['c.example.test', 'd.example.test'], $inventory['subscriptions'][0]['mail_domains']);
     }
 
     public function testMailDomainsAreDeduplicatedWithTheWebspaceFirst(): void
