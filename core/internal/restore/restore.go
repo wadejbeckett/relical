@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 	"unicode"
+	"unicode/utf16"
 
 	"github.com/wadejbeckett/relical/core/internal/inventory"
 	"github.com/wadejbeckett/relical/core/internal/job"
@@ -213,7 +214,7 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 		return res, err
 	}
 	defer done()
-	if err := r.Restore(ctx, snap.ID, stage, []string{box.Path}); err != nil {
+	if err := r.Restore(ctx, snap.ID, stage, []string{job.GlobEscape(box.Path)}); err != nil {
 		return res, err
 	}
 	// restic restore exits 0 when --include matches nothing in the snapshot.
@@ -226,15 +227,24 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 	if err := chownStage(stage, box.UID, box.GID); err != nil {
 		return res, err
 	}
+	var folder string
+	if req.Folder != "" {
+		folder = sourceFolder(req.Folder, env.Cfg.MailFolderPrefix)
+		if !stagedFolderExists(filepath.Join(stage, box.Path), folder, env.Cfg.MailFolderPrefix) {
+			return res, fmt.Errorf("folder %q is not in snapshot %s of %s", req.Folder, snap.Short(), box.Login)
+		}
+	}
 	// A plain mail_driver:mail_path location: Dovecot 2.4 (Plesk 18.0.81)
 	// refuses parameters such as :INDEX=MEMORY in it. Dovecot then keeps
 	// its index files in the staging copy, which is deleted afterwards.
 	src := "maildir:" + filepath.Join(stage, box.Path)
-	args := []string{"import", "-s", "-u", box.Login, src, target}
+	// "--" ends doveadm's options: the folder is the customer's, and one
+	// starting with - must be read as a name, never as an option.
+	args := []string{"import", "-s", "-u", box.Login, "--", src, target}
 	if req.Folder == "" {
 		args = append(args, "all")
 	} else {
-		args = append(args, "mailbox", sourceFolder(req.Folder, env.Cfg.MailFolderPrefix))
+		args = append(args, "mailbox", folder)
 	}
 	_, impErr, err := doveadmRun(ctx, env, args...)
 	if err == nil {
@@ -250,7 +260,7 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 		// The import may have failed because ctx was cancelled, so clean up on a fresh, bounded context.
 		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		_, derr := doveadm(cctx, env, "mailbox", "delete", "-r", "-s", "-u", box.Login, target)
+		_, derr := doveadm(cctx, env, "mailbox", "delete", "-r", "-s", "-u", box.Login, "--", target)
 		var ee *exec.ExitError
 		if errors.As(derr, &ee) && ee.ExitCode() == exitMailboxMissing {
 			derr = nil // the import failed before creating the folder: already clean
@@ -260,7 +270,7 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 		}
 		return res, err
 	}
-	status, err := doveadm(ctx, env, "-f", "flow", "mailbox", "status", "-u", box.Login, "messages", target+"*")
+	status, err := doveadm(ctx, env, "-f", "flow", "mailbox", "status", "-u", box.Login, "--", "messages", target+"*")
 	if err != nil {
 		return res, err
 	}
@@ -361,4 +371,80 @@ func chownChildren(dirfd int, path string, uid, gid int) error {
 		}
 	}
 	return nil
+}
+
+// stagedFolderExists reports whether folder (a name in the staged copy's
+// default namespace, see sourceFolder) is in the restored Maildir at
+// maildir. In the Maildir++ layout INBOX is the Maildir itself and every
+// other folder is a directory "." + its name, with "." between levels and
+// non-ASCII names in modified UTF-7 (RFC 3501); a prefix ending in "/"
+// means the live namespace separates levels with "/".
+func stagedFolderExists(maildir, folder, prefix string) bool {
+	if strings.EqualFold(folder, "INBOX") {
+		return true
+	}
+	names := []string{folder}
+	if strings.HasSuffix(prefix, "/") {
+		names = append(names, strings.ReplaceAll(folder, "/", "."))
+	}
+	for _, n := range names {
+		for _, enc := range []string{n, encodeMUTF7(n)} {
+			if fi, err := os.Lstat(filepath.Join(maildir, "."+enc)); err == nil && fi.IsDir() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// encodeMUTF7 encodes s as IMAP modified UTF-7 (RFC 3501 5.1.3), as
+// Dovecot names non-ASCII folders on disk: printable ASCII stays, "&"
+// becomes "&-", anything else is UTF-16BE in modified base64 between "&"
+// and "-".
+func encodeMUTF7(s string) string {
+	const b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+,"
+	var out strings.Builder
+	var run []rune
+	flush := func() {
+		if len(run) == 0 {
+			return
+		}
+		var b []byte
+		for _, u := range utf16.Encode(run) {
+			b = append(b, byte(u>>8), byte(u))
+		}
+		out.WriteByte('&')
+		for i := 0; i < len(b); i += 3 {
+			var n uint32
+			k := len(b) - i
+			if k > 3 {
+				k = 3
+			}
+			for j := 0; j < 3; j++ {
+				n <<= 8
+				if j < k {
+					n |= uint32(b[i+j])
+				}
+			}
+			for j := 0; j < k+1; j++ {
+				out.WriteByte(b64[(n>>(18-6*j))&63])
+			}
+		}
+		out.WriteByte('-')
+		run = nil
+	}
+	for _, r := range s {
+		switch {
+		case r == '&':
+			flush()
+			out.WriteString("&-")
+		case r >= 0x20 && r <= 0x7e:
+			flush()
+			out.WriteRune(r)
+		default:
+			run = append(run, r)
+		}
+	}
+	flush()
+	return out.String()
 }

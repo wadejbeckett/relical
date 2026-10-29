@@ -58,7 +58,7 @@ func TestRestoreLatestWholeMailbox(t *testing.T) {
 	if !strings.Contains(l, "restore fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210 --target") {
 		t.Errorf("restore args:\n%s", l)
 	}
-	if !strings.Contains(l, "import -s -u alice@example.test maildir:") || !strings.Contains(l, "/Maildir Restored 2026-10-15 fedcba98 all") || strings.Contains(l, "INDEX=") {
+	if !strings.Contains(l, "import -s -u alice@example.test -- maildir:") || !strings.Contains(l, "/Maildir Restored 2026-10-15 fedcba98 all") || strings.Contains(l, "INDEX=") {
 		t.Errorf("import args:\n%s", l)
 	}
 	if !strings.Contains(l, "1.host:2,S") {
@@ -104,7 +104,7 @@ func TestRestoreCleansUpWhenImportFails(t *testing.T) {
 	if _, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest"}); err == nil {
 		t.Fatal("import failure not reported")
 	}
-	if !strings.Contains(log(), "mailbox delete -r -s -u alice@example.test Restored 2026-10-15 fedcba98") {
+	if !strings.Contains(log(), "mailbox delete -r -s -u alice@example.test -- Restored 2026-10-15 fedcba98") {
 		t.Errorf("partial folder not removed:\n%s", log())
 	}
 	entries, _ := os.ReadDir(filepath.Join(e.Cfg.StateDir, "restore"))
@@ -472,5 +472,74 @@ func TestMailRestoreRefusesWithoutFreeSpace(t *testing.T) {
 				t.Errorf("restored or imported:\n%s", l)
 			}
 		})
+	}
+}
+
+// A folder starting with - reaches doveadm after "--", as a name.
+func TestRestoreFolderStartingWithDashIsLiteral(t *testing.T) {
+	e, env, log := setup(t)
+	env["FAKE_RESTORE_FOLDER"] = "-ubob@example.test"
+	if _, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest", Folder: "-ubob@example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	l := log()
+	if !strings.Contains(l, "import -s -u alice@example.test -- maildir:") || !strings.Contains(l, "Restored 2026-10-15 fedcba98 mailbox -ubob@example.test") {
+		t.Errorf("import args:\n%s", l)
+	}
+	if !strings.Contains(l, "mailbox status -u alice@example.test -- messages") {
+		t.Errorf("status args:\n%s", l)
+	}
+}
+
+// A folder that is not in the restored copy is refused with a clear
+// error before doveadm import runs.
+func TestRestoreFolderNotInSnapshot(t *testing.T) {
+	e, _, log := setup(t)
+	e.Cfg.MailFolderPrefix = "INBOX."
+	_, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest", Folder: "INBOX.Nope"})
+	if err == nil || err.Error() != `folder "INBOX.Nope" is not in snapshot fedcba98 of alice@example.test` {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(log(), "import ") {
+		t.Errorf("doveadm import ran:\n%s", log())
+	}
+	for _, f := range []string{"INBOX.Sent", "Sent", "INBOX"} {
+		if _, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "01234567", Folder: f}); err != nil && !strings.Contains(err.Error(), "already exists") {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+}
+
+func TestStagedFolderNamesOnDisk(t *testing.T) {
+	m := t.TempDir()
+	for _, d := range []string{".Sent", ".Archive.2025", ".Entw&APw-rfe", ".A&-B"} {
+		os.Mkdir(filepath.Join(m, d), 0o700)
+	}
+	for folder, want := range map[string]bool{"Sent": true, "INBOX": true, "inbox": true, "Archive.2025": true, "Entwürfe": true, "A&B": true, "Drafts": false} {
+		if got := stagedFolderExists(m, folder, "INBOX."); got != want {
+			t.Errorf("%s: %v", folder, got)
+		}
+	}
+	if !stagedFolderExists(m, "Archive/2025", "INBOX/") {
+		t.Error("a / separated folder")
+	}
+	for in, want := range map[string]string{"Entwürfe": "Entw&APw-rfe", "A&B": "A&-B", "日本語": "&ZeVnLIqe-", "plain": "plain"} {
+		if got := encodeMUTF7(in); got != want {
+			t.Errorf("encodeMUTF7(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A mailbox name with glob characters is escaped in restic's --include,
+// so it matches only itself.
+func TestRestoreMailboxWithGlobCharacters(t *testing.T) {
+	e, _, log := setup(t)
+	mail := filepath.Dir(filepath.Dir(filepath.Dir(string(e.Locator))))
+	os.MkdirAll(filepath.Join(mail, "example.test", "a[b*", "Maildir", "cur"), 0o700)
+	if _, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "a[b*", Snapshot: "latest"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(log(), "--include "+filepath.Join(mail, "example.test")+`/a\[b\*/Maildir`) {
+		t.Errorf("include not escaped:\n%s", log())
 	}
 }

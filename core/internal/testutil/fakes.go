@@ -68,6 +68,9 @@ case "$1" in
       case "$1" in --target) t="$2"; shift ;; --include) i="$2"; shift ;; esac
       shift
     done
+    # The include is a pattern: drop the backslash before an escaped
+    # character, as restic matches it.
+    i=$(printf '%s' "$i" | sed 's/\\\(.\)/\1/g')
     [ -n "$FAKE_RESTORE_EMPTY" ] && exit 0
     # FAKE_RESTORE_MKDIR: a directory that appears while restic runs (the
     # customer creating the restore's target folder meanwhile).
@@ -81,6 +84,8 @@ case "$1" in
       exit "${FAKE_RESTORE_EXIT:-0}"
     fi
     mkdir -p "$t$i/cur" "$t$i/.Sent/cur"
+    # FAKE_RESTORE_FOLDER: one more folder in the restored Maildir.
+    [ -n "$FAKE_RESTORE_FOLDER" ] && mkdir -p "$t$i/.$FAKE_RESTORE_FOLDER/cur"
     printf 'Subject: one\n\nx\n' > "$t$i/cur/1.host:2,S"
     printf 'Subject: sent\n\nx\n' > "$t$i/.Sent/cur/2.host:2,S"
     exit "${FAKE_RESTORE_EXIT:-0}" ;;
