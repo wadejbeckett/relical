@@ -16,6 +16,16 @@ $e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES 
 .relical-button:hover { background: #f0f0f0; text-decoration: none; }
 </style>
 
+<?php $h = $this->headline; ?>
+<table class="relical-table">
+    <tbody>
+        <tr><td>Last successful backup</td><td class="<?php echo $h['last_success'] === '' ? 'relical-error' : ''; ?>"><?php echo $e($h['last_success'] !== '' ? $h['last_success'] : 'none yet'); ?></td></tr>
+        <?php if ($h['failed'] !== null): ?><tr><td>Failed in the last report</td><td class="<?php echo $h['failed'] > 0 ? 'relical-error' : ''; ?>"><?php echo $e($h['failed']); ?></td></tr><?php endif; ?>
+        <?php if ($h['skipped'] !== null): ?><tr><td>Skipped in the last report</td><td class="<?php echo $h['skipped'] > 0 ? 'relical-error' : ''; ?>"><?php echo $e($h['skipped']); ?></td></tr><?php endif; ?>
+        <?php if ($h['last_failure'] !== ''): ?><tr><td>Last failed run</td><td class="relical-error"><?php echo $e($h['last_failure']); ?></td></tr><?php endif; ?>
+    </tbody>
+</table>
+
 <p>
     Relical backs up each subscription's mail, website files and databases,
     and the Plesk configuration, into encrypted repositories on the Storage

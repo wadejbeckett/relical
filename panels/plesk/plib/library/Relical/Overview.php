@@ -9,7 +9,8 @@ use Throwable;
 
 /**
  * The settings page's read-only data in one root call (overview.php): the
- * extension's public key, `relical status` and `relical report`. One
+ * extension's public key, `relical status`, `relical report` and the last
+ * failure notify.php recorded. One
  * `extension --exec` instead of three in a row, each core call cut short
  * (timeout()) so a slow or hung core cannot hold the page.
  */
@@ -81,7 +82,7 @@ final class Overview
      * why ($error: RootScripts::error() of the whole call).
      *
      * @param ?array<mixed> $data
-     * @return array{public_key: array{key: string, error: string}, status: array{code: int, stdout: string, stderr: string, timed_out: bool}, report: array{code: int, stdout: string, stderr: string, timed_out: bool}}
+     * @return array{public_key: array{key: string, error: string}, status: array{code: int, stdout: string, stderr: string, timed_out: bool}, report: array{code: int, stdout: string, stderr: string, timed_out: bool}, last_failure: ?array{unit: string, time: string}}
      */
     public static function parse(?array $data, string $error): array
     {
@@ -91,6 +92,7 @@ final class Overview
                 ? ['key' => $key['key'], 'error' => $key['error']]
                 : ['key' => '', 'error' => $error],
         ];
+        $out['last_failure'] = Notify::parseRecord($data['last_failure'] ?? null);
         foreach (['status', 'report'] as $part) {
             $call = $data[$part] ?? null;
             $out[$part] = is_array($call) && is_int($call['code'] ?? null) && is_string($call['stdout'] ?? null) && is_string($call['stderr'] ?? null)
@@ -102,5 +104,54 @@ final class Overview
         }
 
         return $out;
+    }
+
+    /**
+     * The last failure notify.php recorded, or null when there is none or it
+     * cannot be read.
+     *
+     * @return ?array{unit: string, time: string}
+     */
+    public static function lastFailure(string $path): ?array
+    {
+        if (is_link($path) || !is_file($path)) {
+            return null;
+        }
+
+        return Notify::parseRecord(json_decode((string) @file_get_contents($path, false, null, 0, 4096), true));
+    }
+
+    /**
+     * The line at the top of the settings page: when a backup last
+     * succeeded, how many units failed or were skipped in the last report,
+     * and the last failed run.
+     *
+     * @param list<array{last_success: string}>                          $rows        Status::rows()
+     * @param array{available: bool, failed_count: int, skipped_count: int} $report      Report::fromCli()
+     * @param ?array{unit: string, time: string}                         $lastFailure
+     * @return array{last_success: string, failed: ?int, skipped: ?int, last_failure: string}
+     */
+    public static function headline(array $rows, array $report, ?array $lastFailure, ?\DateTimeZone $zone = null): array
+    {
+        $lastSuccess = '';
+        foreach ($rows as $row) {
+            // Status::show() gives 'Y-m-d H:i', which sorts as text.
+            if (($row['last_success'] ?? '') > $lastSuccess) {
+                $lastSuccess = (string) $row['last_success'];
+            }
+        }
+        $failure = '';
+        if ($lastFailure !== null) {
+            $zone ??= new \DateTimeZone(date_default_timezone_get());
+            $when = (new \DateTimeImmutable($lastFailure['time']))->setTimezone($zone)->format('Y-m-d H:i');
+            $failure = sprintf('%s at %s', $lastFailure['unit'] === Units::BACKUP_SERVICE ? 'the nightly backup' : 'the weekly check', $when);
+        }
+
+        return [
+            'last_success' => $lastSuccess,
+            'failed' => $report['available'] ? $report['failed_count'] : null,
+            'skipped' => $report['available'] ? $report['skipped_count'] : null,
+            'last_failure' => $failure,
+        ];
     }
 }

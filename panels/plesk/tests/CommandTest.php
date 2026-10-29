@@ -70,7 +70,7 @@ final class CommandTest extends TestCase
         $sbin = (string) file_get_contents(__DIR__ . '/../sbin/relical-root');
         self::assertSame(1, preg_match('/case "\$script" in\n(.*?)\)\n/s', $sbin, $m));
         $allowed = preg_split('/[|\\\\\s]+/', trim($m[1]), -1, PREG_SPLIT_NO_EMPTY);
-        $expected = array_merge(Command::SCRIPTS, ['inventory.php', 'post-install.php', 'pre-uninstall.php']);
+        $expected = array_merge(Command::SCRIPTS, ['inventory.php', 'post-install.php', 'pre-uninstall.php', 'notify.php']);
         sort($allowed);
         sort($expected);
         self::assertSame($expected, $allowed);

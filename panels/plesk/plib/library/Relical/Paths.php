@@ -52,6 +52,8 @@ final class Paths
     /** The core's log of each run (core Task 5) and its run lock. */
     public const LOG = self::STATE_DIR . '/relical.log';
     public const LOCK = self::STATE_DIR . '/relical.lock';
+    /** The last failed backup or check, written by notify.php, shown on the settings page. */
+    public const LAST_FAILURE = self::STATE_DIR . '/last-failure.json';
 
     public const DOVEADM_BIN = '/usr/bin/doveadm';
 

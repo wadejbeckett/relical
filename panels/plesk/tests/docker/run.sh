@@ -135,7 +135,10 @@ px 'cd /opt/psa/admin/plib/modules/relical/bin && sed "s#  #  /usr/local/lib/rel
 px 'test ! -e /etc/relical/config.json' || fail "config.json was written before the destination was saved"
 px 'systemctl is-enabled relical-backup.timer relical-check.timer >/dev/null' || fail "timers are not enabled"
 px 'grep -q "^Nice=19" /etc/systemd/system/relical-backup.service && grep -q "^IOSchedulingClass=idle" /etc/systemd/system/relical-check.service' || fail "services are not at idle priority"
-ok "binaries match SHA256SUMS; /etc/relical, keys, ssh, mysql.cnf modes; timers enabled; no config.json yet"
+px 'grep -q "^OnFailure=relical-notify@%n.service" /etc/systemd/system/relical-backup.service && grep -q "^OnFailure=relical-notify@%n.service" /etc/systemd/system/relical-check.service' || fail "services do not name relical-notify@ in OnFailure="
+px 'grep -q "^ExecStart=/opt/psa/admin/sbin/modules/relical/relical-root notify.php %i$" "/etc/systemd/system/relical-notify@.service"' || fail "relical-notify@.service does not run notify.php through relical-root"
+px 'systemd-analyze verify /etc/systemd/system/relical-backup.service /etc/systemd/system/relical-check.service "/etc/systemd/system/relical-notify@.service" 2>&1 | grep relical' && fail "systemd-analyze verify complains about a Relical unit"
+ok "binaries match SHA256SUMS; /etc/relical, keys, ssh, mysql.cnf modes; timers enabled; no config.json yet; OnFailure= and relical-notify@ in place"
 # Plesk runs the hooks and `extension --exec` as psaadm; the scripts hand themselves to relical-root.
 [ "$(px 'plesk bin extension --exec relical running.php')" = '{"running":false}' ] || fail "running.php through extension --exec"
 ok "plesk bin extension --exec relical <script> reaches root"
@@ -204,6 +207,14 @@ px 'plesk bin extension --exec relical cli.php status' | grep -q '"panel-config"
 px 'plesk bin extension --exec relical cli.php report' > "$WORK/report.json"
 grep -q '"failed": 0' "$WORK/report.json" && grep -q '"ok": 4' "$WORK/report.json" || fail "report"
 ok "mail $MAIL1, files $FILES1, db $DB1 and panel-config backed up (real pleskbackup); no dump on disk; status and report"
+px 'systemctl start relical-notify@relical-backup.service' || fail "relical-notify@relical-backup.service did not run"
+px 'grep -q "relical-notify: relical-backup.service failed" /var/lib/relical/relical.log' || fail "the failure notice is not in the run log"
+[ "$(px 'stat -c %a:%U /var/lib/relical/last-failure.json')" = 600:root ] || fail "last-failure.json is not 0600 root"
+px 'journalctl -u relical-notify@relical-backup.service --no-pager -n 20' | tee "$WORK/notify.txt" | grep -q '"logged":true' || fail "notify.php did not log: $(cat "$WORK/notify.txt")"
+grep -o '"mailed":[a-z]*,"to":"[^"]*"' "$WORK/notify.txt" || true   # mail delivery is reported, not required here
+get admin /modules/relical/index.php "$WORK/admin-failed.html" >/dev/null
+grep -q 'Last failed run' "$WORK/admin-failed.html" && grep -q 'Last successful backup' "$WORK/admin-failed.html" || fail "the settings page does not show the last failure and success"
+ok "relical-notify@ logs the failure, keeps last-failure.json, the settings page shows it"
 
 # ---------------------------------------------------------------------------
 say "6. restores (as restore-run.php is started by the customer screens)"

@@ -33,6 +33,7 @@ use Noiz\Relical\InstallRunner;
 use Noiz\Relical\Installer;
 use Noiz\Relical\LocalProbe;
 use Noiz\Relical\ScriptIO;
+use Noiz\Relical\Paths;
 use Noiz\Relical\Settings;
 use Noiz\Relical\Units;
 
@@ -82,7 +83,7 @@ try {
     );
 
     $settings = Settings::fromPlesk();
-    $units = Units::renderAll(Units::loadTemplates(__DIR__ . '/../resources/systemd'), $settings->backupTime());
+    $units = Units::renderAll(Units::loadTemplates(__DIR__ . '/../resources/systemd'), $settings->backupTime(), Paths::rootScript());
 
     // Plans every step, verifies both binaries and renders the configuration
     // before changing anything.

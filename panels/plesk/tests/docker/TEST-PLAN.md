@@ -248,3 +248,16 @@ has not yet seen. Each line is open until the next `run.sh` run.
       subscription's Plesk disk quota (whole-branch review finding 4). Not
       done for the pilot; the daily limit and the five-copy cap bound how
       much a customer can add. Revisit with `pm_Domain` limits.
+- [ ] Failure notice: both services carry `OnFailure=relical-notify@%n.service`;
+      `systemctl start relical-notify@relical-backup.service` appends
+      "relical-notify: relical-backup.service failed" to the run log, writes
+      `/var/lib/relical/last-failure.json` (0600 root) and the settings page
+      shows "Last failed run" and "Last successful backup" (`run.sh` step 5).
+      Mail to the administrator: confirm API-RPC `<server><get><admin/>`
+      answers `admin/admin_email` on 18.0.81 (else the `pm_Client`
+      fallback), and whether the image's MTA delivers (`"mailed"` in the
+      journal); `run.sh` reports it but does not require it.
+- [ ] Bounded runs: `TimeoutStartSec=20h` (not `RuntimeMaxSec=`, which
+      systemd ignores for oneshot units) and `TimeoutStopSec=15min`;
+      `systemctl stop relical-backup` during a run returns within the
+      timeout and starts no forget (core finding 5).

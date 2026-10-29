@@ -86,4 +86,36 @@ final class OverviewTest extends TestCase
     {
         self::assertGreaterThan(Overview::timeout('status') + Overview::timeout('report'), Overview::TIMEOUT);
     }
+
+    public function testTheLastFailureIsReadBackOrIgnored(): void
+    {
+        file_put_contents($this->dir . '/last-failure.json', '{"unit":"relical-backup.service","time":"2026-10-29T01:00:00+00:00"}');
+        self::assertSame(['unit' => 'relical-backup.service', 'time' => '2026-10-29T01:00:00+00:00'], Overview::lastFailure($this->dir . '/last-failure.json'));
+        self::assertNull(Overview::lastFailure($this->dir . '/none.json'));
+        file_put_contents($this->dir . '/bad.json', '{"unit":"sshd.service","time":"2026-10-29T01:00:00+00:00"}');
+        self::assertNull(Overview::lastFailure($this->dir . '/bad.json'));
+
+        $parts = Overview::parse(['last_failure' => ['unit' => 'relical-check.service', 'time' => '2026-10-29T13:00:00+00:00']], 'x');
+        self::assertSame('relical-check.service', $parts['last_failure']['unit']);
+        self::assertNull(Overview::parse(null, 'x')['last_failure']);
+    }
+
+    public function testTheHeadline(): void
+    {
+        $rows = [['last_success' => '2026-10-28 01:10'], ['last_success' => ''], ['last_success' => '2026-10-29 01:05']];
+        $report = ['available' => true, 'failed_count' => 1, 'skipped_count' => 2];
+        $failure = ['unit' => 'relical-backup.service', 'time' => '2026-10-29T03:00:00+00:00'];
+
+        self::assertSame([
+            'last_success' => '2026-10-29 01:05',
+            'failed' => 1,
+            'skipped' => 2,
+            'last_failure' => 'the nightly backup at 2026-10-29 03:00',
+        ], Overview::headline($rows, $report, $failure, new \DateTimeZone('UTC')));
+
+        self::assertSame(
+            ['last_success' => '', 'failed' => null, 'skipped' => null, 'last_failure' => ''],
+            Overview::headline([], ['available' => false, 'failed_count' => 0, 'skipped_count' => 0], null)
+        );
+    }
 }

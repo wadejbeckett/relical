@@ -6,6 +6,8 @@ Description=Relical weekly repository check
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/etc/relical/config.json
+# A failed run is logged and mailed to the Plesk administrator.
+OnFailure=relical-notify@%n.service
 
 # A check that starts while a backup is still running fails on relical's own
 # lock and is not retried until next week, so the timer runs it twelve hours

@@ -8,6 +8,8 @@ Wants=network-online.target
 # Until the destination is saved in the extension's settings there is no
 # configuration, and the run is skipped rather than failed.
 ConditionPathExists=/etc/relical/config.json
+# A failed run is logged and mailed to the Plesk administrator.
+OnFailure=relical-notify@%n.service
 
 [Service]
 Type=oneshot

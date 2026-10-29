@@ -68,6 +68,7 @@ class IndexController extends pm_Controller_Action
         $this->view->publicKey = $this->publicKey($parts['public_key']);
         $this->view->status = $this->statusRows($parts['status']);
         $this->view->report = Report::fromCli($parts['report']['code'], $parts['report']['stdout'], $parts['report']['stderr']);
+        $this->view->headline = Overview::headline($this->view->status['rows'], $this->view->report, $parts['last_failure']);
         $this->view->connectionUrl = pm_Context::getActionUrl('index', 'connection');
         $this->view->probeUrl = pm_Context::getActionUrl('index', 'probe');
         $this->view->backupUrl = pm_Context::getActionUrl('index', 'backup');

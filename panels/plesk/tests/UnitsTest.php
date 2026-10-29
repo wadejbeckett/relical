@@ -18,7 +18,7 @@ final class UnitsTest extends TestCase
         return Units::renderAll(Units::loadTemplates(self::TEMPLATES), $time);
     }
 
-    public function testRendersAllFourUnitsWithNoPlaceholderLeft(): void
+    public function testRendersAllUnitsWithNoPlaceholderLeft(): void
     {
         $units = self::rendered('03:15');
 
@@ -72,6 +72,36 @@ final class UnitsTest extends TestCase
             self::assertStringContainsString("\nTimeoutStartSec=20h\n", $units[$name], $name);
             self::assertDoesNotMatchRegularExpression('/^RuntimeMaxSec=/m', $units[$name], 'no effect on Type=oneshot');
         }
+    }
+
+    public function testBothServicesReportTheirFailure(): void
+    {
+        $units = Units::renderAll(Units::loadTemplates(self::TEMPLATES), '01:00', '/usr/local/psa/admin/sbin/modules/relical/relical-root');
+
+        foreach (Units::SERVICES as $name) {
+            $unitSection = substr($units[$name], 0, (int) strpos($units[$name], "[Service]\n"));
+            self::assertStringContainsString("\nOnFailure=relical-notify@%n.service\n", $unitSection, $name);
+        }
+        $notify = $units[Units::NOTIFY_SERVICE];
+        self::assertStringContainsString("\nType=oneshot\n", $notify);
+        self::assertStringContainsString("\nExecStart=/usr/local/psa/admin/sbin/modules/relical/relical-root notify.php %i\n", $notify);
+        self::assertDoesNotMatchRegularExpression('/^OnFailure=/m', $notify, 'a failing notice must not notify itself');
+        self::assertSame(Units::NOTIFY_SERVICE, 'relical-notify@.service');
+    }
+
+    /** @return iterable<array{string}> */
+    public static function badRootScripts(): iterable
+    {
+        foreach (['', 'relical-root', '/opt/psa/../tmp/x', '/opt/psa/x y', "/opt/psa/x\nExecStart=/bin/sh", '/opt/psa/x;id'] as $path) {
+            yield [$path];
+        }
+    }
+
+    /** @dataProvider badRootScripts */
+    public function testRefusesARootScriptThatIsNotAPlainAbsolutePath(string $path): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        Units::renderAll(Units::loadTemplates(self::TEMPLATES), '01:00', $path);
     }
 
     public function testServicesYieldCpuAndDiskLikeTheCoreUnits(): void
@@ -154,7 +184,7 @@ final class UnitsTest extends TestCase
         try {
             $paths = [];
             foreach (self::rendered() as $name => $unit) {
-                $unit = str_replace('/usr/local/lib/relical/relical', '/bin/true', $unit);
+                $unit = str_replace(['/usr/local/lib/relical/relical', Units::DEFAULT_ROOT_SCRIPT], '/bin/true', $unit);
                 file_put_contents($dir . '/' . $name, $unit);
                 $paths[] = $dir . '/' . $name;
             }
