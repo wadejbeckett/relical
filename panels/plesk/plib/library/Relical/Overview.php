@@ -82,7 +82,7 @@ final class Overview
      * why ($error: RootScripts::error() of the whole call).
      *
      * @param ?array<mixed> $data
-     * @return array{public_key: array{key: string, error: string}, status: array{code: int, stdout: string, stderr: string, timed_out: bool}, report: array{code: int, stdout: string, stderr: string, timed_out: bool}, last_failure: ?array{unit: string, time: string}}
+     * @return array{public_key: array{key: string, error: string}, status: array{code: int, stdout: string, stderr: string, timed_out: bool}, report: array{code: int, stdout: string, stderr: string, timed_out: bool}, last_failure: ?array{unit: string, time: string}, config_destination: string}
      */
     public static function parse(?array $data, string $error): array
     {
@@ -93,6 +93,7 @@ final class Overview
                 : ['key' => '', 'error' => $error],
         ];
         $out['last_failure'] = Notify::parseRecord($data['last_failure'] ?? null);
+        $out['config_destination'] = is_string($data['config_destination'] ?? null) ? $data['config_destination'] : '';
         foreach (['status', 'report'] as $part) {
             $call = $data[$part] ?? null;
             $out[$part] = is_array($call) && is_int($call['code'] ?? null) && is_string($call['stdout'] ?? null) && is_string($call['stderr'] ?? null)
@@ -153,5 +154,34 @@ final class Overview
             'skipped' => $report['available'] ? $report['skipped_count'] : null,
             'last_failure' => $failure,
         ];
+    }
+
+    /**
+     * The destination config.json sends backups to, as Destination::display()
+     * shows it, or '' when there is no configuration or it cannot be read.
+     * After a reinstall Plesk's settings are empty while the old config.json
+     * is still in force; the settings page says so.
+     */
+    public static function configuredDestination(string $path): string
+    {
+        if (is_link($path) || !is_file($path)) {
+            return '';
+        }
+        $config = json_decode((string) @file_get_contents($path, false, null, 0, 65536), true);
+        if (!is_array($config)) {
+            return '';
+        }
+        $name = $config['default_destination'] ?? null;
+        $destination = is_string($name) ? ($config['destinations'][$name] ?? null) : null;
+        if (!is_array($destination) || !is_string($destination['repository'] ?? null)
+            || preg_match('#^sftp:([^@/\s]+)@([^:/\s]+):(\S*?)/\{subscription\}$#D', $destination['repository'], $m) !== 1) {
+            return '';
+        }
+        $port = 22;
+        if (is_string($destination['sftp_args'] ?? null) && preg_match('/(?:^|\s)-p (\d{1,5})(?:\s|$)/', $destination['sftp_args'], $p) === 1) {
+            $port = (int) $p[1];
+        }
+
+        return sprintf('%s@%s:%s (port %d)', $m[1], $m[2], $m[3], $port);
     }
 }

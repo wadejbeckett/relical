@@ -118,4 +118,24 @@ final class OverviewTest extends TestCase
             Overview::headline([], ['available' => false, 'failed_count' => 0, 'skipped_count' => 0], null)
         );
     }
+
+    public function testTheDestinationInForceIsReadFromConfigJson(): void
+    {
+        $config = \Noiz\Relical\ConfigWriter::render([
+            'sftp_host' => 'u000000-sub1.your-storagebox.example', 'sftp_port' => 23, 'sftp_user' => 'u000000-sub1',
+            'sftp_path' => 'relical', 'retention' => ['daily' => 14, 'weekly' => 8, 'monthly' => 12],
+            'backup_time' => '01:00', 'limit_upload_kib' => 0,
+        ], 'host.example.test');
+        file_put_contents($this->dir . '/config.json', \Noiz\Relical\ConfigWriter::toJson($config));
+
+        self::assertSame('u000000-sub1@u000000-sub1.your-storagebox.example:relical (port 23)', Overview::configuredDestination($this->dir . '/config.json'));
+        self::assertSame('', Overview::configuredDestination($this->dir . '/none.json'));
+        file_put_contents($this->dir . '/bad.json', '{"default_destination":"x","destinations":{"x":{"repository":"/srv/restic"}}}');
+        self::assertSame('', Overview::configuredDestination($this->dir . '/bad.json'));
+        file_put_contents($this->dir . '/garbage.json', 'not json');
+        self::assertSame('', Overview::configuredDestination($this->dir . '/garbage.json'));
+
+        self::assertSame('a@b.example:c (port 22)', Overview::parse(['config_destination' => 'a@b.example:c (port 22)'], 'x')['config_destination']);
+        self::assertSame('', Overview::parse(null, 'x')['config_destination']);
+    }
 }

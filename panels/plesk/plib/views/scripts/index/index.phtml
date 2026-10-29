@@ -56,6 +56,13 @@ $e = static fn ($value): string => htmlspecialchars((string) $value, ENT_QUOTES 
     above and the trusted host key, lists the backup path, and changes
     nothing.
 </p>
+<?php elseif ($this->configDestination !== ''): ?>
+<p class="relical-error">
+    The settings above are empty, but backups still go to
+    <code><?php echo $e($this->configDestination); ?></code>, from the
+    configuration written before (for example before the extension was
+    reinstalled). Save the settings to keep that destination or change it.
+</p>
 <?php else: ?>
 <p class="relical-muted">Save the Storage Box host, user and path above to check the connection.</p>
 <?php endif; ?>

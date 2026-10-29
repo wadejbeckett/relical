@@ -8,7 +8,8 @@ declare(strict_types=1);
  *     plesk bin extension --exec relical overview.php
  *
  * Prints {"public_key": {"key", "error"}, "status": {...}, "report": {...},
- * "last_failure": {"unit", "time"} or null}
+ * "last_failure": {"unit", "time"} or null, "config_destination": the
+ * destination config.json is using, or ""}
  * where status and report are the core's answer to `relical status` and
  * `relical report` ({code, stdout, stderr, timed_out}), each stopped after
  * Overview::timeout() seconds (6 for status, 12 for report). Takes no arguments.
@@ -37,7 +38,11 @@ try {
 }
 ScriptIO::requireRoot('overview.php');
 
-$out = ['public_key' => Overview::publicKey(Paths::SSH_KEY . '.pub'), 'last_failure' => Overview::lastFailure(Paths::LAST_FAILURE)];
+$out = [
+    'public_key' => Overview::publicKey(Paths::SSH_KEY . '.pub'),
+    'last_failure' => Overview::lastFailure(Paths::LAST_FAILURE),
+    'config_destination' => Overview::configuredDestination(Paths::CONFIG),
+];
 foreach (['status', 'report'] as $command) {
     try {
         $out[$command] = Overview::call(Process::capture(Command::parse([$command])->argv(), Overview::timeout($command)));
