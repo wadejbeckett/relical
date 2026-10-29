@@ -1,4 +1,4 @@
-VERSION ?= 0.1.0-dev
+VERSION ?= 0.2.0
 RELICAL_RESTIC ?= $(CURDIR)/.tools/restic
 RELICAL_REST_SERVER ?= $(CURDIR)/.tools/rest-server
 .PHONY: tools test integration e2e build plesk-ext
