@@ -390,3 +390,60 @@ func TestPanelConfigStderrNeverHoldsTheKey(t *testing.T) {
 		t.Errorf("%+v", r)
 	}
 }
+
+// A key that straddles the 64 KiB cut of config_command's stderr leaves
+// no part of itself in the error: the key, then filler that pushes all but
+// its first bytes past the cut.
+func TestPanelConfigStderrKeyStraddlingTheCut(t *testing.T) {
+	e, _, _ := setup(t, "local")
+	withServer(t, &e, `printf '%s' "$PLESK_BACKUP_PASSWORD" >&2; head -c $((65536 - ${#PLESK_BACKUP_PASSWORD} + 10)) /dev/zero | tr '\0' x >&2; exit 1`)
+	r := e.BackupPanelConfig(context.Background())
+	key, _ := os.ReadFile(filepath.Join(e.Cfg.KeysDir, "_server.key"))
+	k := strings.TrimSpace(string(key))
+	if r.OK || len(k) < 20 || !strings.Contains(r.Error, "exit 1") {
+		t.Fatalf("%+v", r)
+	}
+	// No 8 bytes of the key, from anywhere in it, are in the error.
+	for i := 0; i+8 <= len(k); i++ {
+		if strings.Contains(r.Error, k[i:i+8]) {
+			t.Fatalf("the error holds part of the key (from byte %d): ...%s", i, r.Error[len(r.Error)-80:])
+		}
+	}
+}
+
+// tailBuffer replaces the secret wherever it falls: whole, split across
+// writes, or straddling the cut at the front, at every offset and chunk
+// size.
+func TestTailBufferScrubsTheSecretAtTheCut(t *testing.T) {
+	secret := "S3CRETKEY-0123456789abcdef"
+	for max := len(secret); max <= len(secret)+40; max += 7 {
+		for pre := 0; pre <= 2*max; pre++ {
+			for _, chunk := range []int{1, 3, 5, 1 << 20} {
+				stream := strings.Repeat("a", pre) + secret + strings.Repeat("b", max-3) + secret[:4]
+				w := &tailBuffer{max: max, secret: []byte(secret)}
+				for i := 0; i < len(stream); i += chunk {
+					end := i + chunk
+					if end > len(stream) {
+						end = len(stream)
+					}
+					w.Write([]byte(stream[i:end]))
+				}
+				got := w.String()
+				if len(got) > max {
+					t.Fatalf("max %d pre %d chunk %d: kept %d bytes", max, pre, chunk, len(got))
+				}
+				// The trailing secret[:4] is an unfinished prefix and is
+				// kept; nothing else of the secret may be.
+				body := strings.TrimSuffix(got, secret[:4])
+				for i := 1; i < len(secret); i++ {
+					if strings.HasPrefix(body, secret[i:]) && len(secret)-i >= 3 {
+						t.Fatalf("max %d pre %d chunk %d: the tail starts with the key's last %d bytes: %q", max, pre, chunk, len(secret)-i, got)
+					}
+				}
+				if strings.Contains(body, secret[:6]) {
+					t.Fatalf("max %d pre %d chunk %d: key in %q", max, pre, chunk, got)
+				}
+			}
+		}
+	}
+}

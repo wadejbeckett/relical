@@ -175,7 +175,7 @@ func runConfigCommand(ctx context.Context, argv, env []string, secret string) er
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = 5 * time.Second
 	cmd.Env = env
-	stderr := &tailBuffer{max: maxCommandStderr}
+	stderr := &tailBuffer{max: maxCommandStderr, secret: []byte(secret)}
 	cmd.Stdout, cmd.Stderr = stderr, stderr
 	err := cmd.Run()
 	if cmd.Process != nil {
@@ -183,12 +183,10 @@ func runConfigCommand(ctx context.Context, argv, env []string, secret string) er
 		// be writing the staging file, or write it again after it is deleted.
 		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
+	// The tail goes into the result, state and the report: tailBuffer has
+	// already replaced the key, should the command print its
+	// PLESK_BACKUP_PASSWORD.
 	msg := strings.TrimSpace(stderr.String())
-	if secret != "" {
-		// The tail goes into the result, state and the report: never the
-		// key, should the command print its PLESK_BACKUP_PASSWORD.
-		msg = strings.ReplaceAll(msg, secret, "***")
-	}
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:
 		return fmt.Errorf("config_command: timed out after %s and was killed: %s", PanelConfigTimeout, msg)
@@ -204,18 +202,33 @@ func runConfigCommand(ctx context.Context, argv, env []string, secret string) er
 	return nil
 }
 
-// tailBuffer keeps the last max bytes written to it.
+// tailBuffer keeps the last max bytes written to it, with every
+// occurrence of secret (when set) replaced by "***". The secret is replaced
+// as the bytes arrive, before anything is cut from the front, so a key that
+// straddles the cut never leaves part of itself in the tail: a byte is cut
+// only once it is max bytes (at least the secret's length) from the end, by
+// which time any occurrence it belongs to has arrived whole and been
+// replaced.
 type tailBuffer struct {
-	buf bytes.Buffer
-	max int
+	b      []byte
+	max    int
+	secret []byte
 }
 
 func (w *tailBuffer) Write(p []byte) (int, error) {
-	w.buf.Write(p)
-	if extra := w.buf.Len() - w.max; extra > 0 {
-		w.buf.Next(extra)
+	// Only the bytes from here on can hold an occurrence not yet replaced.
+	from := len(w.b) - len(w.secret) + 1
+	if from < 0 {
+		from = 0
+	}
+	w.b = append(w.b, p...)
+	if len(w.secret) > 0 && bytes.Contains(w.b[from:], w.secret) {
+		w.b = append(w.b[:from:from], bytes.ReplaceAll(w.b[from:], w.secret, []byte("***"))...)
+	}
+	if extra := len(w.b) - w.max; extra > 0 {
+		w.b = w.b[:copy(w.b, w.b[extra:])]
 	}
 	return len(p), nil
 }
 
-func (w *tailBuffer) String() string { return w.buf.String() }
+func (w *tailBuffer) String() string { return string(w.b) }
