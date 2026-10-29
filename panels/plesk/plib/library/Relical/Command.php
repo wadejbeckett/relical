@@ -121,6 +121,10 @@ final class Command
                     self::emit('path', self::optional($flags, 'path', [self::class, 'path']))
                 );
                 self::only($flags, ['subscription', 'snapshot', 'path']);
+                // As the core refuses it: _server snapshots hold one file.
+                if ($flags['subscription'] === Paths::SERVER_REPO && array_key_exists('path', $flags)) {
+                    throw new InvalidArgumentException('_server snapshots hold one file; ls takes no --path for them');
+                }
                 break;
 
             case 'restore':

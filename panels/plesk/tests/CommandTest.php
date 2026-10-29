@@ -172,6 +172,7 @@ final class CommandTest extends TestCase
         yield 'snapshots' => [['snapshots', '--subscription', 'example.test', '--unit', 'files'], ['snapshots', '--subscription', 'example.test', '--unit', 'files']];
         yield 'snapshots server' => [['snapshots', '--subscription', '_server'], ['snapshots', '--subscription', '_server']];
         yield 'ls' => [['ls', '--subscription', 'example.test', '--snapshot', 'abcdef12', '--path', 'httpdocs/wp-content'], ['ls', '--subscription', 'example.test', '--snapshot', 'abcdef12', '--path', 'httpdocs/wp-content']];
+        yield 'ls of _server' => [['ls', '--subscription', '_server', '--snapshot', 'abcdef12'], ['ls', '--subscription', '_server', '--snapshot', 'abcdef12']];
         yield 'restore mail' => [
             ['restore', '--subscription', 'example.test', '--unit', 'mail', '--domain', 'shop.example.test', '--mailbox', 'info', '--snapshot', 'latest', '--folder', 'Restored/Inbox'],
             ['restore', '--subscription', 'example.test', '--unit', 'mail', '--domain', 'shop.example.test', '--mailbox', 'info', '--snapshot', 'latest', '--folder', 'Restored/Inbox'],
@@ -226,6 +227,7 @@ final class CommandTest extends TestCase
         yield 'flag as value' => [['snapshots', '--subscription', '--unit']];
         yield 'dash value for path' => [['ls', '--subscription', 'example.test', '--snapshot', 'abcdef12', '--path', '-osftp.command=id']];
         yield 'ls of latest' => [['ls', '--subscription', 'example.test', '--snapshot', 'latest']];
+        yield 'ls of _server with a path' => [['ls', '--subscription', '_server', '--snapshot', 'abcdef12', '--path', 'httpdocs']];
         yield 'ls of a short id' => [['ls', '--subscription', 'example.test', '--snapshot', 'abcdef1']];
         yield 'ls of an upper-case id' => [['ls', '--subscription', 'example.test', '--snapshot', 'ABCDEF12']];
         yield 'dash value for folder' => [['restore', '--subscription', 'example.test', '--unit', 'mail', '--domain', 'example.test', '--mailbox', 'info', '--folder', '-x']];
