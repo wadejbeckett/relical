@@ -113,18 +113,37 @@ func TestRestoreMovesTheFinishedFolderInOneStep(t *testing.T) {
 	}
 }
 
+// A folder that takes the restored folder's name while restic runs is
+// not the up-front refusal: restic ran in full, so the error says the
+// folder appeared during the restore (panels count that restore), on the
+// one-step move and on the fallback that creates the folder in home.
 func TestRestoreFilesTargetAppearsMidRun(t *testing.T) {
-	e, env, _ := webSetup(t)
-	target := filepath.Join(home(e), "restored-2026-10-20-aaaaaaaa")
-	env["FAKE_RESTORE_MKDIR"] = target
-	_, err := RunFiles(context.Background(), e, FilesRequest{Subscription: "example.test", Snapshot: "latest", Path: "httpdocs"})
-	if err == nil || !strings.Contains(err.Error(), "already exists") {
-		t.Fatalf("err = %v", err)
+	for _, kernelErr := range []error{nil, syscall.EXDEV} {
+		name := "renameat2"
+		if kernelErr != nil {
+			name = "fallback " + kernelErr.Error()
+		}
+		t.Run(name, func(t *testing.T) {
+			e, env, _ := webSetup(t)
+			if kernelErr != nil {
+				noRenameat2(t, kernelErr)
+			}
+			target := filepath.Join(home(e), "restored-2026-10-20-aaaaaaaa")
+			env["FAKE_RESTORE_MKDIR"] = target
+			_, err := RunFiles(context.Background(), e, FilesRequest{Subscription: "example.test", Snapshot: "latest", Path: "httpdocs"})
+			want := "restored folder " + target + " appeared in the webspace while the restore ran; nothing was replaced; ask the server's administrator"
+			if err == nil || err.Error() != want {
+				t.Fatalf("err = %v, want %q", err, want)
+			}
+			if strings.Contains(err.Error(), "already exists") {
+				t.Errorf("worded like the up-front refusal: %v", err)
+			}
+			if entries, err := os.ReadDir(target); err != nil || len(entries) != 0 {
+				t.Errorf("the customer's directory was altered: %v %v", entries, err)
+			}
+			noStaging(t, e)
+		})
 	}
-	if entries, err := os.ReadDir(target); err != nil || len(entries) != 0 {
-		t.Errorf("the customer's directory was altered: %v %v", entries, err)
-	}
-	noStaging(t, e)
 }
 
 func TestPrepareTreeDropsSetIDAndSpecialFiles(t *testing.T) {

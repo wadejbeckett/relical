@@ -36,13 +36,17 @@ final class RestoreRecord
 
     /**
      * Core refusals that come before anything is restored: the target is
-     * there already, the request is not in the backup, the disk is too
-     * full, the repository is locked, or another run holds relical's lock.
-     * A restore refused like this does not count towards
-     * MAX_RESTORES_PER_DAY.
+     * there already (only the core's up-front wording, errTargetExists and
+     * errPartialTarget in core/internal/restore/webspace.go), the request
+     * is not in the backup, the disk is too full, the repository is locked,
+     * or another run holds relical's lock. A restore refused like this does
+     * not count towards MAX_RESTORES_PER_DAY. A folder that appeared while
+     * the restore ran (errTargetAppeared) comes after restic ran in full,
+     * so that restore counts.
      */
     private const NOTHING_RESTORED = [
-        '/already exists/',
+        '/ already exists \(it may be from an earlier, possibly incomplete restore of this snapshot\); delete or rename it to restore this snapshot again/',
+        '/ already exists and is still owned by root: it is left from a restore of this snapshot that was interrupted; /',
         '/is not in snapshot/',
         '/^no backup snapshots/',
         '/^snapshot [0-9a-f]+ not found/',
@@ -63,6 +67,7 @@ final class RestoreRecord
     /** Core errors a customer may read as they are. */
     private const CUSTOMER_SAFE = [
         '/already exists/',
+        '/^restored folder \/\S+ appeared in the webspace while the restore ran; nothing was replaced; ask the server\'s administrator$/',
         '/is not in snapshot/',
         '/^no backup snapshots/',
         '/^snapshot [0-9a-f]+ not found/',

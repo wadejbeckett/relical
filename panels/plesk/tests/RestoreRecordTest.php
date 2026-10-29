@@ -156,6 +156,10 @@ final class RestoreRecordTest extends TestCase
             '/var/www/vhosts/example.test/restored-2026-10-29-1a2b3c4d already exists (it may be from an earlier, possibly incomplete restore of this snapshot); delete or rename it to restore this snapshot again',
             '/var/www/vhosts/example.test/restored-2026-10-29-1a2b3c4d already exists (it may be from an earlier, possibly incomplete restore of this snapshot); delete or rename it to restore this snapshot again.',
         ];
+        yield 'a folder that appeared while the restore ran' => [
+            "restored folder /var/www/vhosts/example.test/restored-2026-10-29-1a2b3c4d appeared in the webspace while the restore ran; nothing was replaced; ask the server's administrator",
+            "Restored folder /var/www/vhosts/example.test/restored-2026-10-29-1a2b3c4d appeared in the webspace while the restore ran; nothing was replaced; ask the server's administrator.",
+        ];
     }
 
     /** @dataProvider coreErrors */
@@ -182,6 +186,7 @@ final class RestoreRecordTest extends TestCase
         yield 'another subscription in a home path' => ['/var/www/vhosts/other.test/example.test/restored-x already exists'];
         yield 'a look-alike subscription' => ['/var/www/vhosts/example.test.evil/restored-x already exists'];
         yield 'a path outside any home' => ['/root/restored-x already exists'];
+        yield 'another subscription\'s folder appeared' => ["restored folder /var/www/vhosts/other.test/restored-x appeared in the webspace while the restore ran; nothing was replaced; ask the server's administrator"];
         yield 'another domain' => ['mailbox info@example.test is not in snapshot 1a2b3c4d (other.test)'];
     }
 
@@ -278,7 +283,6 @@ final class RestoreRecordTest extends TestCase
         yield 'over the limit' => [RestoreRecord::TOO_MANY_RESTORES];
         yield 'already exists' => ['/var/www/vhosts/example.test/restored-2026-10-29-6779981c already exists (it may be from an earlier, possibly incomplete restore of this snapshot); delete or rename it to restore this snapshot again'];
         yield 'left by root' => ['/var/www/vhosts/example.test/restored-2026-10-29-6779981c already exists and is still owned by root: it is left from a restore of this snapshot that was interrupted; ask the server\'s administrator to remove it, then restore again'];
-        yield 'database already exists' => ['/var/www/vhosts/example.test/restored-2026-10-29-6779981c/example_wp.sql already exists'];
         yield 'not in snapshot' => ['path "httpdocs/x" is not in snapshot 6779981c'];
         yield 'no snapshots' => ['no backup snapshots'];
         yield 'snapshot not found' => ['snapshot 6779981c not found'];
@@ -304,7 +308,14 @@ final class RestoreRecordTest extends TestCase
     public function testARestoreThatRanAndFailedStillCounts(): void
     {
         $now = strtotime('2026-10-29T12:00:00Z');
-        foreach (['the restore did not finish in time', RestoreRecord::STOPPED, 'restic: exit 1', 'exit 3', ''] as $error) {
+        $ran = [
+            'the restore did not finish in time', RestoreRecord::STOPPED, 'restic: exit 1', 'exit 3', '',
+            // The core's errTargetAppeared (core/internal/restore/webspace.go): restic ran in full.
+            "restored folder /var/www/vhosts/example.test/restored-2026-10-29-6779981c appeared in the webspace while the restore ran; nothing was replaced; ask the server's administrator",
+            // db.go renameInPlace, after the dump was written.
+            '/var/www/vhosts/example.test/restored-2026-10-29-6779981c/example_wp.sql already exists',
+        ];
+        foreach ($ran as $error) {
             $records = [self::record('files', '2026-10-29T11:00:00Z', ['state' => 'failed', 'error' => $error])];
             self::assertSame(1, RestoreRecord::recentCustomerRestores($records, 'example.test', $now), $error);
         }

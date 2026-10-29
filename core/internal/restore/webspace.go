@@ -159,6 +159,15 @@ func (w *webspace) targetExists(name string) error {
 	return errTargetExists(path)
 }
 
+// errTargetAppeared is the refusal when the restored folder's name was
+// free before the restore ran but taken by the time the finished folder
+// was moved into home: the restore ran in full, so it is worded apart
+// from the up-front refusals (errTargetExists, errPartialTarget), which
+// panels count as refused before anything ran.
+func errTargetAppeared(path string) error {
+	return fmt.Errorf("restored folder %s appeared in the webspace while the restore ran; nothing was replaced; ask the server's administrator", path)
+}
+
 func errPartialTarget(path string) error {
 	return fmt.Errorf("%s already exists and is still owned by root: it is left from a restore of this snapshot that was interrupted; ask the server's administrator to remove it, then restore again", path)
 }
@@ -203,7 +212,7 @@ func (w *webspace) place(stage, name string) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, syscall.EEXIST):
-		return w.targetExists(name)
+		return errTargetAppeared(filepath.Join(w.home, name))
 	case !errors.Is(err, syscall.EXDEV) && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOSYS):
 		return fmt.Errorf("moving %s into %s: %w", name, w.home, err)
 	}
@@ -241,7 +250,7 @@ func (w *webspace) mkdirEmpty(name string) (int, error) {
 	path := filepath.Join(w.home, name)
 	if err := syscall.Mkdirat(w.fd, name, 0o700); err != nil {
 		if errors.Is(err, syscall.EEXIST) {
-			return -1, w.targetExists(name)
+			return -1, errTargetAppeared(path)
 		}
 		return -1, fmt.Errorf("creating %s: %w", path, err)
 	}
