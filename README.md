@@ -2,17 +2,17 @@
 
 Backup for hosting servers (mail, website files, databases and the panel configuration), built on restic. A panel-neutral core (`core/`) with thin control-panel adapters (`panels/`, starting with Plesk). Part of the Noiz Déjà Vu backup range.
 
-Status: phase 2 in development (mail, website files and databases are backed up per subscription, and the panel configuration into its own repository; mail can be restored; file, database and panel configuration restores are being added). Not ready for production.
+Status: phase 2 in development (mail, website files and databases are backed up per subscription, and the panel configuration into its own repository; each can be restored next to the live data). Not ready for production.
 
 ## Build and test
 
     make tools        # pinned restic 0.19.1 and rest-server 0.14.0 into .tools/
     make test         # unit tests
     make integration  # against real restic and an append-only rest-server
-    make e2e          # backup and restore through a real Dovecot in Docker
+    make e2e          # backup and restore through a real Dovecot and MariaDB in Docker
     make build        # dist/relical, static
 
-`make e2e` runs a `debian:12` container, installs Dovecot inside it (so it needs network access), and runs the whole backup and restore cycle against it. Set `RELICAL_DOCKER_ARGS` to pass extra arguments to `docker run`, for example `RELICAL_DOCKER_ARGS="--network host" make e2e` on a host whose default container network has no outbound access.
+`make e2e` runs a `debian:12` container, installs Dovecot and MariaDB inside it (so it needs network access), and runs the whole backup and restore cycle against it. Set `RELICAL_DOCKER_ARGS` to pass extra arguments to `docker run`, for example `RELICAL_DOCKER_ARGS="--network host" make e2e` on a host whose default container network has no outbound access.
 
 ## Commands
 
@@ -32,23 +32,27 @@ Relical backs up **subscriptions** (a hosting account, named by its main domain)
 | `check --subscription S` or `--all` [`--read-data-subset 5%`] | Checks repository integrity, optionally reading a share of the stored data. `--all` includes `_server` as `forget` does. |
 | `snapshots --subscription S` [`--unit U`] | Lists the subscription's snapshots, or only those of one unit. `--subscription _server` names the panel configuration's repository. |
 | `restore` [`--subscription S`] [`--unit mail`] `--domain D --mailbox M` [`--snapshot ID`] [`--folder F`] | Restores a mailbox, or one IMAP folder, into a new folder (see Restores). Without `--subscription`, the subscription is the one whose mail domains include `D`; with it, `D` must be one of that subscription's mail domains. `--snapshot` takes `latest` (the default) or an id of 8 to 64 hex characters. |
+| `restore --subscription S --unit files` [`--snapshot ID`] [`--path P`] | Restores the webspace, or the path `P` under it, into `<home>/restored-<snapshot date>-<short id>/` (see Restores). `P` is relative to `home`, for example `httpdocs` or `httpdocs/wp-content`. |
+| `restore --subscription S --unit db --database D` [`--snapshot ID`] | Writes database `D`'s dump to `<home>/restored-<snapshot date>-<short id>/D.sql`; it is not imported. |
+| `restore --subscription _server --unit panel-config` [`--snapshot ID`] | Writes the panel configuration file to `<state_dir>/restore/panel-config-<snapshot date>-<short id>.tar`, readable by root only. |
+| `ls --subscription S --snapshot ID` [`--path P`] | Lists one directory level of a snapshot, at most 5,000 entries (`"truncated": true` when there are more). `P` is relative to `home` for a `files` snapshot and to `/` for a `db` or `mail` one (a `db` snapshot holds `/<name>.sql`); for `_server` it lists the panel configuration file and takes no `--path`. `ID` must be an id (8 to 64 hex characters), not `latest`. A path that is not in the snapshot is an error. |
 | `adopt --subscription S` | Records the inventory's id as the owner of an existing repository that has a key but no owner file, after confirming that the repository opens (see Repository owners). Needed once per such repository when the inventory comes from `inventory_command`. |
 | `status` | Prints the last recorded result per subscription, unit and action, and each repository's stored size from the last `backup --all` (see State). |
 
-Units are `mail`, `files`, `db` and `panel-config`. This version backs up all four, and restores `mail` only; any unit other than `mail` on `restore` is reported as not supported.
+Units are `mail`, `files`, `db` and `panel-config`. This version backs up and restores all four. `restore` without `--unit` restores mail.
 
 `backup`, `forget` and `check` need exactly one of `--subscription` or `--all`, and take an exclusive lock so two runs never overlap; a second run fails at once with "another relical run holds the lock". `--all` runs the subscriptions one at a time, in inventory order. Each unit gives its own result and snapshot:
 
 - `mail`: one snapshot tagged `mail` per subscription per run, covering the mailboxes of all its mail domains. Dovecot's index and cache files and each Maildir's `tmp/` are left out.
 - `files`: one snapshot tagged `files` of the subscription's `files` paths. restic stays on each path's file system (`--one-file-system`) and skips directories marked with a `CACHEDIR.TAG` (`--exclude-caches`); each `file_excludes` pattern is applied relative to each path.
 - `db`: one snapshot per database, tagged `db` and `db:<name>`, holding the single file `/<name>.sql`. `mysqldump --defaults-file=<mysql.defaults_file> --single-transaction --quick --routines --triggers --events --no-tablespaces <name>` is streamed into restic (`backup --stdin-from-command`), so the dump is never written to disk. A failing dump fails that database only, and restic saves no snapshot for it. Before any dump, `mysql.defaults_file` must exist and be a regular file, not a symlink, with mode 0600 or stricter and, when Relical runs as root, owned by root; otherwise every database of the subscription fails with that error. Databases of a type other than `mysql` are reported as OK with the note "skipped: type X not supported".
-- `panel-config` (subscription `_server`): Relical runs the inventory's `server.config_command` with `{output}` replaced by `<state_dir>/staging/panel-config-<UTC time>.<config_ext>` (the staging directory is mode 0700), backs that file up into the `_server` repository tagged `panel-config`, and deletes it, also when the command or restic fails; a file left by a killed run is deleted at the start of the next. The command runs with `PATH` as its only environment variable, plus `PLESK_BACKUP_PASSWORD` set to the `_server` repository's key when `server.encrypt_with_repo_key` is on (the default), so the passwords inside Plesk's backup are encrypted with that key too. It runs in its own process group and gets 30 minutes; on a timeout the whole group is killed and the unit fails. A non-zero exit, or no file written, fails the unit and nothing is backed up. **Relical never restores the panel configuration into Plesk**: a restore (being added) only writes the tar back to a root-only file, and the administrator restores from it by hand with `plesk bin pleskrestore`, giving the same `PLESK_BACKUP_PASSWORD` (the `_server` key in `keys_dir`).
+- `panel-config` (subscription `_server`): Relical runs the inventory's `server.config_command` with `{output}` replaced by `<state_dir>/staging/panel-config-<UTC time>.<config_ext>` (the staging directory is mode 0700), backs that file up into the `_server` repository tagged `panel-config`, and deletes it, also when the command or restic fails; a file left by a killed run is deleted at the start of the next. The command runs with `PATH` as its only environment variable, plus `PLESK_BACKUP_PASSWORD` set to the `_server` repository's key when `server.encrypt_with_repo_key` is on (the default), so the passwords inside Plesk's backup are encrypted with that key too. It runs in its own process group and gets 30 minutes; on a timeout the whole group is killed and the unit fails. A non-zero exit, or no file written, fails the unit and nothing is backed up. **Relical never restores the panel configuration into Plesk**: a restore only writes the tar back to a root-only file, and the administrator restores from it by hand with `plesk bin pleskrestore`, giving the same `PLESK_BACKUP_PASSWORD` (the `_server` key in `keys_dir`).
 
 A unit that is not among the subscription's `features` is not run, even if mail domains, files or databases are listed; with `--unit`, it is reported as OK with a note. A subscription with none of the features is reported as OK with a note, and nothing is run for it. If restic saved a snapshot but could not read some files (exit code 3), `mail` and `files` are still OK, with a note. After a `backup --all`, Relical runs `restic stats --mode raw-data` on each repository that received a snapshot and records its stored size; a failed `stats` is a note on that result, never a failure, and the previous size is kept.
 
 Each run is recorded in `state.json` in the state directory, which `status` reads. `forget` makes one call per repository with `--group-by tags`, so the mail, files and each database's snapshots are kept by the retention policy independently of each other. `backup`, `forget` and `check` wait up to 30 minutes for a repository lock held by another restic process, and `forget` and `check` first remove stale locks left by a restic that was killed. A subscription whose repository does not exist yet (it has no key, because nothing has been backed up for it, such as a `db`-only subscription without databases) is OK for `forget` and `check`, with the note "no repository yet (nothing has been backed up)"; a key readable by others or a repository recorded as another id's still fails.
 
-Exit codes: `0` success; `1` an error, or at least one subscription's job failed (the JSON still lists every subscription's result); `2` a usage error: an unknown command, an unexpected argument, a flag the command does not take, an unknown `--unit`, neither or both of `--subscription` and `--all` on `backup`, `forget` or `check`, a missing `--subscription` on `mailboxes` or `snapshots`, or a missing `--domain` or `--mailbox` on `restore`. A subscription that is not in the inventory, or an inventory that fails validation, prints `{"error": ...}` and exits `1`.
+Exit codes: `0` success; `1` an error, or at least one subscription's job failed (the JSON still lists every subscription's result); `2` a usage error: an unknown command, an unexpected argument, a flag the command does not take, an unknown `--unit`, neither or both of `--subscription` and `--all` on `backup`, `forget` or `check`, a missing `--subscription` on `mailboxes` or `snapshots`, a missing `--subscription` or `--snapshot` on `ls`, or a `restore` without the flags its unit needs (`--domain` and `--mailbox` for mail, `--database` for db, `--subscription` for every unit but mail) or with one it does not take (`--folder` is for mail only, `--path` for files only). A subscription that is not in the inventory, or an inventory that fails validation, prints `{"error": ...}` and exits `1`.
 
 ### Sample output
 
@@ -155,6 +159,43 @@ Result fields: `subscription`; `unit` (`mail`, `files`, `db`, `panel-config`; ab
       "messages": 3
     }
 
+`relical restore --subscription example.test --unit files --path httpdocs`:
+
+    {
+      "subscription": "example.test",
+      "unit": "files",
+      "snapshot": "4f0a3c2e9d1b7a6c5e8f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f",
+      "path": "httpdocs",
+      "restored_to": "/var/www/vhosts/example.test/restored-2026-10-15-4f0a3c2e",
+      "files": 1824,
+      "bytes": 73400320
+    }
+
+`relical restore --subscription example.test --unit db --database example_wp`:
+
+    {
+      "subscription": "example.test",
+      "unit": "db",
+      "database": "example_wp",
+      "snapshot": "7c1d9e0f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5",
+      "restored_to": "/var/www/vhosts/example.test/restored-2026-10-15-7c1d9e0f/example_wp.sql",
+      "bytes": 1048576,
+      "note": "the dump is not imported; load it into a database with the mysql client or phpMyAdmin"
+    }
+
+`relical ls --subscription example.test --snapshot 4f0a3c2e --path httpdocs`:
+
+    {
+      "subscription": "example.test",
+      "snapshot": "4f0a3c2e9d1b7a6c5e8f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f",
+      "path": "/var/www/vhosts/example.test/httpdocs",
+      "entries": [
+        {"name": "index.php", "type": "file", "size": 405, "mtime": "2026-09-30T10:12:44Z"},
+        {"name": "wp-content", "type": "dir", "size": 0, "mtime": "2026-10-14T21:03:10Z"}
+      ],
+      "truncated": false
+    }
+
 `relical inventory` (one subscription; `file_excludes` shows the defaults that apply when none are given):
 
     {
@@ -191,6 +232,14 @@ Result fields: `subscription`; `unit` (`mail`, `files`, `db`, `panel-config`; ab
 
 A restore never overwrites mail. It restores the snapshot into a staging directory and imports it with `doveadm import` into a new IMAP folder named `Restored <snapshot date> <short id>` (with `--folder`, only that folder is imported). The user then copies what they need back. Restoring the same snapshot twice is refused while the first "Restored" folder still exists; delete or rename that folder first. A restore fails, and removes any partial folder it created, if the mailbox is not in the snapshot, if `doveadm` reports that it could not read the restored copy, or if the folder does not exist afterwards. Restores need `doveadm` and run as root.
 
+File and database restores never write into the live webspace either. Before anything runs, Relical checks that `sys_user` exists with the inventory's `uid` and `gid`, that `home` is `<files root>/<name>`, is a directory and not a symlink, and is owned by `uid`; a `--path` must be relative and clean, without `..`, a leading `-` or control characters, and must exist in the snapshot (checked with `restic ls`, because `restic restore` succeeds having restored nothing for a path it does not have). Then:
+
+- `files`: the snapshot is restored into a root-only staging directory, `<state_dir>/restore/files-<subscription>-<time>` (mode 0700), handed to the subscription's user there, and moved into a new folder `<home>/restored-<snapshot date>-<short id>/` (mode 0700, owned by the user), keeping its layout under `home`: `--path httpdocs` gives `restored-…/httpdocs/`. When the state directory is on another file system than the webspace, the tree is copied instead (modes and owners kept, times not; devices, fifos and sockets skipped) and the staging copy is deleted. Set-user-id and set-group-id bits are dropped. The folder is created relative to the opened `home` without following symlinks.
+- `db`: the dump (`/<name>.sql` in a snapshot tagged `db:<name>`) is streamed with `restic dump` into a temporary file in a new `<home>/restored-<snapshot date>-<short id>/` folder and renamed to `<name>.sql` (mode 0600, owned by the user) once complete; a failed dump leaves no file and no folder. The database does not have to be in the current inventory, so a database deleted since can still be restored: a `db:<name>` snapshot in the subscription's own repository is enough, because only a backup of that subscription's database can have written it. The name must still pass the inventory's database name rule. The dump is never imported.
+- `panel-config`: the file is streamed with `restic dump` to `<state_dir>/restore/panel-config-<snapshot date>-<short id>.tar` (mode 0600, root). Relical never runs `plesk bin pleskrestore`: the administrator restores from the file with it, giving the `_server` key as `PLESK_BACKUP_PASSWORD` when `encrypt_with_repo_key` is on, and deletes the file afterwards.
+
+As for mail, a second restore of the same snapshot is refused while its `restored-…` folder (or panel configuration file) exists; delete or rename it first.
+
 ## Configuration
 
 Copy `packaging/config.example.json` to `/etc/relical/config.json` and set mode `0600`; Relical refuses a configuration readable by others. Unknown keys are rejected. The main settings:
@@ -225,7 +274,7 @@ Each subscription has:
 - `renamed_from`: the subscription's previous name, when the panel renamed it (two subscriptions cannot give the same one). Backups then go to a new repository under the new name; the old repository is left as it is, and `relical inventory` lists the rename under `renamed`.
 - `features`: which units are backed up: `mail`, `files`, `db`.
 - `mail_domains`: the domains whose mailboxes belong to the subscription. A mail domain belongs to one subscription only, and may not be another subscription's name.
-- `sys_user`, `uid`, `gid`, `home`: the system user and webspace root, which file and database restores write into. They may be left empty (uid and gid 0) only when `features` contains neither `files` nor `db`. `home` must be `<files root>/<name>`; no two subscriptions' homes may be equal or nested. `uid` and `gid` must be those of `sys_user` on the system: they are not checked against it here, and file and database restores will check them before writing.
+- `sys_user`, `uid`, `gid`, `home`: the system user and webspace root, which file and database restores write into. They may be left empty (uid and gid 0) only when `features` contains neither `files` nor `db`. `home` must be `<files root>/<name>`; no two subscriptions' homes may be equal or nested. `uid` and `gid` must be those of `sys_user` on the system: they are not checked against it here; file and database restores check them before writing.
 - `files`: the backed-up directories (usually `[home]`), each equal to `home` or under it; `file_excludes`: patterns relative to each of them (default `logs/**`, `statistics/logs/**`, `tmp/**`, `.cagefs/**`).
 - `databases`: `{"type": "mysql", "name": "..."}` entries. A database (type and name) may be listed by one subscription only, and MySQL's and the panel's own databases are refused: `mysql`, `information_schema`, `performance_schema`, `sys`, `psa`, `apsc`, `horde`, `roundcubemail`, `atmail`, `sitebuilder5` and any name starting with `phpmyadmin` (compared without regard to case). Dumps run with the administrator's credentials, so either mistake would put another customer's, or every customer's, data into one subscription's repository.
 - `destination` and `retention`: overrides of the defaults, or empty and `null`.
