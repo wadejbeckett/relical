@@ -27,6 +27,8 @@ final class Action
     public const REMOVE_FILE = 'remove_file';
     /** Remove the directory at `path`, which must be empty by then. */
     public const REMOVE_DIR = 'remove_dir';
+    /** Rename `from` to `path` (same directory, so atomic). */
+    public const RENAME = 'rename';
 
     /**
      * @param array<string, mixed> $params
@@ -51,11 +53,11 @@ final class Action
         return new self(self::ENSURE_DIR, sprintf('directory %s (%04o)', $path, $mode), ['path' => $path, 'mode' => $mode]);
     }
 
-    public static function installBinary(string $from, string $to, string $sha256): self
+    public static function installBinary(string $from, string $to, string $sha256, string $verb = 'install'): self
     {
         return new self(
             self::INSTALL_BINARY,
-            sprintf('install %s (sha256 %s)', $to, substr($sha256, 0, 12)),
+            sprintf('%s %s (sha256 %s)', $verb, $to, substr($sha256, 0, 12)),
             ['from' => $from, 'path' => $to, 'sha256' => $sha256, 'mode' => 0755]
         );
     }
@@ -93,6 +95,11 @@ final class Action
     public static function removeDir(string $path, bool $optional = false): self
     {
         return new self(self::REMOVE_DIR, 'remove ' . $path, ['path' => $path], $optional);
+    }
+
+    public static function rename(string $from, string $to): self
+    {
+        return new self(self::RENAME, sprintf('rename %s to %s', $from, $to), ['from' => $from, 'path' => $to]);
     }
 
     /** The file or directory this step changes, or null for a note or a command. */

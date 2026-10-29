@@ -9,20 +9,24 @@ declare(strict_types=1);
  *
  * 1. Checks plib/bin/relical and plib/bin/restic against plib/bin/SHA256SUMS
  *    and refuses to go on if either is missing or differs.
- * 2. Installs both into /usr/local/lib/relical/ (0755, root), each through a
- *    temporary copy renamed into place.
- * 3. Creates /etc/relical, /etc/relical/keys, /etc/relical/ssh and
+ * 2. Checks that the saved settings render a valid configuration.
+ *    Nothing is changed before steps 1 and 2 pass.
+ * 3. Copies both binaries into /usr/local/lib/relical/ under staging names
+ *    (.relical.new, .restic.new), checks each copy, and only then renames
+ *    both into place (0755, root).
+ * 4. Creates /etc/relical, /etc/relical/keys, /etc/relical/ssh and
  *    /var/lib/relical (0700).
- * 4. Generates the Storage Box key /etc/relical/ssh/id_ed25519 if there is
- *    none. An existing key, known_hosts and the repository keys are never
- *    touched.
- * 5. Writes /etc/relical/mysql.cnf and, once the destination is set,
+ * 5. Generates the Storage Box key /etc/relical/ssh/id_ed25519 if there is
+ *    none, under a staging name renamed into place. An existing key,
+ *    known_hosts and the repository keys are never touched.
+ * 6. Writes /etc/relical/mysql.cnf and, once the destination is set,
  *    /etc/relical/config.json (as write-config.php does).
- * 6. Installs the backup and check units into /etc/systemd/system/, reloads
+ * 7. Installs the backup and check units into /etc/systemd/system/, reloads
  *    systemd and enables both timers.
  *
- * Every step is idempotent and printed. Any failure stops the run with a
- * message on stderr and exit code 1.
+ * Every step is idempotent and printed. Any failure stops the run with exit
+ * code 1 and a message on stderr naming the failed step, the steps already
+ * completed, the steps not done, and the command to run it all again.
  */
 
 use Noiz\Relical\InstallRunner;
@@ -75,10 +79,14 @@ try {
     $settings = Settings::fromPlesk();
     $units = Units::renderAll(Units::loadTemplates(__DIR__ . '/../resources/systemd'), $settings->backupTime());
 
-    // Plans every step (and verifies both binaries) before changing anything.
+    // Plans every step, verifies both binaries and renders the configuration
+    // before changing anything.
     $plan = $installer->install($isUpgrade, $units, $settings->configInput(), (string) gethostname());
 
-    (new InstallRunner(STDOUT, STDERR))->run($plan);
+    (new InstallRunner(STDOUT, STDERR))->run(
+        $plan,
+        'Every step is safe to repeat: fix the cause and run `plesk bin extension --exec relical post-install.php` again.'
+    );
     echo "Relical: done\n";
     exit(0);
 } catch (Throwable $e) {

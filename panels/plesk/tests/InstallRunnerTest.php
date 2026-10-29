@@ -84,6 +84,35 @@ final class InstallRunnerTest extends TestCase
         self::assertFileDoesNotExist($this->dir . '/after');
     }
 
+    public function testAFailureNamesWhatWasCompletedWhatWasNotAndHowToRerun(): void
+    {
+        file_put_contents($this->dir . '/a.new', 'a');
+
+        try {
+            (new InstallRunner($this->out, $this->err))->run([
+                Action::note('installing'),
+                Action::rename($this->dir . '/a.new', $this->dir . '/a'),
+                Action::rename($this->dir . '/b.new', $this->dir . '/b'),
+                Action::writeFile($this->dir . '/after', 'x', 0644),
+            ], 'Run post-install.php again.');
+            self::fail('the run went on after a failed step');
+        } catch (RuntimeException $e) {
+            $message = $e->getMessage();
+            self::assertStringStartsWith('rename ' . $this->dir . '/b.new to ' . $this->dir . '/b failed: could not rename', $message);
+            self::assertStringContainsString('Completed: rename ' . $this->dir . '/a.new to ' . $this->dir . '/a.', $message);
+            self::assertStringContainsString('Not done: rename ' . $this->dir . '/b.new to ' . $this->dir . '/b; write ' . $this->dir . '/after (0644).', $message);
+            self::assertStringEndsWith('Run post-install.php again.', $message);
+        }
+        self::assertSame('a', file_get_contents($this->dir . '/a'));
+        self::assertFileDoesNotExist($this->dir . '/after');
+    }
+
+    public function testAFailureOnTheFirstChangeSaysNothingWasChanged(): void
+    {
+        $this->expectExceptionMessage('Nothing was changed.');
+        (new InstallRunner($this->out, $this->err))->run([Action::note('x'), Action::run(['/bin/false'])]);
+    }
+
     public function testACommandThatExitsNonZeroFails(): void
     {
         $this->expectException(RuntimeException::class);

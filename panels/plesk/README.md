@@ -14,17 +14,20 @@ installer prints each step. It:
 
 1. Checks the bundled `relical` and `restic` against the package's
    `SHA256SUMS`, and stops if either is missing or differs.
-2. Installs both into `/usr/local/lib/relical/` (root, 0755). Each binary is
-   copied to a temporary file and renamed into place, so a failed install
-   never leaves a half-written binary.
-3. Creates `/etc/relical`, `/etc/relical/keys`, `/etc/relical/ssh` and
+2. Checks that the saved settings give a valid configuration. Nothing on
+   the server changes until checks 1 and 2 pass.
+3. Copies both binaries into `/usr/local/lib/relical/` under staging names,
+   checks each copy, and only then renames both into place (root, 0755).
+   A failed copy leaves the previous pair in place.
+4. Creates `/etc/relical`, `/etc/relical/keys`, `/etc/relical/ssh` and
    `/var/lib/relical` (root, 0700).
-4. Generates the Storage Box key `/etc/relical/ssh/id_ed25519` if there is
-   none yet. Its public half goes into the Storage Box's `authorized_keys`.
-5. Writes `/etc/relical/mysql.cnf` (0600) for the database dumps, and
+5. Generates the Storage Box key `/etc/relical/ssh/id_ed25519` if there is
+   none yet, under a staging name renamed into place. Its public half goes
+   into the Storage Box's `authorized_keys`.
+6. Writes `/etc/relical/mysql.cnf` (0600) for the database dumps, and
    `/etc/relical/config.json` (0600) once the Storage Box destination is
    saved in the extension's settings.
-6. Installs `relical-backup.service`, `relical-backup.timer`,
+7. Installs `relical-backup.service`, `relical-backup.timer`,
    `relical-check.service` and `relical-check.timer` into
    `/etc/systemd/system/` and enables both timers.
 
@@ -34,8 +37,11 @@ applies the retention policy afterwards. The weekly repository check runs on
 Sunday, twelve hours after the backup time. Until the destination is saved,
 both are skipped rather than failed.
 
-If any step fails, the installer names it and exits with an error. Running
-it again is safe: every step checks what is already there.
+If any step fails, the installer exits with an error that names the failed
+step, the steps already completed and the steps not done. Running it again
+is safe, because every step checks what is already there:
+
+    plesk bin extension --exec relical post-install.php
 
 ## Upgrading
 

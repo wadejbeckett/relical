@@ -96,13 +96,19 @@ final class InstallerTest extends TestCase
         self::assertSame([
             'note',
             'ensure_dir /usr/local/lib/relical',
-            'install_binary /usr/local/lib/relical/relical',
-            'install_binary /usr/local/lib/relical/restic',
+            'install_binary /usr/local/lib/relical/.relical.new',
+            'install_binary /usr/local/lib/relical/.restic.new',
+            'rename /usr/local/lib/relical/relical',
+            'rename /usr/local/lib/relical/restic',
             'ensure_dir /etc/relical',
             'ensure_dir /etc/relical/keys',
             'ensure_dir /etc/relical/ssh',
             'ensure_dir /var/lib/relical',
-            "run /usr/bin/ssh-keygen -q -t ed25519 -N  -C relical@host.example.test -f /etc/relical/ssh/id_ed25519",
+            'remove_file /etc/relical/ssh/.id_ed25519.new',
+            'remove_file /etc/relical/ssh/.id_ed25519.new.pub',
+            "run /usr/bin/ssh-keygen -q -t ed25519 -N  -C relical@host.example.test -f /etc/relical/ssh/.id_ed25519.new",
+            'rename /etc/relical/ssh/id_ed25519.pub',
+            'rename /etc/relical/ssh/id_ed25519',
             'write_config /etc/relical/config.json',
             'write_file /etc/systemd/system/relical-backup.service',
             'write_file /etc/systemd/system/relical-backup.timer',
@@ -111,10 +117,12 @@ final class InstallerTest extends TestCase
             'run /usr/bin/systemctl daemon-reload',
             'run /usr/bin/systemctl enable --now relical-backup.timer relical-check.timer',
         ], self::summary($plan));
-        self::assertSame("run /usr/bin/ssh-keygen -q -t ed25519 -N '' -C relical@host.example.test -f /etc/relical/ssh/id_ed25519", $plan[8]->description);
+        self::assertSame("run /usr/bin/ssh-keygen -q -t ed25519 -N '' -C relical@host.example.test -f /etc/relical/ssh/.id_ed25519.new", $plan[12]->description);
 
-        $keygen = $plan[8]->params['argv'];
-        self::assertSame(['/usr/bin/ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-C', 'relical@host.example.test', '-f', '/etc/relical/ssh/id_ed25519'], $keygen);
+        $keygen = $plan[12]->params['argv'];
+        self::assertSame(['/usr/bin/ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-C', 'relical@host.example.test', '-f', '/etc/relical/ssh/.id_ed25519.new'], $keygen);
+        self::assertSame('/usr/local/lib/relical/.relical.new', $plan[4]->params['from']);
+        self::assertSame('/etc/relical/ssh/.id_ed25519.new', $plan[14]->params['from']);
 
         foreach ($plan as $action) {
             if ($action->type === Action::ENSURE_DIR) {
@@ -122,7 +130,7 @@ final class InstallerTest extends TestCase
             }
             if ($action->type === Action::INSTALL_BINARY) {
                 self::assertSame(0755, $action->params['mode']);
-                self::assertSame(self::BIN . '/' . basename((string) $action->path()), $action->params['from']);
+                self::assertSame(self::BIN . '/' . substr(basename((string) $action->path()), 1, -4), $action->params['from']);
             }
             if ($action->type === Action::WRITE_FILE) {
                 self::assertSame(0644, $action->params['mode']);
@@ -157,8 +165,10 @@ final class InstallerTest extends TestCase
         $plan = self::installer(new FakeProbe($server))->install(true, self::units('04:30'), self::CONFIG_INPUT, 'host.example.test');
         $summary = self::summary($plan);
 
-        self::assertContains('install_binary /usr/local/lib/relical/relical', $summary);
-        self::assertNotContains('install_binary /usr/local/lib/relical/restic', $summary);
+        self::assertContains('install_binary /usr/local/lib/relical/.relical.new', $summary);
+        self::assertContains('rename /usr/local/lib/relical/relical', $summary);
+        self::assertNotContains('install_binary /usr/local/lib/relical/.restic.new', $summary);
+        self::assertNotContains('rename /usr/local/lib/relical/restic', $summary);
         self::assertContains('write_file /etc/systemd/system/relical-backup.timer', $summary);
         self::assertContains('write_file /etc/systemd/system/relical-check.timer', $summary);
         self::assertNotContains('write_file /etc/systemd/system/relical-backup.service', $summary);
@@ -193,6 +203,24 @@ final class InstallerTest extends TestCase
         $config = array_values(array_filter($plan, static fn (Action $a): bool => $a->type === Action::WRITE_CONFIG));
         self::assertCount(1, $config);
         self::assertFalse($config[0]->params['with_destination']);
+    }
+
+    public function testBothBinariesAreStagedBeforeEitherIsRenamedIntoPlace(): void
+    {
+        $plan = self::installer(new FakeProbe(self::package()))->install(false, self::units(), self::CONFIG_INPUT, 'host.example.test');
+        $summary = self::summary($plan);
+
+        $lastStage = max(array_keys(array_filter($summary, static fn (string $s): bool => str_starts_with($s, 'install_binary '))));
+        $firstRename = min(array_keys(array_filter($summary, static fn (string $s): bool => str_starts_with($s, 'rename /usr/local/lib/'))));
+        self::assertLessThan($firstRename, $lastStage);
+        self::assertSame(Paths::LIB_DIR . '/.restic.new', Installer::stagedPath(Paths::RESTIC_BIN));
+    }
+
+    public function testInvalidSettingsStopTheInstallBeforeAnythingChanges(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Storage Box port');
+        self::installer(new FakeProbe(self::package()))->install(false, self::units(), ['sftp_port' => 0] + self::CONFIG_INPUT, 'host.example.test');
     }
 
     /** @return iterable<string, array{array<string, ?string>, string}> */
@@ -234,7 +262,8 @@ final class InstallerTest extends TestCase
 
     public function testKeyCommentUsesOnlySafeHostCharacters(): void
     {
-        $plan = self::installer(new FakeProbe(self::package()))->install(false, self::units(), self::CONFIG_INPUT, 'Host Name;x.Example.TEST');
+        $input = ['sftp_host' => ''] + self::CONFIG_INPUT;
+        $plan = self::installer(new FakeProbe(self::package()))->install(false, self::units(), $input, 'Host Name;x.Example.TEST');
         $keygen = array_values(array_filter($plan, static fn (Action $a): bool => $a->type === Action::RUN && $a->params['argv'][0] === self::KEYGEN));
 
         self::assertSame('relical@hostnamex.example.test', $keygen[0]->params['argv'][7]);

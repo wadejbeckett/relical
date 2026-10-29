@@ -11,7 +11,10 @@ use Throwable;
  * Carries out an Installer plan, printing one line per step.
  *
  * A failed step stops the run with an exception, except an optional one,
- * which is reported as a warning while the remaining steps still run.
+ * which is reported as a warning while the remaining steps still run. The
+ * exception names the steps that were completed before the failure and the
+ * ones that were not, and how to run the whole plan again, so the
+ * administrator knows what state the server is in.
  */
 final class InstallRunner
 {
@@ -26,16 +29,23 @@ final class InstallRunner
     {
     }
 
-    /** @param list<Action> $plan */
-    public function run(array $plan): void
+    /**
+     * @param list<Action> $plan
+     * @param string       $rerun how to run the plan again, added to a failure's message
+     */
+    public function run(array $plan, string $rerun = ''): void
     {
-        foreach ($plan as $action) {
+        $done = [];
+        foreach (array_values($plan) as $index => $action) {
             fwrite($this->out, $this->prefix . $action->description . "\n");
             try {
                 $this->apply($action);
+                if ($action->type !== Action::NOTE) {
+                    $done[] = $action->description;
+                }
             } catch (Throwable $e) {
                 if (!$action->optional) {
-                    throw new RuntimeException(sprintf('%s failed: %s', $action->description, $e->getMessage()), 0, $e);
+                    throw new RuntimeException(self::failure($action, $e, $done, array_slice($plan, $index + 1), $rerun), 0, $e);
                 }
                 $warning = sprintf('warning: %s failed: %s', $action->description, $e->getMessage());
                 $this->warnings[] = $warning;
@@ -48,6 +58,28 @@ final class InstallRunner
     public function warnings(): array
     {
         return $this->warnings;
+    }
+
+    /**
+     * @param list<string> $done descriptions of the completed steps
+     * @param list<Action> $rest the steps after the failed one
+     */
+    private static function failure(Action $failed, Throwable $e, array $done, array $rest, string $rerun): string
+    {
+        $notDone = [$failed->description];
+        foreach ($rest as $action) {
+            if ($action->type !== Action::NOTE) {
+                $notDone[] = $action->description;
+            }
+        }
+        $message = sprintf('%s failed: %s.', $failed->description, $e->getMessage());
+        $message .= $done === [] ? ' Nothing was changed.' : ' Completed: ' . implode('; ', $done) . '.';
+        $message .= ' Not done: ' . implode('; ', $notDone) . '.';
+        if ($rerun !== '') {
+            $message .= ' ' . $rerun;
+        }
+
+        return $message;
     }
 
     private function apply(Action $action): void
@@ -84,6 +116,14 @@ final class InstallRunner
             case Action::REMOVE_FILE:
                 if ((file_exists($p['path']) || is_link($p['path'])) && !@unlink($p['path'])) {
                     throw new RuntimeException(sprintf('could not remove %s', $p['path']));
+                }
+                return;
+            case Action::RENAME:
+                if (is_link($p['path'])) {
+                    throw new RuntimeException(sprintf('%s is a symbolic link', $p['path']));
+                }
+                if (!@rename($p['from'], $p['path'])) {
+                    throw new RuntimeException(sprintf('could not rename %s to %s', $p['from'], $p['path']));
                 }
                 return;
             case Action::REMOVE_DIR:

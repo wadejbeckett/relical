@@ -43,22 +43,37 @@ final class Installer
      * @param string                $serverId    this server's host name
      * @return list<Action>
      * @throws RuntimeException when a bundled binary is missing or does not match SHA256SUMS
+     * @throws \InvalidArgumentException when the saved destination settings are not valid
      */
     public function install(bool $upgrade, array $units, array $configInput, string $serverId): array
     {
         $binaries = $this->verifiedBinaries();
+        $withDestination = trim((string) ($configInput['sftp_host'] ?? '')) !== '';
+        if ($withDestination) {
+            // A bad setting stops the install here, before anything changes,
+            // rather than after the new binaries are live.
+            ConfigWriter::render($configInput, $serverId);
+        }
 
         $plan = [Action::note($upgrade ? 'upgrading the installed files and timers' : 'installing')];
 
         $plan[] = Action::ensureDir(Paths::LIB_DIR, 0755);
+        // Both binaries are copied and checked under staging names first and
+        // only then renamed into place one after the other, so a failed copy
+        // leaves the old pair in place rather than a new relical beside an
+        // old restic.
+        $renames = [];
         foreach ($binaries as $name => $sha256) {
             $target = self::BINARIES[$name];
             if ($this->probe->sha256($target) === $sha256) {
                 $plan[] = Action::note(sprintf('%s is already this version', $target));
                 continue;
             }
-            $plan[] = Action::installBinary($this->binDir . '/' . $name, $target, $sha256);
+            $staged = self::stagedPath($target);
+            $plan[] = Action::installBinary($this->binDir . '/' . $name, $staged, $sha256, 'stage');
+            $renames[] = Action::rename($staged, $target);
         }
+        array_push($plan, ...$renames);
 
         foreach ([Paths::ETC_DIR, Paths::KEYS_DIR, Paths::SSH_DIR, Paths::STATE_DIR] as $dir) {
             $plan[] = Action::ensureDir($dir, 0700);
@@ -67,16 +82,30 @@ final class Installer
         if ($this->probe->exists(Paths::SSH_KEY)) {
             $plan[] = Action::note(sprintf('keeping the existing SSH key %s', Paths::SSH_KEY));
         } else {
+            // Generated under a staging name and renamed into place (public
+            // half first), so an interrupted ssh-keygen never leaves a
+            // truncated key that a later run would keep.
+            $staged = self::stagedPath(Paths::SSH_KEY);
+            $plan[] = Action::removeFile($staged);
+            $plan[] = Action::removeFile($staged . '.pub');
             $plan[] = Action::run([
-                $this->sshKeygen, '-q', '-t', 'ed25519', '-N', '', '-C', 'relical@' . self::commentHost($serverId), '-f', Paths::SSH_KEY,
+                $this->sshKeygen, '-q', '-t', 'ed25519', '-N', '', '-C', 'relical@' . self::commentHost($serverId), '-f', $staged,
             ]);
+            $plan[] = Action::rename($staged . '.pub', Paths::SSH_KEY . '.pub');
+            $plan[] = Action::rename($staged, Paths::SSH_KEY);
         }
 
-        $plan[] = Action::writeConfig($configInput, $serverId, trim((string) ($configInput['sftp_host'] ?? '')) !== '');
+        $plan[] = Action::writeConfig($configInput, $serverId, $withDestination);
 
         array_push($plan, ...$this->unitActions($units));
 
         return $plan;
+    }
+
+    /** Where a file is staged before it is renamed over $target (same directory). */
+    public static function stagedPath(string $target): string
+    {
+        return dirname($target) . '/.' . basename($target) . '.new';
     }
 
     /**
