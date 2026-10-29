@@ -477,14 +477,47 @@ func (w *webspace) ensureSpace(ctx context.Context, r restic.Runner, snapshotID,
 	if err := job.EnsureRestoreStaging(dir); err != nil {
 		return err
 	}
-	var st syscall.Statfs_t
-	if err := statfs(dir, &st); err != nil {
-		return fmt.Errorf("free space of %s: %w", dir, err)
+	return checkSpace(size, dir)
+}
+
+// stat is syscall.Stat; a variable so that tests can put two directories
+// on one file system or on two.
+var stat = syscall.Stat
+
+// checkSpace refuses a restore of size bytes unless each file system that
+// receives a copy has the size plus 10%, for every copy it receives, plus
+// SpaceReserve free. dirs lists one directory per copy written; two on
+// the same file system (by st_dev) need room for both copies there.
+func checkSpace(size uint64, dirs ...string) error {
+	type fsys struct {
+		dir    string
+		copies uint64
 	}
-	free := st.Bavail * uint64(st.Bsize)
-	need := size + size/10 + SpaceReserve
-	if free < need {
-		return fmt.Errorf("not enough free space for this restore (need %s, free %s)", humanBytes(need), humanBytes(free))
+	var order []uint64
+	byDev := map[uint64]*fsys{}
+	for _, d := range dirs {
+		var st syscall.Stat_t
+		if err := stat(d, &st); err != nil {
+			return fmt.Errorf("free space of %s: %w", d, err)
+		}
+		dev := uint64(st.Dev)
+		if byDev[dev] == nil {
+			byDev[dev] = &fsys{dir: d}
+			order = append(order, dev)
+		}
+		byDev[dev].copies++
+	}
+	for _, dev := range order {
+		f := byDev[dev]
+		var st syscall.Statfs_t
+		if err := statfs(f.dir, &st); err != nil {
+			return fmt.Errorf("free space of %s: %w", f.dir, err)
+		}
+		free := st.Bavail * uint64(st.Bsize)
+		need := f.copies*(size+size/10) + SpaceReserve
+		if free < need {
+			return fmt.Errorf("not enough free space for this restore in %s (need %s, free %s)", f.dir, humanBytes(need), humanBytes(free))
+		}
 	}
 	return nil
 }

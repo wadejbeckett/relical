@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -392,5 +393,82 @@ func TestMailStageChownNeverLeavesTheStage(t *testing.T) {
 			}
 		}
 		seen[c] = true
+	}
+}
+
+// fakeFileSystems puts each directory on its own file system (dev) with
+// free bytes free, or with plenty when it is not listed.
+func fakeFileSystems(t *testing.T, devs map[string]uint64, free map[string]uint64) {
+	t.Helper()
+	oldStat, oldStatfs := stat, statfs
+	devOf := func(p string) uint64 {
+		for d, n := range devs {
+			if p == d || strings.HasPrefix(p, d+"/") {
+				return n
+			}
+		}
+		return 99
+	}
+	stat = func(p string, st *syscall.Stat_t) error { st.Dev = devOf(p); return nil }
+	statfs = func(p string, st *syscall.Statfs_t) error {
+		st.Bsize, st.Bavail = 1, 1<<50
+		for d, n := range devs {
+			if devOf(p) == n {
+				if f, ok := free[d]; ok {
+					st.Bavail = f
+				}
+			}
+		}
+		return nil
+	}
+	t.Cleanup(func() { stat, statfs = oldStat, oldStatfs })
+}
+
+// TestMailRestoreRefusesWithoutFreeSpace: a mail restore needs room for
+// the mailbox in the staging file system (<state_dir>/restore) and in the
+// mailbox's, twice when they are one file system; without it, nothing is
+// restored or imported.
+func TestMailRestoreRefusesWithoutFreeSpace(t *testing.T) {
+	const mib = 1 << 20
+	for name, c := range map[string]struct {
+		sameFS     bool
+		stageFree  uint64
+		mailFree   uint64
+		wantRefuse string
+	}{
+		"staging full":                  {stageFree: 100 * mib, mailFree: 1 << 40, wantRefuse: "restore"},
+		"mailbox file system full":      {stageFree: 1 << 40, mailFree: 100 * mib, wantRefuse: "mail"},
+		"one file system, room for one": {sameFS: true, stageFree: SpaceReserve + 7, wantRefuse: "restore"},
+		"room on both":                  {stageFree: 1 << 40, mailFree: 1 << 40},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, _, log := setup(t)
+			stage := filepath.Join(e.Cfg.StateDir, "restore")
+			mail := filepath.Dir(filepath.Dir(filepath.Dir(string(e.Locator))))
+			devs := map[string]uint64{stage: 1, mail: 2}
+			if c.sameFS {
+				devs[mail] = 1
+			}
+			fakeFileSystems(t, devs, map[string]uint64{stage: c.stageFree, mail: c.mailFree})
+			// The fake ls lists one 6-byte file under the mailbox.
+			_, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest"})
+			l := log()
+			if c.wantRefuse == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			want := "not enough free space for this restore in " + map[string]string{"restore": stage, "mail": filepath.Join(mail, "example.test", "alice", "Maildir")}[c.wantRefuse]
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("err = %v, want %q", err, want)
+			}
+			if !strings.Contains(l, "ls --json --recursive fedcba98") {
+				t.Errorf("no size estimate:\n%s", l)
+			}
+			if strings.Contains(l, "restore fedcba98") || strings.Contains(l, "import ") {
+				t.Errorf("restored or imported:\n%s", l)
+			}
+		})
 	}
 }

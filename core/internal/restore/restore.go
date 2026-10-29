@@ -199,6 +199,15 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 		return res, fmt.Errorf("reading doveadm mailbox list for %s: %w", box.Login, err)
 	}
 
+	// The mailbox is written twice: restored into staging under
+	// <state_dir>/restore, then imported by doveadm next to the live mail.
+	size, err := r.RestoreSize(ctx, snap.ID, box.Path)
+	if err != nil {
+		return res, fmt.Errorf("estimating the size of the restore: %w", err)
+	}
+	if err := checkSpace(size, filepath.Join(env.Cfg.StateDir, "restore"), box.Path); err != nil {
+		return res, err
+	}
 	stage, err := os.MkdirTemp(filepath.Join(env.Cfg.StateDir, "restore"), "run-")
 	if err != nil {
 		return res, err

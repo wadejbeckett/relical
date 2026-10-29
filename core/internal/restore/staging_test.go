@@ -185,7 +185,7 @@ func TestRestoreRefusesWithoutFreeSpace(t *testing.T) {
 	}
 	t.Cleanup(func() { statfs = old })
 	_, err := RunFiles(context.Background(), e, FilesRequest{Subscription: "example.test", Snapshot: "latest"})
-	if err == nil || !strings.Contains(err.Error(), "not enough free space for this restore (need 256.0 MiB, free 3.9 MiB)") {
+	if err == nil || !strings.Contains(err.Error(), "not enough free space for this restore in "+job.RestoreStagingDir(e.Cfg.Roots.Files[0])+" (need 256.0 MiB, free 3.9 MiB)") {
 		t.Fatalf("files: %v", err)
 	}
 	_, err = RunDB(context.Background(), e, DBRequest{Subscription: "example.test", Database: "example_wp", Snapshot: "latest"})

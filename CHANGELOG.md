@@ -22,7 +22,7 @@ Phase 2: full backup per hosting subscription, and the core the Plesk extension 
 - `forget` and `check` report a repository not yet created as a note rather than a failure, and fail on a lost key.
 - File and database restores build the finished `restored-<date>-<id>` folder in root-only staging, `<files root>/.relical/`, and move it into the webspace with one `renameat2(RENAME_NOREPLACE)`, so a customer cannot swap the folder for another directory while it is filled; the fallback for another file system or an old kernel accepts only the empty, root-owned 0700 directory it made.
 - Restores clear set-user-id and set-group-id bits and leave out device nodes, fifos and sockets, listing them as `dropped` in the result (a Plesk chroot webspace has some under `dev/`).
-- Restores refuse to start without room for the estimated size plus 10% plus 256 MiB.
+- File and database restores refuse to start without room on the webspace's file system for the estimated size plus 10% plus a reserve. Mail restores check both the staging file system (`<state_dir>/restore`) and the mailbox's, and need room for both copies when those are one file system.
 - Staging left by a killed restore is removed after 24 hours, by the next restore or `backup --all`.
 - Every `sftp:` destination gets `-o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=4 -o BatchMode=yes` unless its `sftp_args` set those options, so a destination that accepts the connection and never answers cannot hang the run.
 - A `mail` backup of a subscription without mailboxes is OK with the note "no mailboxes" instead of failing every night.
