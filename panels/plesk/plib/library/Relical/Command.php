@@ -194,7 +194,8 @@ final class Command
     }
 
     /**
-     * The argv that runs a root script as root, for Process (no shell).
+     * The argv that runs a root script as root, for Process (no shell),
+     * through the `extension` utility Paths::extensionCommand() resolves.
      *
      * @param list<string> $args
      * @return list<string>
@@ -202,7 +203,8 @@ final class Command
     public static function rootArgv(string $script, array $args = []): array
     {
         return array_merge(
-            [Paths::PLESK, 'bin', 'extension', '--exec', Paths::EXTENSION_ID, $script],
+            Paths::extensionCommand(),
+            ['--exec', Paths::EXTENSION_ID, $script],
             self::scriptArgs($script, $args)
         );
     }

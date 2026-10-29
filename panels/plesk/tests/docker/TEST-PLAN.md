@@ -30,10 +30,11 @@ what PHPUnit covers. Each line names the assumption and where it lives.
 
 ## Administrator screens
 
-- [ ] The web process (Plesk's panel user) can run
-      `/usr/sbin/plesk bin extension --exec relical <script>` through
-      `proc_open` and the script runs as root, as Cloudflare DNS Sync's UI
-      does through `exec`.
+- [ ] The web process (Plesk's panel user) runs root scripts through the
+      utility `Paths::extensionCommand()` resolves (PRODUCT_ROOT_D's
+      `bin/extension`, as Cloudflare DNS Sync's UI does on 18.0.81, else
+      `/usr/sbin/plesk bin extension`) with `proc_open` in argv form, and
+      the script runs as root. Note which form was used.
 - [ ] `pm_Form_Simple` forms: the settings form shows the errors added with
       `addError()` after `isValid()`; a valid POST returns
       `{"redirect": ...}` and the status messages appear after it; a POST

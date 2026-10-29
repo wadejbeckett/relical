@@ -6,6 +6,7 @@ namespace Noiz\Relical\Tests;
 
 use InvalidArgumentException;
 use Noiz\Relical\Command;
+use Noiz\Relical\Paths;
 use Noiz\Relical\Process;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
@@ -13,6 +14,50 @@ use RuntimeException;
 final class CommandTest extends TestCase
 {
     private const PREFIX = ['/usr/local/lib/relical/relical', '-config', '/etc/relical/config.json'];
+
+    /** The resolved `extension` utility, quoted as the detached command quotes it. */
+    private static function utility(): string
+    {
+        return implode(' ', array_map('escapeshellarg', Paths::extensionCommand()));
+    }
+
+    /**
+     * @param list<string> $existing
+     * @return callable(string): bool
+     */
+    private static function executable(array $existing): callable
+    {
+        return static fn (string $path): bool => in_array($path, $existing, true);
+    }
+
+    public function testTheExtensionUtilityPrefersProductRoot(): void
+    {
+        self::assertSame(['/opt/psa/bin/extension'], Paths::extensionUtility('/opt/psa', self::executable(['/opt/psa/bin/extension', '/usr/sbin/plesk'])));
+        self::assertSame(['/usr/local/psa/bin/extension'], Paths::extensionUtility('/usr/local/psa/', self::executable(['/usr/local/psa/bin/extension'])));
+    }
+
+    public function testTheExtensionUtilityFallsBackToThePleskWrapper(): void
+    {
+        self::assertSame(['/usr/sbin/plesk', 'bin', 'extension'], Paths::extensionUtility('/opt/psa', self::executable(['/usr/sbin/plesk', '/opt/psa/bin/plesk'])));
+        self::assertSame(['/usr/sbin/plesk', 'bin', 'extension'], Paths::extensionUtility(null, self::executable(['/usr/sbin/plesk', '/opt/psa/bin/extension'])));
+        self::assertSame(['/usr/local/psa/bin/extension'], Paths::extensionUtility(null, self::executable(['/usr/local/psa/bin/extension'])));
+        self::assertSame(['/opt/psa/bin/extension'], Paths::extensionUtility(null, self::executable([])));
+    }
+
+    public function testTheExtensionUtilityIgnoresAnOddProductRoot(): void
+    {
+        $seen = [];
+        $isExecutable = static function (string $path) use (&$seen): bool {
+            $seen[] = $path;
+            return true;
+        };
+        foreach (['/opt/psa; id', 'opt/psa', '/opt/$(id)', "/opt/psa
+", '/opt/../tmp/x', ''] as $root) {
+            $seen = [];
+            self::assertSame(['/usr/sbin/plesk', 'bin', 'extension'], Paths::extensionUtility($root, $isExecutable), var_export($root, true));
+            self::assertSame(['/usr/sbin/plesk'], $seen, 'the odd root was never even checked');
+        }
+    }
 
     /** @param list<string> $args */
     private static function argv(array $args): array
@@ -292,7 +337,7 @@ final class CommandTest extends TestCase
     public function testRootScriptsRunThroughPleskAsArgv(string $script, array $args): void
     {
         self::assertSame(
-            array_merge(['/usr/sbin/plesk', 'bin', 'extension', '--exec', 'relical', $script], $args),
+            array_merge(Paths::extensionCommand(), ['--exec', 'relical', $script], $args),
             Command::rootArgv($script, $args)
         );
     }
@@ -347,11 +392,11 @@ final class CommandTest extends TestCase
     public function testBackgroundRunIsFullyEscapedAndDetached(): void
     {
         self::assertSame(
-            "'/usr/sbin/plesk' 'bin' 'extension' '--exec' 'relical' 'cli.php' 'backup' '--subscription' 'example.test' < /dev/null > /dev/null 2>&1 &",
+            self::utility() . " '--exec' 'relical' 'cli.php' 'backup' '--subscription' 'example.test' < /dev/null > /dev/null 2>&1 &",
             Command::detached(['backup', '--subscription', 'example.test'])
         );
         self::assertSame(
-            "'/usr/sbin/plesk' 'bin' 'extension' '--exec' 'relical' 'cli.php' 'backup' '--all' < /dev/null > /dev/null 2>&1 &",
+            self::utility() . " '--exec' 'relical' 'cli.php' 'backup' '--all' < /dev/null > /dev/null 2>&1 &",
             Command::detached(['backup', '--all'])
         );
     }
@@ -359,7 +404,7 @@ final class CommandTest extends TestCase
     public function testBackgroundRestoreIsFullyEscapedAndDetached(): void
     {
         self::assertSame(
-            "'/usr/sbin/plesk' 'bin' 'extension' '--exec' 'relical' 'restore-run.php' '" . self::RESTORE_ID . "' 'restore' '--subscription' 'example.test' '--unit' 'files' '--path' 'my '\\''file'\\''' < /dev/null > /dev/null 2>&1 &",
+            self::utility() . " '--exec' 'relical' 'restore-run.php' '" . self::RESTORE_ID . "' 'restore' '--subscription' 'example.test' '--unit' 'files' '--path' 'my '\\''file'\\''' < /dev/null > /dev/null 2>&1 &",
             Command::detachedScript('restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'files', '--path', "my 'file'"])
         );
     }

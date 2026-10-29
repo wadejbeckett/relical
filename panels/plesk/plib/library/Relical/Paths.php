@@ -17,6 +17,14 @@ final class Paths
 
     public const PLESK = '/usr/sbin/plesk';
 
+    /**
+     * Where Plesk's `extension` utility may be when PRODUCT_ROOT_D is not
+     * usable, in Cloudflare DNS Sync's order (PleskBin::FALLBACKS): the
+     * `plesk` wrapper (then `bin extension`), Debian's /opt/psa, RHEL's
+     * /usr/local/psa.
+     */
+    public const EXTENSION_FALLBACKS = ['/usr/sbin/plesk', '/opt/psa/bin/extension', '/usr/local/psa/bin/extension'];
+
     public const LIB_DIR = '/usr/local/lib/relical';
     public const RELICAL_BIN = self::LIB_DIR . '/relical';
     public const RESTIC_BIN = self::LIB_DIR . '/restic';
@@ -55,6 +63,51 @@ final class Paths
 
     /** The name the core reserves for the Plesk configuration repository. */
     public const SERVER_REPO = '_server';
+
+    /**
+     * The argv prefix that runs Plesk's `extension` utility from the panel,
+     * resolved as Cloudflare DNS Sync's PleskBin::extensionUtility does
+     * (proven from the panel process on Plesk 18.0.81):
+     * `<PRODUCT_ROOT_D>/bin/extension` when PRODUCT_ROOT_D is a plain
+     * absolute path and that file is executable, else the first executable
+     * fallback, else `/opt/psa/bin/extension`. Argv form, so nothing is
+     * ever parsed by a shell; a PRODUCT_ROOT_D with any other character is
+     * ignored.
+     *
+     * @param ?string                    $productRoot  PRODUCT_ROOT_D when defined
+     * @param ?callable(string): bool    $isExecutable is_executable, replaceable in tests
+     * @return list<string>
+     */
+    public static function extensionUtility(?string $productRoot, ?callable $isExecutable = null): array
+    {
+        $isExecutable ??= static fn (string $path): bool => is_executable($path);
+        if ($productRoot !== null && preg_match('#^/[A-Za-z0-9._/-]+$#D', $productRoot) === 1 && !str_contains($productRoot, '..')) {
+            $candidate = rtrim($productRoot, '/') . '/bin/extension';
+            if ($isExecutable($candidate)) {
+                return [$candidate];
+            }
+        }
+        foreach (self::EXTENSION_FALLBACKS as $path) {
+            if ($isExecutable($path)) {
+                return $path === self::PLESK ? [$path, 'bin', 'extension'] : [$path];
+            }
+        }
+
+        return ['/opt/psa/bin/extension'];
+    }
+
+    /**
+     * extensionUtility() for this process: Plesk's PHP defines
+     * PRODUCT_ROOT_D. Resolved once per request.
+     *
+     * @return list<string>
+     */
+    public static function extensionCommand(): array
+    {
+        static $resolved = null;
+
+        return $resolved ??= self::extensionUtility(defined('PRODUCT_ROOT_D') ? (string) constant('PRODUCT_ROOT_D') : null);
+    }
 
     /**
      * How the core asks this extension for the inventory (it runs this as
