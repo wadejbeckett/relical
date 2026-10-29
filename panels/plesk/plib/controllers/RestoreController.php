@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Noiz\Relical\Command;
 use Noiz\Relical\PleskDomains;
 use Noiz\Relical\RestoreAccess;
+use Noiz\Relical\RestoreFlow;
 use Noiz\Relical\RestoreRecord;
 use Noiz\Relical\RestoreRequest;
 use Noiz\Relical\RootScripts;
@@ -64,7 +65,7 @@ class RestoreController extends pm_Controller_Action
     /** The restore points and what can be restored. */
     public function indexAction()
     {
-        if ($this->notCovered()) {
+        if (!$this->gate('index')) {
             return;
         }
         $points = $this->restorePoints();
@@ -83,10 +84,9 @@ class RestoreController extends pm_Controller_Action
     /** GET: the mail restore form. POST: starts the restore. */
     public function mailAction()
     {
-        if ($this->notCovered()) {
+        if (!$this->gate('mail')) {
             return;
         }
-        $this->requireUnit('mail');
         $this->view->pageTitle = 'Restore mail: ' . $this->access->subscription();
 
         $points = $this->restorePoints();
@@ -138,10 +138,9 @@ class RestoreController extends pm_Controller_Action
      */
     public function filesAction()
     {
-        if ($this->notCovered()) {
+        if (!$this->gate('files')) {
             return;
         }
-        $this->requireUnit('files');
         $request = $this->getRequest();
         $this->view->pageTitle = 'Restore website files: ' . $this->access->subscription();
         $this->view->form = null;
@@ -219,10 +218,9 @@ class RestoreController extends pm_Controller_Action
     /** GET: the database restore form. POST: starts the restore. */
     public function databaseAction()
     {
-        if ($this->notCovered()) {
+        if (!$this->gate('database')) {
             return;
         }
-        $this->requireUnit('db');
         $this->view->pageTitle = 'Restore a database: ' . $this->access->subscription();
         $this->view->form = null;
 
@@ -260,7 +258,7 @@ class RestoreController extends pm_Controller_Action
     /** GET `?id=ID`: how a restore is getting on; reloads itself until it has finished. */
     public function statusAction()
     {
-        if ($this->notCovered()) {
+        if (!$this->gate('status')) {
             return;
         }
         $this->view->pageTitle = 'Restore: ' . $this->access->subscription();
@@ -291,23 +289,24 @@ class RestoreController extends pm_Controller_Action
 
     // ----- helpers -----
 
-    /** The page for a customer whose plan does not include Relical. */
-    private function notCovered(): bool
+    /**
+     * RestoreFlow's decision for this action, before anything else runs:
+     * "Permission denied", the "not included in your plan" page (false), or
+     * go on (true).
+     */
+    private function gate(string $action): bool
     {
-        if ($this->access->refusal() !== RestoreAccess::NOT_COVERED) {
-            return false;
-        }
-        $this->view->pageTitle = 'Backups';
-        $this->_helper->viewRenderer->setRender('not-covered');
-
-        return true;
-    }
-
-    private function requireUnit(string $unit): void
-    {
-        if (!$this->access->may($unit)) {
+        $decision = RestoreFlow::gate($this->access, $action);
+        if ($decision === RestoreFlow::DENY) {
             throw new pm_Exception('Permission denied');
         }
+        if ($decision === RestoreFlow::NOT_COVERED) {
+            $this->view->pageTitle = 'Backups';
+            $this->_helper->viewRenderer->setRender('not-covered');
+            return false;
+        }
+
+        return true;
     }
 
     private function subscription(): string
