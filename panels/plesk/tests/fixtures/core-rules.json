@@ -1,5 +1,5 @@
 {
-    "about": "Names both the core (core/internal/inventory) and the Plesk extension (CoreRules) must accept or refuse. The extension's CoreRulesTest reads this file; the core's inventory tests should read it too, so the two copies of the rules cannot drift.",
+    "about": "Names both the core (core/internal/inventory) and the Plesk extension (CoreRules) must accept or refuse. The extension's CoreRulesTest and the core's TestSharedRulesFixture (core/internal/inventory) both read this file, so the two copies of the rules cannot drift; the core is canonical.",
     "subscription_names": {
         "accept": ["example.test", "a.b.example.test", "xn--bcher-kva.example.test", "1-2.example.test", "x.y"],
         "refuse": ["", "localhost", "Example.test", "bücher.example.test", "-example.test", "example-.test", "example.test.", ".example.test", "exa mple.test", "example..test", "_server"]
