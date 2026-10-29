@@ -61,6 +61,21 @@ final class UnitsTest extends TestCase
         }
     }
 
+    public function testServicesYieldCpuAndDiskLikeTheCoreUnits(): void
+    {
+        $units = self::rendered();
+        foreach (Units::SERVICES as $name) {
+            $service = substr($units[$name], strpos($units[$name], "[Service]\n"));
+            self::assertStringContainsString("\nNice=19\n", $service, $name);
+            self::assertStringContainsString("\nIOSchedulingClass=idle\n", $service, $name);
+            $core = dirname(__DIR__, 3) . '/packaging/systemd/' . $name;
+            if (is_file($core)) {
+                self::assertStringContainsString("\nNice=19\n", (string) file_get_contents($core), $name);
+                self::assertStringContainsString("\nIOSchedulingClass=idle\n", (string) file_get_contents($core), $name);
+            }
+        }
+    }
+
     /** @return iterable<string, array{string, string}> */
     public static function checkTimes(): iterable
     {

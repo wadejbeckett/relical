@@ -34,8 +34,10 @@ installer prints each step. It:
 The nightly backup starts at the backup time in the settings (01:00 server
 local time by default, within a random delay of up to 30 minutes) and
 applies the retention policy afterwards. The weekly repository check runs on
-Sunday, twelve hours after the backup time. Until the destination is saved,
-both are skipped rather than failed.
+Sunday, twelve hours after the backup time. Both run at the lowest CPU and
+disk priority (`Nice=19`, `IOSchedulingClass=idle`), so the sites and mail
+they back up come first. Until the destination is saved, both are skipped
+rather than failed.
 
 The default backup time is 01:00. Phase 1 builds used 02:30; on a server
 where the backup time was never saved, an upgrade moves the timer to 01:00.

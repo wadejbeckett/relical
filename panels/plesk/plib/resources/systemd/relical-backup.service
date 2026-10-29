@@ -20,3 +20,6 @@ ExecStopPost=/usr/local/lib/relical/relical -config /etc/relical/config.json for
 # ExecStopPost= is bounded by TimeoutStopSec= (default 90s), which a prune
 # can easily exceed.
 TimeoutStopSec=infinity
+# The backup yields CPU and disk to the sites and mail it is backing up.
+Nice=19
+IOSchedulingClass=idle

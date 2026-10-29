@@ -15,3 +15,6 @@ ConditionPathExists=/etc/relical/config.json
 Type=oneshot
 # "%%" is a literal "%" in a unit file.
 ExecStart=/usr/local/lib/relical/relical -config /etc/relical/config.json check --all --read-data-subset 5%%
+# Like the backup, the check yields CPU and disk to the sites and mail.
+Nice=19
+IOSchedulingClass=idle
