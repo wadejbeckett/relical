@@ -138,9 +138,9 @@ func TestForgetRemoteNoteRedactsCredentials(t *testing.T) {
 		"rest:https://u:123/secret@backup.example.test/{subscription}": "rest:https://***@backup.example.test/example.test",
 		"rest:https://u:1?secret@backup.example.test/{subscription}":   "rest:https://***@backup.example.test/example.test",
 		// A token as the user name.
-		"rest:https://secrettoken@backup.example.test/{subscription}": "rest:https://***@backup.example.test/example.test",
-		"rest:https://backup.example.test/{subscription}":             "rest:https://backup.example.test/example.test",
-		"sftp:u000000-sub1@u000000-sub1.your-storagebox.example:/relical/{subscription}":       "sftp:u000000-sub1@u000000-sub1.your-storagebox.example:/relical/example.test",
+		"rest:https://secrettoken@backup.example.test/{subscription}":                    "rest:https://***@backup.example.test/example.test",
+		"rest:https://backup.example.test/{subscription}":                                "rest:https://backup.example.test/example.test",
+		"sftp:u000000-sub1@u000000-sub1.your-storagebox.example:/relical/{subscription}": "sftp:u000000-sub1@u000000-sub1.your-storagebox.example:/relical/example.test",
 	} {
 		e.Cfg.Destinations["d"] = config.Destination{Repository: repo, Prune: "remote"}
 		r := e.Forget(context.Background(), sub)
