@@ -156,7 +156,7 @@ Result fields: `subscription`; `unit` (`mail`, `files`, `db`, `panel-config`; ab
       "domain": "example.test",
       "mailbox": "alice",
       "snapshot": "b9e9540af49ca5d668c11272f8542eba4fc2faf5bc0f8b4a4f3dd0aece0111c0",
-      "restored_to": "Restored 2026-10-15 b9e9540a",
+      "restored_to": "INBOX.Restored 2026-10-15 b9e9540a",
       "messages": 3
     }
 
@@ -299,6 +299,7 @@ Copy `packaging/config.example.json` to `/etc/relical/config.json` and set mode 
 - `version`: must be `2`. A version 1 configuration (with `domains` and `{domain}` repositories) is refused; there is no automatic migration.
 - `roots`: the directories inventory paths must lie under: `files` (default `["/var/www/vhosts"]`) and `mail` (default `["/var/qmail/mailnames"]`).
 - `mailbox_pattern`: where a mail domain's mailboxes live, with `{domain}` and `{mailbox}` once each, under a mail root (default `/var/qmail/mailnames/{domain}/{mailbox}/Maildir`, the Plesk layout).
+- `mail_folder_prefix`: the prefix of Dovecot's inbox namespace, put in front of the `Restored <date> <id>` folder a mail restore creates. Plesk's Dovecot needs `"INBOX."` (its folders are `INBOX.Sent` and the like); empty (the default) suits Dovecot's default namespace. A `--folder` given with this prefix (`INBOX.Sent`) is the same as without it (`Sent`).
 - `destinations`: named restic repositories. `repository` must contain `{subscription}` once, so each subscription gets its own repository (the panel configuration uses the name `_server`); `env` holds the variables restic needs to reach it. For an `sftp:` repository, `sftp_args` (one line) is passed to restic as `-o sftp.args=<value>`, for example `-p 23 -i /etc/relical/ssh/id_ed25519`. restic splits the value on spaces and cannot quote, so it must not contain `"` and no path in it may contain a space; commas are kept. When an `sftp://host:port/` repository URL carries a port, `sftp_args` must not set one as well (`-p` or `-o Port`). `{subscription}` must be a whole path component of the repository (after `/` or `:`, followed by `/` or the end). `default_destination` applies to every subscription that does not name its own `destination`.
 - `prune` (required in each destination, `"local"` or `"remote"`): `local` runs `forget --prune` from this server. `remote` is for append-only destinations (for example rest-server with `--append-only`): the server cannot delete there, so `relical forget` does nothing but report that pruning runs on the destination host. Its note gives, per repository, the exact command the destination host must run, with that subscription's retention and `--group-by tags` (for example `restic forget --group-by tags --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune`); without `--group-by tags`, restic groups by host and paths, and the mail, files and database snapshots would not be kept as intended.
 - `retention`: snapshots to keep (daily, weekly, monthly; default 14, 8, 12). A subscription's own `retention` overrides it.

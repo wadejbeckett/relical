@@ -17,6 +17,11 @@ chown -R popuser:popuser /var/qmail/mailnames
 cat > /etc/dovecot/conf.d/99-relical-e2e.conf <<'EOC'
 mail_location = maildir:/var/qmail/mailnames/%d/%n/Maildir
 first_valid_uid = 2000
+# Plesk's inbox namespace: every folder is INBOX.<name>.
+namespace inbox {
+  prefix = INBOX.
+  separator = .
+}
 # doveadm needs no network listener; keep the test Dovecot off the network
 # (it matters when the container shares the host network namespace).
 service imap-login {
@@ -78,6 +83,7 @@ cat > /etc/relical/config.json <<'EOC'
   "keys_dir": "/etc/relical/keys",
   "mysqldump_bin": "/usr/bin/mysqldump",
   "mailbox_pattern": "/var/qmail/mailnames/{domain}/{mailbox}/Maildir",
+  "mail_folder_prefix": "INBOX.",
   "mysql": {"defaults_file": "/etc/relical/mysql.cnf"},
   "default_destination": "local",
   "destinations": {"local": {"repository": "/srv/repo/{subscription}", "prune": "local"}},
@@ -197,8 +203,8 @@ rm "$M/cur/1001.M2.e2e:2,S"
 $R restore --subscription example.test --domain example.test --mailbox alice | tee /tmp/restore.json
 grep -q '"messages": 3' /tmp/restore.json
 doveadm mailbox list -u alice@example.test | tee /tmp/list.txt
-grep -q '^Restored ' /tmp/list.txt
-doveadm fetch -u alice@example.test hdr.subject mailbox 'Restored*' | tee /tmp/fetch.txt
+grep -q '^INBOX.Restored ' /tmp/list.txt
+doveadm fetch -u alice@example.test hdr.subject mailbox 'INBOX.Restored*' | tee /tmp/fetch.txt
 grep -q 'two' /tmp/fetch.txt
 
 if $R restore --domain example.test --mailbox alice > /tmp/again.json; then
@@ -211,7 +217,7 @@ grep -q 'already exists' /tmp/again.json
 $R backup --subscription example.test | tee /tmp/backup2.json
 grep -q '"ok": true' /tmp/backup2.json
 rm "$M/.Sent/cur/1002.M3.e2e:2,S"
-$R restore --domain example.test --mailbox alice --folder Sent | tee /tmp/restore-folder.json
+$R restore --domain example.test --mailbox alice --folder INBOX.Sent | tee /tmp/restore-folder.json
 grep -q '"messages": 1' /tmp/restore-folder.json
 restored_to() { sed -n 's/^ *"restored_to": "\(.*\)",*$/\1/p' "$1"; }
 T1=$(restored_to /tmp/restore.json)

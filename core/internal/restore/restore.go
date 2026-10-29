@@ -1,5 +1,6 @@
 // Package restore restores a mailbox (or one IMAP folder of it) from a
-// snapshot into a new folder "Restored <date> <id>" through doveadm import.
+// snapshot into a new folder "Restored <date> <id>" (after the configured
+// mail_folder_prefix) through doveadm import.
 // It never overwrites existing mail.
 package restore
 
@@ -178,7 +179,9 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 		return res, err
 	}
 	res.Snapshot = snap.ID
-	target := fmt.Sprintf("Restored %s %s", snap.Time.UTC().Format("2006-01-02"), snap.Short())
+	// The folder sits in the inbox namespace: Plesk's Dovecot refuses a
+	// name without its "INBOX." prefix.
+	target := env.Cfg.MailFolderPrefix + fmt.Sprintf("Restored %s %s", snap.Time.UTC().Format("2006-01-02"), snap.Short())
 	res.RestoredTo = target
 
 	list, err := doveadm(ctx, env, "mailbox", "list", "-u", box.Login)
@@ -220,12 +223,15 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 	if err != nil {
 		return res, err
 	}
-	src := "maildir:" + filepath.Join(stage, box.Path) + ":INDEX=MEMORY"
+	// A plain mail_driver:mail_path location: Dovecot 2.4 (Plesk 18.0.81)
+	// refuses parameters such as :INDEX=MEMORY in it. Dovecot then keeps
+	// its index files in the staging copy, which is deleted afterwards.
+	src := "maildir:" + filepath.Join(stage, box.Path)
 	args := []string{"import", "-s", "-u", box.Login, src, target}
 	if req.Folder == "" {
 		args = append(args, "all")
 	} else {
-		args = append(args, "mailbox", req.Folder)
+		args = append(args, "mailbox", sourceFolder(req.Folder, env.Cfg.MailFolderPrefix))
 	}
 	_, impErr, err := doveadmRun(ctx, env, args...)
 	if err == nil {
@@ -275,4 +281,15 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 		}
 	}
 	return res, nil
+}
+
+// sourceFolder is the name of folder in the staged copy. doveadm import
+// opens that copy with Dovecot's default namespace, so its folders carry no
+// prefix ("Sent", where the live mailbox on Plesk says "INBOX.Sent"); a
+// folder given with the live prefix loses it. "INBOX" stays "INBOX".
+func sourceFolder(folder, prefix string) string {
+	if prefix != "" && strings.HasPrefix(folder, prefix) && len(folder) > len(prefix) {
+		return folder[len(prefix):]
+	}
+	return folder
 }

@@ -56,7 +56,7 @@ func TestRestoreLatestWholeMailbox(t *testing.T) {
 	if !strings.Contains(l, "restore fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210 --target") {
 		t.Errorf("restore args:\n%s", l)
 	}
-	if !strings.Contains(l, "import -s -u alice@example.test maildir:") || !strings.Contains(l, ":INDEX=MEMORY Restored 2026-10-15 fedcba98 all") {
+	if !strings.Contains(l, "import -s -u alice@example.test maildir:") || !strings.Contains(l, "/Maildir Restored 2026-10-15 fedcba98 all") || strings.Contains(l, "INDEX=") {
 		t.Errorf("import args:\n%s", l)
 	}
 	if !strings.Contains(l, "1.host:2,S") {
@@ -285,5 +285,35 @@ func TestRestoreFromAnotherIdsRepositoryIsRefused(t *testing.T) {
 	}
 	if log() != "" {
 		t.Errorf("restic or doveadm ran:\n%s", log())
+	}
+}
+
+func TestRestoreFolderTakesTheNamespacePrefix(t *testing.T) {
+	e, _, log := setup(t)
+	e.Cfg.MailFolderPrefix = "INBOX."
+	res, err := Run(context.Background(), e, Request{Domain: "example.test", Mailbox: "alice", Snapshot: "latest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RestoredTo != "INBOX.Restored 2026-10-15 fedcba98" {
+		t.Errorf("%+v", res)
+	}
+	if l := log(); !strings.Contains(l, "/Maildir INBOX.Restored 2026-10-15 fedcba98 all") {
+		t.Errorf("import args:\n%s", l)
+	}
+}
+
+func TestSourceFolderDropsTheLivePrefix(t *testing.T) {
+	for _, c := range []struct{ folder, prefix, want string }{
+		{"INBOX.Sent", "INBOX.", "Sent"},
+		{"Sent", "INBOX.", "Sent"},
+		{"INBOX", "INBOX.", "INBOX"},
+		{"INBOX.", "INBOX.", "INBOX."},
+		{"INBOX.Archive.2025", "INBOX.", "Archive.2025"},
+		{"INBOX.Sent", "", "INBOX.Sent"},
+	} {
+		if got := sourceFolder(c.folder, c.prefix); got != c.want {
+			t.Errorf("sourceFolder(%q, %q) = %q, want %q", c.folder, c.prefix, got, c.want)
+		}
 	}
 }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -273,3 +274,21 @@ func TestRedactRepository(t *testing.T) {
 		}
 	}
 }
+
+func TestMailFolderPrefix(t *testing.T) {
+	for _, p := range []string{"", "INBOX.", "INBOX/", "Mail."} {
+		body := strings.Replace(validJSON, `"version": 2,`, `"version": 2, "mail_folder_prefix": "`+p+`",`, 1)
+		c, err := Load(write(t, body, 0o600))
+		if err != nil || c.MailFolderPrefix != p {
+			t.Errorf("%q: %v", p, err)
+		}
+	}
+	for _, p := range []string{"INBOX", ".", "IN BOX.", "INBOX..", "../", "INBOX.\n"} {
+		body := strings.Replace(validJSON, `"version": 2,`, `"version": 2, "mail_folder_prefix": `+strconvQuote(p)+`,`, 1)
+		if _, err := Load(write(t, body, 0o600)); err == nil || !strings.Contains(err.Error(), "mail_folder_prefix") {
+			t.Errorf("%q: err = %v", p, err)
+		}
+	}
+}
+
+func strconvQuote(s string) string { b, _ := json.Marshal(s); return string(b) }

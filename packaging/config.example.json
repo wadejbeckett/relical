@@ -11,6 +11,7 @@
     "mail": ["/var/qmail/mailnames"]
   },
   "mailbox_pattern": "/var/qmail/mailnames/{domain}/{mailbox}/Maildir",
+  "mail_folder_prefix": "INBOX.",
   "mysql": {"defaults_file": "/etc/relical/mysql.cnf"},
   "default_destination": "archive",
   "destinations": {

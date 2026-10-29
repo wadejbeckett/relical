@@ -55,14 +55,19 @@ type MySQL struct {
 }
 
 type Config struct {
-	Version            int                    `json:"version"`
-	ServerID           string                 `json:"server_id"`
-	ResticBin          string                 `json:"restic_bin"`
-	DoveadmBin         string                 `json:"doveadm_bin"`
-	MysqldumpBin       string                 `json:"mysqldump_bin"`
-	StateDir           string                 `json:"state_dir"`
-	KeysDir            string                 `json:"keys_dir"`
-	MailboxPattern     string                 `json:"mailbox_pattern"`
+	Version        int    `json:"version"`
+	ServerID       string `json:"server_id"`
+	ResticBin      string `json:"restic_bin"`
+	DoveadmBin     string `json:"doveadm_bin"`
+	MysqldumpBin   string `json:"mysqldump_bin"`
+	StateDir       string `json:"state_dir"`
+	KeysDir        string `json:"keys_dir"`
+	MailboxPattern string `json:"mailbox_pattern"`
+	// MailFolderPrefix is the prefix of Dovecot's inbox namespace, put in
+	// front of the "Restored <date> <id>" folder a mail restore creates:
+	// "INBOX." on Plesk (namespace inbox { prefix = INBOX. separator = . }),
+	// empty for Dovecot's default namespace.
+	MailFolderPrefix   string                 `json:"mail_folder_prefix"`
 	Roots              Roots                  `json:"roots"`
 	MySQL              MySQL                  `json:"mysql"`
 	DefaultDestination string                 `json:"default_destination"`
@@ -169,6 +174,11 @@ func (c *Config) applyDefaults() {
 	}
 }
 
+var folderPrefixRE = regexp.MustCompile(`^([A-Za-z0-9_-]{1,63}[./])?$`)
+
+// validFolderPrefix accepts "" or a short namespace prefix such as "INBOX.".
+func validFolderPrefix(p string) bool { return folderPrefixRE.MatchString(p) }
+
 // CleanAbs reports whether p is absolute, already clean and free of "..".
 func CleanAbs(p string) bool {
 	if !filepath.IsAbs(p) || filepath.Clean(p) != p {
@@ -219,6 +229,9 @@ func (c *Config) Validate() error {
 		errs = append(errs, errors.New("mailbox_pattern must contain {domain} and {mailbox} once each"))
 	} else if !CleanAbs(c.MailboxPattern) || !Under(c.MailboxPattern, c.Roots.Mail) {
 		errs = append(errs, fmt.Errorf("mailbox_pattern %q must be a clean absolute path under a mail root (%s)", c.MailboxPattern, strings.Join(c.Roots.Mail, ", ")))
+	}
+	if !validFolderPrefix(c.MailFolderPrefix) {
+		errs = append(errs, fmt.Errorf("mail_folder_prefix %q must be empty or a namespace prefix ending in its separator (\".\" or \"/\"), such as \"INBOX.\"", c.MailFolderPrefix))
 	}
 	if c.MySQL.DefaultsFile != "" && !CleanAbs(c.MySQL.DefaultsFile) {
 		errs = append(errs, errors.New("mysql.defaults_file must be a clean absolute path"))
