@@ -7,28 +7,49 @@ namespace Noiz\Relical;
 use RuntimeException;
 
 /**
- * Where customer restores keep their state: one record file per restore,
- * `<dir>/<id>.json` (0600, root), and one lock file per subscription,
- * `<dir>/<subscription>.lock`, which restore-run.php holds (flock) for as
- * long as the restore runs. The directory is the extension's var dir
+ * Where customer restores keep their state, in the extension's var dir
  * (`pm_Context::getVarDir()`) plus `restores/`, 0700 root, so the web
- * process reads it only through restore-result.php and
- * restore-running.php.
+ * process reads it only through root scripts:
  *
- * The lock is what stops a second restore of the same subscription while
- * one runs, and what tells a record whose process died ("running" with no
- * lock held) from one that is still working.
+ * - `<id>.json` (0600): one record per restore (RestoreRecord).
+ * - `<subscription>.lock`: held (flock) by restore-run.php for as long as
+ *   the subscription's restore runs; stops a second one.
+ * - `slot-<n>.lock`: SLOTS of them, one held by each running restore;
+ *   caps the restores running on the whole server.
+ * - `<subscription>.read.lock`: held while restore-read.php asks the core
+ *   about the subscription's backups; a second request meanwhile is told
+ *   to wait instead of opening another Storage Box connection.
+ * - `<subscription>.<kind>.cache` (0600): the core's last answer to
+ *   `snapshots` or `mailboxes`, reused for CACHE_TTL seconds.
+ *
+ * Asking whether a lock is held reads /proc/locks (Status::lockHeld) and
+ * takes no lock, so asking never makes a restore that is just starting
+ * fail as busy.
  */
 final class RestoreStore
 {
     /** Records older than this are removed when the next restore starts. */
     public const MAX_AGE = 30 * 86400;
 
+    /** Customer restores running at the same time on the whole server. */
+    public const SLOTS = 2;
+
+    /** How long an answer of the core about restore points or mailboxes is reused. */
+    public const CACHE_TTL = 300;
+
+    /** The answers that are cached. */
+    public const CACHED = ['snapshots', 'mailboxes'];
+
     private string $dir;
 
-    public function __construct(string $dir)
+    /** @var callable(): string */
+    private $procLocks;
+
+    /** @param ?callable(): string $procLocks reads /proc/locks (replaceable in tests) */
+    public function __construct(string $dir, ?callable $procLocks = null)
     {
         $this->dir = rtrim($dir, '/');
+        $this->procLocks = $procLocks ?? static fn (): string => (string) @file_get_contents('/proc/locks');
     }
 
     public static function fromPlesk(): self
@@ -51,6 +72,22 @@ final class RestoreStore
         return $this->dir . '/' . Command::domain($subscription) . '.lock';
     }
 
+    public function readLockPath(string $subscription): string
+    {
+        return $this->dir . '/' . Command::domain($subscription) . '.read.lock';
+    }
+
+    public function cachePath(string $subscription, string $kind): string
+    {
+        if (!in_array($kind, self::CACHED, true)) {
+            throw new \InvalidArgumentException(sprintf('"%s" is not cached', $kind));
+        }
+
+        return $this->dir . '/' . Command::domain($subscription) . '.' . $kind . '.cache';
+    }
+
+    // ----- locks -----
+
     /**
      * Takes the subscription's restore lock without waiting.
      *
@@ -58,28 +95,37 @@ final class RestoreStore
      */
     public function lock(string $subscription)
     {
-        $path = $this->lockPath($subscription);
-        if (is_link($path)) {
-            throw new RuntimeException(sprintf('%s is a symbolic link', $path));
-        }
-        $previousUmask = umask(0077);
-        try {
-            $handle = @fopen($path, 'c');
-        } finally {
-            umask($previousUmask);
-        }
-        if ($handle === false) {
-            throw new RuntimeException(sprintf('could not open %s', $path));
-        }
-        if (!flock($handle, LOCK_EX | LOCK_NB)) {
-            fclose($handle);
-            return null;
-        }
-
-        return $handle;
+        return $this->take($this->lockPath($subscription));
     }
 
-    /** @param resource $lock from lock() */
+    /**
+     * Takes one of the server's restore slots without waiting.
+     *
+     * @return resource|null the held slot, or null when SLOTS restores run already
+     */
+    public function slot()
+    {
+        for ($n = 1; $n <= self::SLOTS; $n++) {
+            $slot = $this->take($this->dir . '/slot-' . $n . '.lock');
+            if ($slot !== null) {
+                return $slot;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Takes the subscription's read lock without waiting.
+     *
+     * @return resource|null the held lock, or null while another read of the subscription runs
+     */
+    public function readLock(string $subscription)
+    {
+        return $this->take($this->readLockPath($subscription));
+    }
+
+    /** @param resource $lock from lock(), slot() or readLock() */
     public static function unlock($lock): void
     {
         flock($lock, LOCK_UN);
@@ -89,17 +135,22 @@ final class RestoreStore
     /** Whether a restore of the subscription is running now. */
     public function isRunning(string $subscription): bool
     {
-        if (!is_dir($this->dir)) {
-            return false;
-        }
-        $lock = $this->lock($subscription);
-        if ($lock === null) {
-            return true;
-        }
-        self::unlock($lock);
-
-        return false;
+        return $this->held($this->lockPath($subscription));
     }
+
+    /** Whether every restore slot of the server is taken. */
+    public function serverBusy(): bool
+    {
+        for ($n = 1; $n <= self::SLOTS; $n++) {
+            if (!$this->held($this->dir . '/slot-' . $n . '.lock')) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // ----- records -----
 
     /** @return ?array<string, mixed> the record, or null when there is none */
     public function read(string $id): ?array
@@ -134,5 +185,112 @@ final class RestoreStore
         }
 
         return $removed;
+    }
+
+    // ----- the read cache -----
+
+    /**
+     * The core's cached answer, when it is younger than CACHE_TTL and was
+     * stored for this subscription.
+     */
+    public function cached(string $subscription, string $kind, int $now): ?string
+    {
+        $path = $this->cachePath($subscription, $kind);
+        if (is_link($path) || !is_file($path)) {
+            return null;
+        }
+        $entry = json_decode((string) @file_get_contents($path), true);
+        if (!is_array($entry) || ($entry['subscription'] ?? null) !== $subscription || ($entry['kind'] ?? null) !== $kind
+            || !is_int($entry['at'] ?? null) || !is_string($entry['stdout'] ?? null)) {
+            return null;
+        }
+        $age = $now - $entry['at'];
+
+        return $age >= 0 && $age < self::CACHE_TTL ? $entry['stdout'] : null;
+    }
+
+    public function cache(string $subscription, string $kind, string $stdout, int $now): void
+    {
+        RootFile::write(
+            $this->cachePath($subscription, $kind),
+            json_encode(['subscription' => $subscription, 'kind' => $kind, 'at' => $now, 'stdout' => $stdout], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR) . "\n"
+        );
+    }
+
+    /** Forgets the cached answers of one subscription, or of all. @return int how many were removed */
+    public function clearCache(?string $subscription = null): int
+    {
+        $paths = $subscription === null
+            ? (glob($this->dir . '/*.cache') ?: [])
+            : array_map(fn (string $kind): string => $this->cachePath($subscription, $kind), self::CACHED);
+        $removed = 0;
+        foreach ($paths as $path) {
+            if ((is_file($path) || is_link($path)) && @unlink($path)) {
+                $removed++;
+            }
+        }
+
+        return $removed;
+    }
+
+    // ----- restored copies in the home directory -----
+
+    /**
+     * How many `restored-*` entries the subscription's home directory holds
+     * (the copies earlier restores left there). Names only; nothing is
+     * followed or opened.
+     */
+    public static function restoredFolders(string $home): int
+    {
+        if (is_link($home) || !is_dir($home)) {
+            return 0;
+        }
+        $count = 0;
+        foreach (@scandir($home) ?: [] as $name) {
+            if (str_starts_with($name, 'restored-')) {
+                $count++;
+            }
+        }
+
+        return $count;
+    }
+
+    // ----- helpers -----
+
+    /** @return resource|null */
+    private function take(string $path)
+    {
+        if (is_link($path)) {
+            throw new RuntimeException(sprintf('%s is a symbolic link', $path));
+        }
+        $previousUmask = umask(0077);
+        try {
+            $handle = @fopen($path, 'c');
+        } finally {
+            umask($previousUmask);
+        }
+        if ($handle === false) {
+            throw new RuntimeException(sprintf('could not open %s', $path));
+        }
+        if (!flock($handle, LOCK_EX | LOCK_NB)) {
+            fclose($handle);
+            return null;
+        }
+
+        return $handle;
+    }
+
+    private function held(string $path): bool
+    {
+        clearstatcache(true, $path);
+        if (is_link($path) || !is_file($path)) {
+            return false;
+        }
+        $stat = @stat($path);
+        if ($stat === false) {
+            return false;
+        }
+
+        return Status::lockHeld(($this->procLocks)(), (int) $stat['dev'], (int) $stat['ino']);
     }
 }

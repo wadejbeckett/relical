@@ -99,4 +99,122 @@ final class RestoreStoreTest extends TestCase
         self::assertNull($store->read($old));
         self::assertNotNull($store->read(self::ID));
     }
+
+    public function testTheServerRunsAtMostTwoRestores(): void
+    {
+        $store = new RestoreStore($this->dir);
+        $store->ensure();
+
+        $first = $store->slot();
+        $second = $store->slot();
+        self::assertNotNull($first);
+        self::assertNotNull($second);
+        self::assertTrue($store->serverBusy());
+        // A third subscription gets its own lock but no slot.
+        $third = $store->lock('third.example.test');
+        self::assertNotNull($third);
+        self::assertNull($store->slot());
+
+        RestoreStore::unlock($first);
+        self::assertFalse($store->serverBusy());
+        $again = $store->slot();
+        self::assertNotNull($again);
+        foreach ([$second, $third, $again] as $lock) {
+            RestoreStore::unlock($lock);
+        }
+    }
+
+    public function testAskingWhetherARestoreRunsTakesNoLock(): void
+    {
+        $asked = 0;
+        $store = new RestoreStore($this->dir, static function () use (&$asked): string {
+            $asked++;
+            return (string) file_get_contents('/proc/locks');
+        });
+        $store->ensure();
+        $lock = $store->lock('example.test');
+        self::assertNotNull($lock);
+        RestoreStore::unlock($lock);
+
+        self::assertFalse($store->isRunning('example.test'));
+        self::assertSame(1, $asked, 'answered from /proc/locks');
+        self::assertFalse($store->serverBusy(), 'no slot file yet: not busy');
+    }
+
+    public function testASecondReadOfTheSameSubscriptionIsRefused(): void
+    {
+        $store = new RestoreStore($this->dir);
+        $store->ensure();
+
+        $read = $store->readLock('example.test');
+        self::assertNotNull($read);
+        self::assertNull($store->readLock('example.test'));
+        $other = $store->readLock('other.example.test');
+        self::assertNotNull($other);
+        self::assertNotNull($store->lock('example.test'), 'a read does not block a restore');
+
+        RestoreStore::unlock($read);
+        RestoreStore::unlock($other);
+    }
+
+    public function testTheCacheIsReusedForFiveMinutesAndOnlyForItsSubscription(): void
+    {
+        $store = new RestoreStore($this->dir);
+        $store->ensure();
+        $now = 1793275200;
+
+        self::assertNull($store->cached('example.test', 'snapshots', $now));
+        $store->cache('example.test', 'snapshots', '[{"id":"abcdef12"}]', $now);
+        self::assertSame(0600, fileperms($store->cachePath('example.test', 'snapshots')) & 0777);
+        self::assertSame('[{"id":"abcdef12"}]', $store->cached('example.test', 'snapshots', $now + 299));
+        self::assertNull($store->cached('example.test', 'snapshots', $now + 300), 'stale');
+        self::assertNull($store->cached('example.test', 'snapshots', $now - 10), 'from the future');
+        self::assertNull($store->cached('example.test', 'mailboxes', $now));
+        self::assertNull($store->cached('other.example.test', 'snapshots', $now));
+
+        // An entry stored for another subscription is never returned, even under this name.
+        copy($store->cachePath('example.test', 'snapshots'), $store->cachePath('other.example.test', 'snapshots'));
+        self::assertNull($store->cached('other.example.test', 'snapshots', $now));
+    }
+
+    public function testOnlySnapshotsAndMailboxesAreCached(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        (new RestoreStore($this->dir))->cachePath('example.test', 'ls');
+    }
+
+    public function testClearingTheCache(): void
+    {
+        $store = new RestoreStore($this->dir);
+        $store->ensure();
+        $store->cache('example.test', 'snapshots', '[]', 1);
+        $store->cache('example.test', 'mailboxes', '[]', 1);
+        $store->cache('other.example.test', 'snapshots', '[]', 1);
+
+        self::assertSame(2, $store->clearCache('example.test'));
+        self::assertSame(1, $store->clearCache());
+        self::assertSame([], glob($this->dir . '/*.cache'));
+    }
+
+    public function testRestoredFoldersAreCountedByName(): void
+    {
+        mkdir($this->dir, 0700);
+        $home = $this->dir . '/home';
+        mkdir($home);
+        mkdir($home . '/httpdocs');
+        mkdir($home . '/restored-2026-10-27-11111111');
+        mkdir($home . '/restored-2026-10-28-22222222');
+        touch($home . '/restored-notes.txt');
+        symlink('/', $home . '/restored-link');
+
+        self::assertSame(4, RestoreStore::restoredFolders($home));
+        self::assertSame(0, RestoreStore::restoredFolders($this->dir . '/none'));
+
+        foreach (['restored-2026-10-27-11111111', 'restored-2026-10-28-22222222', 'httpdocs'] as $d) {
+            rmdir($home . '/' . $d);
+        }
+        unlink($home . '/restored-notes.txt');
+        unlink($home . '/restored-link');
+        rmdir($home);
+    }
 }

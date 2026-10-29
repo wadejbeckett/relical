@@ -30,6 +30,7 @@ final class Command
         'cli.php', 'write-config.php', 'install-timers.php', 'overview.php',
         'hostkey.php', 'probe.php', 'log-tail.php', 'running.php',
         'restore-run.php', 'restore-result.php', 'restore-running.php',
+        'restore-read.php', 'cache-clear.php',
     ];
 
     /** The units a customer restores (the panel configuration is the administrator's). */
@@ -185,6 +186,17 @@ final class Command
                 }
                 self::domain($args[0]);
                 return $args;
+            case 'restore-read.php':
+                self::readCliArgs($args);
+                return $args;
+            case 'cache-clear.php':
+                if (count($args) > 1) {
+                    throw new InvalidArgumentException('cache-clear.php takes at most <subscription>');
+                }
+                if ($args !== []) {
+                    self::domain($args[0]);
+                }
+                return $args;
             default:
                 if ($args !== []) {
                     throw new InvalidArgumentException(sprintf('%s takes no arguments', $script));
@@ -268,6 +280,44 @@ final class Command
         self::parse($cliArgs);
 
         return $cliArgs;
+    }
+
+    /**
+     * What restore-read.php asks the core, for the customer screens:
+     * `snapshots <subscription>`, `mailboxes <subscription>` or
+     * `ls <subscription> <snapshot id> [<path>]` (an id, never "latest"; a
+     * relative path). Never `_server`.
+     *
+     * @param list<string> $args restore-read.php's arguments
+     * @return list<string> the arguments for cli.php
+     * @throws InvalidArgumentException naming what was refused
+     */
+    public static function readCliArgs(array $args): array
+    {
+        $args = array_values(array_map('strval', $args));
+        $kind = $args[0] ?? '';
+        $count = count($args);
+        if (($kind === 'snapshots' || $kind === 'mailboxes') && $count === 2) {
+            $cli = [$kind, '--subscription', self::domain($args[1])];
+        } elseif ($kind === 'ls' && ($count === 3 || $count === 4)) {
+            if (preg_match('/^[0-9a-f]{8,64}$/D', $args[2]) !== 1) {
+                throw new InvalidArgumentException('ls needs a hexadecimal snapshot id');
+            }
+            $cli = ['ls', '--subscription', self::domain($args[1]), '--snapshot', $args[2]];
+            if ($count === 4) {
+                $path = self::path($args[3]);
+                if ($path[0] === '/' || str_ends_with($path, '/') || str_contains($path, '//')) {
+                    throw new InvalidArgumentException('path must be relative and clean');
+                }
+                $cli[] = '--path';
+                $cli[] = $path;
+            }
+        } else {
+            throw new InvalidArgumentException('restore-read.php takes "snapshots <subscription>", "mailboxes <subscription>" or "ls <subscription> <snapshot> [<path>]"');
+        }
+        self::parse($cli);
+
+        return $cli;
     }
 
     /** The reference of a customer restore (its record file's name). */

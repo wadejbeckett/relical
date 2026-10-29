@@ -328,6 +328,12 @@ final class CommandTest extends TestCase
         yield 'restore-run db' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'db', '--database', 'example_wp']];
         yield 'restore-result' => ['restore-result.php', [self::RESTORE_ID]];
         yield 'restore-running' => ['restore-running.php', ['example.test']];
+        yield 'restore-read snapshots' => ['restore-read.php', ['snapshots', 'example.test']];
+        yield 'restore-read mailboxes' => ['restore-read.php', ['mailboxes', 'example.test']];
+        yield 'restore-read ls top' => ['restore-read.php', ['ls', 'example.test', 'abcdef12']];
+        yield 'restore-read ls path' => ['restore-read.php', ['ls', 'example.test', 'abcdef12', 'httpdocs/fotos/año']];
+        yield 'cache-clear all' => ['cache-clear.php', []];
+        yield 'cache-clear one' => ['cache-clear.php', ['example.test']];
     }
 
     /**
@@ -378,6 +384,18 @@ final class CommandTest extends TestCase
         yield 'restore-running of the server' => ['restore-running.php', ['_server']];
         yield 'restore-running without a subscription' => ['restore-running.php', []];
         yield 'restore-running with a path' => ['restore-running.php', ['../x']];
+        yield 'restore-read nothing' => ['restore-read.php', []];
+        yield 'restore-read status' => ['restore-read.php', ['status']];
+        yield 'restore-read the server' => ['restore-read.php', ['snapshots', '_server']];
+        yield 'restore-read snapshots with a unit' => ['restore-read.php', ['snapshots', 'example.test', 'mail']];
+        yield 'restore-read ls latest' => ['restore-read.php', ['ls', 'example.test', 'latest']];
+        yield 'restore-read ls without a snapshot' => ['restore-read.php', ['ls', 'example.test']];
+        yield 'restore-read ls climbing' => ['restore-read.php', ['ls', 'example.test', 'abcdef12', 'httpdocs/../..']];
+        yield 'restore-read ls absolute' => ['restore-read.php', ['ls', 'example.test', 'abcdef12', '/etc']];
+        yield 'restore-read ls an option' => ['restore-read.php', ['ls', 'example.test', 'abcdef12', '-x']];
+        yield 'restore-read ls too much' => ['restore-read.php', ['ls', 'example.test', 'abcdef12', 'a', 'b']];
+        yield 'cache-clear the server' => ['cache-clear.php', ['_server']];
+        yield 'cache-clear two' => ['cache-clear.php', ['example.test', 'other.example.test']];
     }
 
     /**
@@ -430,6 +448,13 @@ final class CommandTest extends TestCase
         } finally {
             setlocale(LC_CTYPE, (string) $previous);
         }
+    }
+
+    public function testReadArgumentsForCli(): void
+    {
+        self::assertSame(['snapshots', '--subscription', 'example.test'], Command::readCliArgs(['snapshots', 'example.test']));
+        self::assertSame(['mailboxes', '--subscription', 'example.test'], Command::readCliArgs(['mailboxes', 'example.test']));
+        self::assertSame(['ls', '--subscription', 'example.test', '--snapshot', 'abcdef12', '--path', 'httpdocs'], Command::readCliArgs(['ls', 'example.test', 'abcdef12', 'httpdocs']));
     }
 
     public function testBackgroundRestoreRefusesWhatRestoreRunRefuses(): void

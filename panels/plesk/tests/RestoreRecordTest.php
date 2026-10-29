@@ -117,6 +117,7 @@ final class RestoreRecordTest extends TestCase
         );
         self::assertSame('No backup snapshots.', RestoreRecord::customerError('no backup snapshots'));
         self::assertSame(RestoreRecord::BUSY, RestoreRecord::customerError(RestoreRecord::BUSY));
+        self::assertSame(RestoreRecord::SERVER_BUSY, RestoreRecord::customerError(RestoreRecord::SERVER_BUSY));
         self::assertStringContainsString('Contact your hosting provider', RestoreRecord::customerError('repository at sftp:x already exists'));
         self::assertStringContainsString('Contact your hosting provider', RestoreRecord::customerError('home /var/www/vhosts/example.test is owned by uid 0'));
     }
@@ -129,6 +130,7 @@ final class RestoreRecordTest extends TestCase
         yield 'no snapshots' => ['no backup snapshots', RestoreRecord::NO_BACKUPS_YET];
         yield 'storage box down' => ['Fatal: unable to open repository at sftp:u000000-sub1@u000000-sub1.your-storagebox.example:relical/example.test: ssh: connection refused', RestoreRecord::CANNOT_READ];
         yield 'anything else' => ['the server did not finish in time', RestoreRecord::CANNOT_READ];
+        yield 'another page is reading' => [RestoreRecord::READ_BUSY, RestoreRecord::READ_BUSY];
     }
 
     /** @dataProvider readErrors */
@@ -136,5 +138,32 @@ final class RestoreRecordTest extends TestCase
     {
         self::assertSame($shown, RestoreRecord::customerReadError($core));
         self::assertStringNotContainsString('/etc/relical', $shown);
+    }
+
+    public function testWhenANewRestoreMayStart(): void
+    {
+        $free = ['running' => false, 'server_busy' => false, 'restored_folders' => 4];
+
+        self::assertNull(RestoreRecord::startRefusal($free, 'files', false));
+        self::assertSame(RestoreRecord::BUSY, RestoreRecord::startRefusal(['running' => true] + $free, 'mail', true));
+        self::assertSame(RestoreRecord::SERVER_BUSY, RestoreRecord::startRefusal(['server_busy' => true] + $free, 'mail', false));
+        self::assertSame(RestoreRecord::SERVER_BUSY, RestoreRecord::startRefusal(['server_busy' => true] + $free, 'files', true), 'the server cap holds for administrators too');
+    }
+
+    public function testFiveRestoredCopiesStopAFilesOrDatabaseRestore(): void
+    {
+        $full = ['running' => false, 'server_busy' => false, 'restored_folders' => 5];
+
+        self::assertStringContainsString('already 5 restored copies', (string) RestoreRecord::startRefusal($full, 'files', false));
+        self::assertNotNull(RestoreRecord::startRefusal($full, 'db', false));
+        self::assertNull(RestoreRecord::startRefusal($full, 'mail', false), 'mail goes into the mailbox, not the home directory');
+        self::assertNull(RestoreRecord::startRefusal($full, 'files', true), 'administrators are exempt');
+    }
+
+    public function testAnUnreadableStateRefuses(): void
+    {
+        self::assertSame(RestoreRecord::CANNOT_START, RestoreRecord::startRefusal(null, 'mail', true));
+        self::assertSame(RestoreRecord::CANNOT_START, RestoreRecord::startRefusal(['running' => false], 'mail', true));
+        self::assertSame(RestoreRecord::CANNOT_START, RestoreRecord::startRefusal(['error' => 'x'], 'mail', true));
     }
 }

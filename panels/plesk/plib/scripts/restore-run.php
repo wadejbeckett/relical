@@ -9,7 +9,8 @@ declare(strict_types=1);
  *
  * The restore screens start it detached (Command::detachedScript). It takes
  * the subscription's restore lock (so a second restore of the same
- * subscription is refused while this one runs), writes a "running" record
+ * subscription is refused while this one runs) and one of the server's
+ * RestoreStore::SLOTS restore slots (so only that many run at once), writes a "running" record
  * to <var dir>/restores/<id>.json (0600), runs the core's restore with the
  * same argv cli.php would build (Command::parse, no shell), and replaces
  * the record with the core's JSON or its error. The record is the only
@@ -62,6 +63,13 @@ try {
         $store->write(RestoreRecord::failed($record, RestoreRecord::BUSY, time()));
         ScriptIO::fail(RestoreRecord::BUSY);
     }
+    // At most RestoreStore::SLOTS customer restores run on the server at once.
+    $slot = $store->slot();
+    if ($slot === null) {
+        RestoreStore::unlock($lock);
+        $store->write(RestoreRecord::failed($record, RestoreRecord::SERVER_BUSY, time()));
+        ScriptIO::fail(RestoreRecord::SERVER_BUSY);
+    }
     try {
         $store->write($record);
         try {
@@ -71,7 +79,10 @@ try {
             $record = RestoreRecord::failed($record, $e->getMessage(), time());
         }
         $store->write($record);
+        // Mail restores add folders; anything cached about the subscription is stale.
+        $store->clearCache($record['subscription']);
     } finally {
+        RestoreStore::unlock($slot);
         RestoreStore::unlock($lock);
     }
 } catch (Throwable $e) {

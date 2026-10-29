@@ -53,7 +53,12 @@ $r = $this->restore;
 <p class="relical-error"><strong>The restore did not complete.</strong> <?php echo $e($r['error']); ?></p>
 
 <?php else: ?>
-<p>No restore with this reference was found for this subscription.</p>
+<p>
+    No restore with this reference was found for this subscription. If it
+    was started a few minutes ago, it did not start: go back to the backups
+    and start it again. If that keeps happening, contact your hosting
+    provider and quote the reference below.
+</p>
 <?php endif; ?>
 
 <?php if ($this->id !== ''): ?>

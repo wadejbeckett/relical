@@ -25,8 +25,10 @@ use Noiz\Relical\Status;
  * the form, and `_server` (the Plesk configuration) is never reachable.
  *
  * Like the administrator screens, the controller never runs relical or
- * restic itself: it reads through `cli.php` and starts a restore detached
- * through `restore-run.php`, which records the outcome; the status page
+ * restic itself: it reads through `restore-read.php` (cached, one read per
+ * subscription at a time) and starts a restore detached through
+ * `restore-run.php` (one per subscription, two on the server), which
+ * records the outcome; the status page
  * reads that record (`restore-result.php`) and reloads itself with a meta
  * refresh until the restore has finished. No JavaScript of its own.
  */
@@ -195,7 +197,8 @@ class RestoreController extends pm_Controller_Action
             }
         }
 
-        $result = RootScripts::run('cli.php', RestoreRequest::lsArgs($this->subscription(), $point['id'], $path), self::SCRIPT_TIMEOUT);
+        RestoreRequest::lsArgs($this->subscription(), $point['id'], $path); // validates, as restore-read.php does again
+        $result = RootScripts::run('restore-read.php', array_values(array_filter(['ls', $this->subscription(), $point['id'], $path], 'strlen')), self::SCRIPT_TIMEOUT);
         try {
             $listing = RestoreRequest::listing($result['data'], $path);
         } catch (RuntimeException $e) {
@@ -320,13 +323,20 @@ class RestoreController extends pm_Controller_Action
      */
     private function start(array $args): void
     {
-        if ($this->restoreRunning()) {
-            $this->_status->addMessage('warning', RestoreRecord::BUSY);
+        $unit = $args[array_search('--unit', $args, true) + 1] ?? '';
+        $state = RootScripts::run('restore-running.php', [$this->subscription()], self::SCRIPT_TIMEOUT);
+        $refusal = RestoreRecord::startRefusal($state['code'] === 0 ? $state['data'] : null, $unit, $this->access->isAdmin());
+        if ($refusal !== null) {
+            $this->_status->addMessage('warning', $refusal);
             $this->_helper->json(['redirect' => $this->url('index')]);
             return;
         }
         $id = RestoreRequest::newId(time(), random_bytes(12));
-        RootScripts::startScriptInBackground('restore-run.php', array_merge([$id], $args));
+        if (!RootScripts::startScriptInBackground('restore-run.php', array_merge([$id], $args))) {
+            $this->_status->addMessage('error', RestoreRecord::CANNOT_START);
+            $this->_helper->json(['redirect' => $this->url('index')]);
+            return;
+        }
         $this->_helper->json(['redirect' => $this->url('status', ['id' => $id])]);
     }
 
@@ -340,7 +350,7 @@ class RestoreController extends pm_Controller_Action
     /** @return array{points: array<string, list<array<string, string>>>, error: string} */
     private function restorePoints(): array
     {
-        $result = RootScripts::run('cli.php', RestoreRequest::snapshotsArgs($this->subscription()), self::SCRIPT_TIMEOUT);
+        $result = RootScripts::run('restore-read.php', ['snapshots', $this->subscription()], self::SCRIPT_TIMEOUT);
         try {
             return ['points' => RestoreRequest::restorePoints($result['data']), 'error' => ''];
         } catch (RuntimeException $e) {
@@ -353,7 +363,7 @@ class RestoreController extends pm_Controller_Action
     /** @return array{mailboxes: array<string, array{domain: string, mailbox: string}>, error: string} */
     private function mailboxes(): array
     {
-        $result = RootScripts::run('cli.php', RestoreRequest::mailboxesArgs($this->subscription()), self::SCRIPT_TIMEOUT);
+        $result = RootScripts::run('restore-read.php', ['mailboxes', $this->subscription()], self::SCRIPT_TIMEOUT);
         try {
             return ['mailboxes' => RestoreRequest::mailboxes($result['data']), 'error' => ''];
         } catch (RuntimeException $e) {

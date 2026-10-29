@@ -121,6 +121,21 @@ what PHPUnit covers. Each line names the assumption and where it lives.
       reloads it in Plesk's layout (Chrome and Firefox) until the record
       says done or failed; "Reload now" works without it. A record of
       another subscription (its id typed into the URL) reads as "not found".
+- [ ] Server-wide limit: with two restores of other subscriptions running,
+      a third is refused with "The server is busy with other restores"
+      (the `slot-1.lock`/`slot-2.lock` flocks in `restores/`); a customer
+      with five `restored-*` copies in the home directory cannot start a
+      files or database restore, an administrator can. Disk space itself
+      is the core's check (free space on the staging and home file
+      systems, and staging on the webspace's file system), being done on
+      `main`: confirm a restore larger than the free space is refused
+      before anything is written (Task 9 review finding 1).
+- [ ] Storage Box connections: reloading the index page in a loop opens
+      at most one SFTP session per subscription at a time (others get
+      "being read for another page") and none at all for five minutes
+      after a successful read (`<subscription>.snapshots.cache`); a
+      restore clears the cache; `cache-clear.php` clears it at once
+      (Task 9 review finding 2).
 - [ ] Rate limit: starting a second restore of the same subscription while
       one runs shows "Another restore of this subscription is still
       running"; two near-simultaneous POSTs leave one running and one

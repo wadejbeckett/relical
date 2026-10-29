@@ -68,9 +68,17 @@ final class RootScripts
      * restore); its outcome lands in the script's own record.
      *
      * @param list<string> $args validated by Command::scriptArgs
+     * @return bool false when the background job could not be started
      */
-    public static function startScriptInBackground(string $script, array $args): void
+    public static function startScriptInBackground(string $script, array $args): bool
     {
-        @exec(Command::detachedScript($script, $args));
+        // The shell answers 0 once it has put the job in the background, so
+        // this catches only a shell that could not run at all; a script that
+        // dies later shows up in its own record (or the lack of one).
+        $output = [];
+        $code = -1;
+        $ran = @exec(Command::detachedScript($script, $args), $output, $code);
+
+        return $ran !== false && $code === 0;
     }
 }

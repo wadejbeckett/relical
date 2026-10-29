@@ -20,6 +20,13 @@ final class RestoreRecord
 {
     public const BUSY = 'Another restore of this subscription is still running. Start this one when it has finished.';
     public const STOPPED = 'The restore stopped before it finished.';
+    public const SERVER_BUSY = 'The server is busy with other restores. Try again later.';
+    public const CANNOT_START = 'The restore could not be started just now. Try again later; if it keeps happening, contact your hosting provider.';
+    public const READ_BUSY = 'The backups of this subscription are being read for another page. Try again in a moment.';
+
+    /** A customer may not start a files or database restore while this many `restored-*` copies are in the home directory. */
+    public const MAX_RESTORED_FOLDERS = 5;
+    public const TOO_MANY_FOLDERS = 'There are already %d restored copies (restored-...) in the home directory. Delete the ones you no longer need in the File Manager, then restore again.';
 
     /** Core errors a customer may read as they are. */
     private const CUSTOMER_SAFE = [
@@ -154,10 +161,35 @@ final class RestoreRecord
         return $view;
     }
 
+    /**
+     * Why a new restore must not start, from restore-running.php's answer,
+     * or null when it may. A missing or unreadable answer refuses (fails
+     * closed). Administrators are not held to the count of restored copies.
+     *
+     * @param ?array<mixed> $state {running, server_busy, restored_folders}
+     */
+    public static function startRefusal(?array $state, string $unit, bool $admin): ?string
+    {
+        if (!is_array($state) || !is_bool($state['running'] ?? null) || !is_bool($state['server_busy'] ?? null) || !is_int($state['restored_folders'] ?? null)) {
+            return self::CANNOT_START;
+        }
+        if ($state['running']) {
+            return self::BUSY;
+        }
+        if ($state['server_busy']) {
+            return self::SERVER_BUSY;
+        }
+        if (!$admin && $unit !== 'mail' && $state['restored_folders'] >= self::MAX_RESTORED_FOLDERS) {
+            return sprintf(self::TOO_MANY_FOLDERS, $state['restored_folders']);
+        }
+
+        return null;
+    }
+
     /** The error a customer may see. */
     public static function customerError(string $error): string
     {
-        if ($error === self::BUSY || $error === self::STOPPED) {
+        if (in_array($error, [self::BUSY, self::STOPPED, self::SERVER_BUSY], true)) {
             return $error;
         }
         foreach (self::CUSTOMER_SAFE as $pattern) {
@@ -180,6 +212,9 @@ final class RestoreRecord
      */
     public static function customerReadError(string $message): string
     {
+        if ($message === self::READ_BUSY) {
+            return $message;
+        }
         if (preg_match('/repository does not exist|no backup snapshots|no key for|no key file/i', $message) === 1) {
             return self::NO_BACKUPS_YET;
         }
