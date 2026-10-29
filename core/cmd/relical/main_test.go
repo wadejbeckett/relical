@@ -251,3 +251,24 @@ func TestSnapshotsByUnitAndServer(t *testing.T) {
 		t.Fatalf("%d %s", code, out)
 	}
 }
+
+func TestAdoptUnderInventoryCommand(t *testing.T) {
+	b, _ := json.Marshal(map[string]any{"version": 2, "subscriptions": []any{testSub}})
+	cfg := cliSetupWith(t, map[string]any{"inventory_command": []string{testutil.FakeInventory(t, string(b))}})
+	keys := filepath.Join(filepath.Dir(cfg), "keys")
+	os.WriteFile(filepath.Join(keys, "example.test.key"), []byte("k\n"), 0o600)
+	code, out := runCLI("-config", cfg, "backup", "--subscription", "example.test")
+	if code != 1 || !strings.Contains(out, "relical adopt --subscription example.test") {
+		t.Fatalf("%d %s", code, out)
+	}
+	if code, _ := runCLI("-config", cfg, "adopt"); code != 2 {
+		t.Errorf("adopt without --subscription: %d", code)
+	}
+	code, out = runCLI("-config", cfg, "adopt", "--subscription", "example.test")
+	if code != 0 || !strings.Contains(out, `"action": "adopt"`) || !strings.Contains(out, `recorded id \"17\"`) {
+		t.Fatalf("%d %s", code, out)
+	}
+	if code, out := runCLI("-config", cfg, "backup", "--subscription", "example.test"); code != 0 {
+		t.Fatalf("after adopt: %d %s", code, out)
+	}
+}

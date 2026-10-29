@@ -147,28 +147,65 @@ func (e Env) runnerWithKey(sub inventory.Subscription, keyPath string) (restic.R
 }
 
 // Runner returns a runner for a subscription that already has a key, and
-// refuses a repository recorded as another subscription id's.
+// refuses a repository recorded as another subscription id's (see
+// checkOwner).
 func (e Env) Runner(sub inventory.Subscription) (restic.Runner, config.Destination, error) {
 	kp, err := keys.Path(e.Cfg.KeysDir, sub.Name)
 	if err != nil {
 		return restic.Runner{}, config.Destination{}, err
 	}
-	if err := keys.CheckOwner(e.Cfg.KeysDir, sub.Name, sub.ID); err != nil {
+	if err := e.checkOwner(sub); err != nil {
 		return restic.Runner{}, config.Destination{}, err
 	}
 	return e.runnerWithKey(sub, kp)
 }
 
+// checkOwner refuses a repository recorded as another id's. When the
+// inventory comes from inventory_command, it also refuses an existing
+// key without an owner file (from a static inventory without ids, or an
+// earlier build): the repository may be an earlier subscription's of the
+// same name, so the administrator adopts it once with relical adopt.
+// A static inventory keeps the earlier behaviour: the first id to use
+// such a repository is recorded as its owner.
+func (e Env) checkOwner(sub inventory.Subscription) error {
+	dir := e.Cfg.KeysDir
+	if err := keys.CheckOwner(dir, sub.Name, sub.ID); err != nil {
+		return err
+	}
+	if len(e.Cfg.InventoryCommand) == 0 || sub.ID == "" {
+		return nil
+	}
+	has, err := keys.HasOwner(dir, sub.Name)
+	if err != nil || has {
+		return err
+	}
+	kp, err := keys.Path(dir, sub.Name)
+	if errors.Is(err, keys.ErrNoKey) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("the repository for %s has a key (%s) but no owner file, so it may belong to an earlier subscription of the same name: "+
+		"if it is this subscription's (id %q), run relical adopt --subscription %s once to record the id", sub.Name, kp, sub.ID, sub.Name)
+}
+
 // openRepo returns a runner for the subscription's repository, creating
 // the key and the repository on first use and recording the subscription's
 // id as the repository's owner. A repository recorded as another id's is
-// refused. A wrong password is an error, never a reason to init.
+// refused (see checkOwner). A wrong password is an error, never a reason
+// to init.
 func (e Env) openRepo(ctx context.Context, sub inventory.Subscription) (restic.Runner, error) {
-	if err := keys.CheckOwner(e.Cfg.KeysDir, sub.Name, sub.ID); err != nil {
+	if err := e.checkOwner(sub); err != nil {
 		return restic.Runner{}, err
 	}
 	kp, _, err := keys.Ensure(e.Cfg.KeysDir, sub.Name)
 	if err != nil {
+		return restic.Runner{}, err
+	}
+	// Recorded before init, so that a failed init does not leave a key
+	// without an owner, which checkOwner would then refuse.
+	if err := keys.RecordOwner(e.Cfg.KeysDir, sub.Name, sub.ID); err != nil {
 		return restic.Runner{}, err
 	}
 	r, _, err := e.runnerWithKey(sub, kp)
@@ -184,10 +221,50 @@ func (e Env) openRepo(ctx context.Context, sub inventory.Subscription) (restic.R
 			return restic.Runner{}, err
 		}
 	}
-	if err := keys.RecordOwner(e.Cfg.KeysDir, sub.Name, sub.ID); err != nil {
-		return restic.Runner{}, err
-	}
 	return r, nil
+}
+
+// Adopt records the subscription's id as the owner of its existing
+// repository, after confirming that the repository opens with the key.
+// It is for a key without an owner file, which checkOwner refuses when
+// the inventory comes from inventory_command. It never creates a key or
+// a repository, and never replaces a recorded owner.
+func (e Env) Adopt(ctx context.Context, sub inventory.Subscription) Result {
+	res := e.result(sub.Name, "", "adopt")
+	if sub.ID == "" {
+		return failed(res, fmt.Errorf("the inventory gives no id for %s; there is nothing to record", sub.Name))
+	}
+	kp, err := keys.Path(e.Cfg.KeysDir, sub.Name)
+	if err != nil {
+		return failed(res, err)
+	}
+	if err := keys.CheckOwner(e.Cfg.KeysDir, sub.Name, sub.ID); err != nil {
+		return failed(res, err)
+	}
+	if has, err := keys.HasOwner(e.Cfg.KeysDir, sub.Name); err != nil {
+		return failed(res, err)
+	} else if has {
+		res.OK = true
+		res.Note = fmt.Sprintf("the repository is already recorded as id %q's", sub.ID)
+		return res
+	}
+	r, _, err := e.runnerWithKey(sub, kp)
+	if err != nil {
+		return failed(res, err)
+	}
+	exists, err := r.Exists(ctx)
+	if err != nil {
+		return failed(res, err)
+	}
+	if !exists {
+		return failed(res, fmt.Errorf("the key for %s exists but its repository does not; nothing was recorded", sub.Name))
+	}
+	if err := keys.RecordOwner(e.Cfg.KeysDir, sub.Name, sub.ID); err != nil {
+		return failed(res, err)
+	}
+	res.OK = true
+	res.Note = fmt.Sprintf("recorded id %q as the repository's owner", sub.ID)
+	return res
 }
 
 func (e Env) result(sub, unit, action string) Result {

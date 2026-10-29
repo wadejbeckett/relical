@@ -492,3 +492,111 @@ func TestRecordKeepsUnitsApart(t *testing.T) {
 		t.Errorf("%+v", s)
 	}
 }
+
+// With inventory_command, a key without an owner file (from a static
+// inventory without ids or an earlier build) is refused until adopted.
+func TestKeyWithoutOwnerIsRefusedUnderInventoryCommand(t *testing.T) {
+	e, _, log := setup(t, "local")
+	e.Cfg.InventoryCommand = []string{"/usr/local/bin/inventory"}
+	keysEnsure(t, e)
+	sub := mustSub(t, e, "example.test")
+	sub.ID = "17"
+	rs := e.BackupSubscription(context.Background(), sub, "")
+	rs = append(rs, e.Forget(context.Background(), sub), e.Check(context.Background(), sub, ""))
+	for _, r := range rs {
+		if r.OK || !strings.Contains(r.Error, "no owner file") || !strings.Contains(r.Error, "relical adopt --subscription example.test") {
+			t.Errorf("%+v", r)
+		}
+	}
+	if _, _, err := e.Runner(sub); err == nil {
+		t.Error("Runner accepted a key without an owner")
+	}
+	if log() != "" {
+		t.Errorf("restic ran:\n%s", log())
+	}
+	if _, err := os.Stat(filepath.Join(e.Cfg.KeysDir, "example.test.id")); err == nil {
+		t.Error("owner recorded without adopt")
+	}
+	// A static inventory keeps the earlier behaviour: the id is recorded.
+	e.Cfg.InventoryCommand = nil
+	if r := e.BackupMail(context.Background(), sub); !r.OK {
+		t.Fatalf("static: %+v", r)
+	}
+	if b, _ := os.ReadFile(filepath.Join(e.Cfg.KeysDir, "example.test.id")); string(b) != "17\n" {
+		t.Errorf("static: owner %q", b)
+	}
+}
+
+// A new repository under inventory_command records its owner even when
+// init fails, so the next run is not refused.
+func TestNewRepositoryRecordsOwnerBeforeInit(t *testing.T) {
+	e, env, _ := setup(t, "local")
+	e.Cfg.InventoryCommand = []string{"/usr/local/bin/inventory"}
+	sub := mustSub(t, e, "example.test")
+	sub.ID = "17"
+	env["FAKE_CAT_EXIT"], env["FAKE_OTHER_EXIT"] = "10", "1" // no repository; init fails
+	if r := e.BackupMail(context.Background(), sub); r.OK || !strings.Contains(r.Error, "restic init") {
+		t.Fatalf("%+v", r)
+	}
+	delete(env, "FAKE_CAT_EXIT")
+	delete(env, "FAKE_OTHER_EXIT")
+	if r := e.BackupMail(context.Background(), sub); !r.OK {
+		t.Fatalf("second run: %+v", r)
+	}
+}
+
+func TestAdopt(t *testing.T) {
+	e, env, log := setup(t, "local")
+	e.Cfg.InventoryCommand = []string{"/usr/local/bin/inventory"}
+	sub := mustSub(t, e, "example.test")
+	sub.ID = "17"
+	idFile := filepath.Join(e.Cfg.KeysDir, "example.test.id")
+	// No key: nothing to adopt.
+	if r := e.Adopt(context.Background(), sub); r.OK || !strings.Contains(r.Error, "no key") {
+		t.Errorf("no key: %+v", r)
+	}
+	keysEnsure(t, e)
+	// The repository does not open: nothing is recorded.
+	env["FAKE_CAT_EXIT"] = "12"
+	if r := e.Adopt(context.Background(), sub); r.OK || !strings.Contains(r.Error, "exit 12") {
+		t.Errorf("wrong password: %+v", r)
+	}
+	env["FAKE_CAT_EXIT"] = "10"
+	if r := e.Adopt(context.Background(), sub); r.OK || !strings.Contains(r.Error, "does not") {
+		t.Errorf("no repository: %+v", r)
+	}
+	if _, err := os.Stat(idFile); err == nil {
+		t.Fatal("owner recorded for a repository that did not open")
+	}
+	if strings.Contains(log(), "init") {
+		t.Errorf("adopt ran init:\n%s", log())
+	}
+	delete(env, "FAKE_CAT_EXIT")
+	// Without an id there is nothing to record.
+	noID := sub
+	noID.ID = ""
+	if r := e.Adopt(context.Background(), noID); r.OK || !strings.Contains(r.Error, "no id") {
+		t.Errorf("no id: %+v", r)
+	}
+	r := e.Adopt(context.Background(), sub)
+	if !r.OK || r.Action != "adopt" || !strings.Contains(r.Note, `recorded id "17"`) {
+		t.Fatalf("%+v", r)
+	}
+	if b, _ := os.ReadFile(idFile); string(b) != "17\n" {
+		t.Fatalf("owner %q", b)
+	}
+	if r := e.BackupMail(context.Background(), sub); !r.OK {
+		t.Fatalf("after adopt: %+v", r)
+	}
+	// Adopting again is a note; another id is refused.
+	if r := e.Adopt(context.Background(), sub); !r.OK || !strings.Contains(r.Note, "already") {
+		t.Errorf("again: %+v", r)
+	}
+	sub.ID = "42"
+	if r := e.Adopt(context.Background(), sub); r.OK || !strings.Contains(r.Error, `id "17"`) {
+		t.Errorf("other id: %+v", r)
+	}
+	if b, _ := os.ReadFile(idFile); string(b) != "17\n" {
+		t.Errorf("owner changed: %q", b)
+	}
+}

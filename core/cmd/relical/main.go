@@ -33,7 +33,8 @@ commands:
   check     --subscription S | --all [--read-data-subset 5%]
   snapshots --subscription S [--unit mail|files|db|panel-config]
   restore   [--subscription S] [--unit mail] --domain D --mailbox M [--snapshot ID] [--folder F]
-  status`
+  status
+  adopt     --subscription S`
 
 // commandFlags lists the flags each command accepts.
 var commandFlags = map[string][]string{
@@ -46,6 +47,7 @@ var commandFlags = map[string][]string{
 	"check":     {"subscription", "all", "read-data-subset"},
 	"snapshots": {"subscription", "unit"},
 	"restore":   {"subscription", "unit", "domain", "mailbox", "snapshot", "folder"},
+	"adopt":     {"subscription"},
 }
 
 // units are the snapshot units of the CLI contract; implemented says
@@ -153,7 +155,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if (*subName == "") == !*all {
 			return usageError(stderr, "give exactly one of --subscription or --all")
 		}
-	case "mailboxes", "snapshots":
+	case "mailboxes", "snapshots", "adopt":
 		if *subName == "" {
 			return usageError(stderr, cmd+" needs --subscription")
 		}
@@ -208,6 +210,25 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "status":
 		st, err := job.ReadState(cfg.StateDir)
 		return emit(stdout, st, err)
+	case "adopt":
+		sub, err := env.Subscription(*subName)
+		if err != nil {
+			return emit(stdout, nil, err)
+		}
+		unlock, err := job.Lock(cfg.StateDir)
+		if err != nil {
+			return emit(stdout, nil, err)
+		}
+		defer unlock()
+		res := env.Adopt(ctx, sub)
+		if err := env.Record([]job.Result{res}); err != nil {
+			fmt.Fprintln(stderr, "warning: state not saved:", err)
+		}
+		code := emit(stdout, []job.Result{res}, nil)
+		if !res.OK {
+			code = 1
+		}
+		return code
 	case "restore":
 		res, err := restore.Run(ctx, env, restore.Request{Subscription: *subName, Domain: *domain, Mailbox: *mailbox, Snapshot: *snapshot, Folder: *folder})
 		return emit(stdout, res, err)

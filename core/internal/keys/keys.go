@@ -143,6 +143,19 @@ func CheckOwner(dir, name, id string) error {
 		"move %s, %s and the repository itself aside; relical never deletes them", name, rec, p, given, kp, p)
 }
 
+// HasOwner reports whether the repository has an owner file.
+func HasOwner(dir, name string) (bool, error) {
+	p, err := ownerPath(dir, name)
+	if err != nil {
+		return false, err
+	}
+	_, err = os.Lstat(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // RecordOwner records id as the repository's owner if no owner is recorded
 // yet, and otherwise checks it. An empty id (a static inventory without
 // ids, or the panel configuration) records nothing.
