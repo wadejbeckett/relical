@@ -366,14 +366,7 @@ class RestoreController extends pm_Controller_Action
     /** The core's own words for an administrator; a plain sentence for a customer. */
     private function safeError(string $message): string
     {
-        if ($this->access->isAdmin()) {
-            return $message;
-        }
-        if (preg_match('/repository does not exist|no backup snapshots/i', $message) === 1) {
-            return 'There are no backups of this subscription yet. The first one is made during the next nightly backup.';
-        }
-
-        return 'The backups could not be read just now. Try again later; if it keeps happening, contact your hosting provider.';
+        return $this->access->isAdmin() ? $message : RestoreRecord::customerReadError($message);
     }
 
     /**

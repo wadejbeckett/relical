@@ -120,4 +120,21 @@ final class RestoreRecordTest extends TestCase
         self::assertStringContainsString('Contact your hosting provider', RestoreRecord::customerError('repository at sftp:x already exists'));
         self::assertStringContainsString('Contact your hosting provider', RestoreRecord::customerError('home /var/www/vhosts/example.test is owned by uid 0'));
     }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function readErrors(): iterable
+    {
+        yield 'no key yet' => ['no key for example.test: no key file (/etc/relical/keys/example.test.key)', RestoreRecord::NO_BACKUPS_YET];
+        yield 'no repository' => ['Fatal: repository does not exist: unable to open config file', RestoreRecord::NO_BACKUPS_YET];
+        yield 'no snapshots' => ['no backup snapshots', RestoreRecord::NO_BACKUPS_YET];
+        yield 'storage box down' => ['Fatal: unable to open repository at sftp:u000000-sub1@u000000-sub1.your-storagebox.example:relical/example.test: ssh: connection refused', RestoreRecord::CANNOT_READ];
+        yield 'anything else' => ['the server did not finish in time', RestoreRecord::CANNOT_READ];
+    }
+
+    /** @dataProvider readErrors */
+    public function testReadErrorsACustomerSees(string $core, string $shown): void
+    {
+        self::assertSame($shown, RestoreRecord::customerReadError($core));
+        self::assertStringNotContainsString('/etc/relical', $shown);
+    }
 }

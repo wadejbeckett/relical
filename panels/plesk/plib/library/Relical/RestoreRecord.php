@@ -169,6 +169,24 @@ final class RestoreRecord
         return 'The restore could not be completed. Nothing was changed. Contact your hosting provider and quote the reference on this page.';
     }
 
+    public const NO_BACKUPS_YET = 'There are no backups of this subscription yet. The first one is made during the next nightly backup.';
+    public const CANNOT_READ = 'The backups could not be read just now. Try again later; if it keeps happening, contact your hosting provider.';
+
+    /**
+     * What a customer sees when the restore points or mailboxes could not be
+     * read: "no backups yet" for the core's words before a subscription's
+     * first backup (no key yet, no repository, no snapshots), else a plain
+     * sentence. The core's message itself is never shown to a customer.
+     */
+    public static function customerReadError(string $message): string
+    {
+        if (preg_match('/repository does not exist|no backup snapshots|no key for|no key file/i', $message) === 1) {
+            return self::NO_BACKUPS_YET;
+        }
+
+        return self::CANNOT_READ;
+    }
+
     /**
      * Where the restored copy is, as the customer finds it: the IMAP folder
      * for mail, else the path from the `restored-<date>-<id>` folder in the
