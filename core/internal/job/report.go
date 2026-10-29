@@ -68,11 +68,50 @@ const (
 	CheckStale  = 10 * 24 * time.Hour
 )
 
+// expectedUnits gives, per subscription in the inventory (and _server
+// when the server backs up its panel configuration), the state keys of
+// the units a backup gives rows for.
+func expectedUnits(inv *inventory.Inventory) map[string]map[string]bool {
+	exp := map[string]map[string]bool{}
+	for _, s := range inv.Subscriptions {
+		units := map[string]bool{RepositoryKey: true}
+		for _, u := range []string{MailTag, FilesTag} {
+			if s.Has(u) {
+				units[u] = true
+			}
+		}
+		if s.Has(DBTag) {
+			if len(s.Databases) == 0 {
+				units[DBTag] = true
+			}
+			for _, d := range s.Databases {
+				units[DBTag+":"+d.Name] = true
+			}
+		}
+		exp[s.Name] = units
+	}
+	if inv.Server.Has(PanelConfigTag) {
+		exp[config.ServerName] = map[string]bool{RepositoryKey: true, PanelConfigTag: true}
+	}
+	return exp
+}
+
 // BuildReport summarises the state. inv is the inventory, or nil with
 // invErr when it could not be loaded: that is a warning, so the report
 // always renders. It never runs restic.
+//
+// With an inventory, the rows are the units it covers. A unit in the
+// inventory without a row is warned about as never backed up. A unit in
+// the state file that the inventory no longer covers (a dropped database,
+// a removed subscription) has no row and no stale-backup warning; it is
+// reported once as "no longer backed up", in the reports made within
+// BackupStale of its last backup, and then left alone.
 func BuildReport(st State, inv *inventory.Inventory, invErr error, now time.Time) Report {
 	rep := Report{Generated: now.UTC().Format(time.RFC3339), Rows: []ReportRow{}, Renamed: []ReportRenamed{}, Skipped: []ReportSkipped{}, Warnings: []string{}}
+	var exp map[string]map[string]bool
+	if inv != nil {
+		exp = expectedUnits(inv)
+	}
 	subs := make([]string, 0, len(st))
 	for s := range st {
 		subs = append(subs, s)
@@ -91,11 +130,22 @@ func BuildReport(st State, inv *inventory.Inventory, invErr error, now time.Time
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		var oldest time.Time
+		_, covered := exp[sub]
+		var oldest, lastRetired time.Time
+		var retired []string // within BackupStale of their last backup
 		hasRow := false
 		for _, k := range keys {
 			r, ok := units[k]["backup"]
 			if !ok {
+				continue
+			}
+			if exp != nil && !exp[sub][k] {
+				if now.Sub(r.Time) <= BackupStale {
+					retired = append(retired, k)
+				}
+				if r.Time.After(lastRetired) {
+					lastRetired = r.Time
+				}
 				continue
 			}
 			hasRow = true
@@ -115,8 +165,19 @@ func BuildReport(st State, inv *inventory.Inventory, invErr error, now time.Time
 				oldest = r.Time // for the never-checked warning below
 			}
 		}
+		switch {
+		case covered:
+			for _, k := range retired {
+				rep.Warnings = append(rep.Warnings, fmt.Sprintf("%s %s: no longer backed up (no longer in the inventory); its backups are kept", sub, k))
+			}
+		case exp != nil && !lastRetired.IsZero() && now.Sub(lastRetired) <= BackupStale:
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf("%s: no longer in the inventory, so no longer backed up; its repository is kept", sub))
+		}
 		if hasRow && sub != config.ServerName {
 			rep.Subscriptions++
+		}
+		if exp != nil && !covered {
+			continue // no check warnings for what is no longer backed up
 		}
 		if c, ok := units[RepositoryKey]["check"]; ok {
 			if now.Sub(c.Time) > CheckStale {
@@ -125,9 +186,23 @@ func BuildReport(st State, inv *inventory.Inventory, invErr error, now time.Time
 		} else if hasRow && now.Sub(oldest) > CheckStale {
 			rep.Warnings = append(rep.Warnings, fmt.Sprintf("%s: backed up since %s but never checked", sub, ts(oldest)))
 		}
-		if inv != nil && sub != config.ServerName {
-			if _, ok := inv.Find(sub); !ok {
-				rep.Warnings = append(rep.Warnings, fmt.Sprintf("%s: in the state file but no longer in the inventory; its repository is kept", sub))
+	}
+	if exp != nil {
+		names := make([]string, 0, len(exp))
+		for n := range exp {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			ks := make([]string, 0, len(exp[n]))
+			for k := range exp[n] {
+				if _, ok := st[n][k]["backup"]; !ok && k != RepositoryKey {
+					ks = append(ks, k)
+				}
+			}
+			sort.Strings(ks)
+			for _, k := range ks {
+				rep.Warnings = append(rep.Warnings, fmt.Sprintf("%s %s: in the inventory but never backed up", n, k))
 			}
 		}
 	}

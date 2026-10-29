@@ -33,6 +33,7 @@ Phase 2: full backup per hosting subscription, and the core the Plesk extension 
 - `backup`, `forget` and `check` record each subscription's results in `state.json` and the run log as soon as they are known, not only when the run ends.
 - Mail restores pass `--` before doveadm's positional arguments (`import`, `mailbox delete`, `mailbox status`), refuse a `--folder` that is not in the restored copy with a clear error before importing, and glob-escape the mailbox path in restic's `--include`.
 - `snapshots`, `ls`, restores, `dump` and `stats` wait up to 2 minutes for a repository lock (`--retry-lock 2m`), and restic's exit 11 reads "the backup is being checked or pruned, try again in a few minutes". `check --all` waits up to 2 hours for Relical's run lock instead of failing at once. Retention still prunes every night.
+- `report` warns about each unit the inventory covers that has never been backed up, and leaves out the rows of units it no longer covers (a dropped database, a removed subscription): those are reported once, within 48 hours of their last backup, as "no longer backed up", instead of a stale-backup warning every day.
 - In `--all` runs, a destination that three subscriptions in a row could not connect to is given up on: the rest fail at once with "destination NAME unreachable; not tried". `relical-backup.service` has `TimeoutStartSec=20h` as a last resort.
 
 ### Changed

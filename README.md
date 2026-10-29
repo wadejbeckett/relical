@@ -237,28 +237,27 @@ Result fields: `subscription`; `unit` (`mail`, `files`, `db`, `panel-config`; ab
 `report` summarises it for a panel or a nightly mail. It reads the state file and the inventory and never runs restic:
 
 - `generated`: when the report was made (RFC 3339, UTC).
-- `rows`: the latest `backup` of each subscription's unit, sorted by subscription and then unit, with `ok`, `time`, `error` and `stored_bytes`: the subscription repository's size from its last `stats`, repeated on each of its rows.
+- `rows`: the latest `backup` of each unit the inventory covers, sorted by subscription and then unit (when the inventory cannot be loaded, of every unit in the state file), with `ok`, `time`, `error` and `stored_bytes`: the subscription repository's size from its last `stats`, repeated on each of its rows.
 - `ok`, `failed`, `skipped_rows`: those rows counted. A row is skipped when it is OK with a note that starts with "skipped" (a database of an unsupported type); skipped rows are not counted as OK.
 - `skipped`: the subscriptions the inventory left out, as `{"name", "reason"}`: those the panel adapter skipped (informational), and those whose entry is invalid, which also have a failed row with unit `inventory` (see The inventory).
 - `subscriptions`: the subscriptions with at least one row, not counting `_server`.
 - `stored_bytes`: every repository's size from its last `stats`, each counted once.
 - `renamed`: the inventory's renames (`name`, `renamed_from`, `note`). A rename starts a new repository under the new name and leaves the old one in place, untouched; `status` does not show this, because it reads only the state file.
-- `warnings`: a backup older than 48 hours, a `check` older than 10 days (or none at all for a subscription first backed up more than 10 days ago), a subscription in the state file that is no longer in the inventory, and an inventory that could not be loaded.
+- `warnings`: a backup older than 48 hours, a `check` older than 10 days (or none at all for a subscription first backed up more than 10 days ago), a unit the inventory covers that has never been backed up ("in the inventory but never backed up", such as a subscription added since the last run, or one a hung run never reached), and an inventory that could not be loaded. A unit the inventory no longer covers (a dropped database, a removed subscription) has no row and no stale-backup warning: it is reported as "no longer backed up" only in the reports made within 48 hours of its last backup, then left out; its repository and snapshots are kept.
 
 `report` exits 0 whenever the state file can be read; an inventory that fails to load (the `inventory_command` failing, for example) is a warning, so the report always renders. Only an unreadable state file is an error.
 
-Sample `relical report` (one database failed, one of an unsupported type, one subscription removed from the panel, one renamed and not backed up for three days):
+Sample `relical report` (one database failed, one of an unsupported type, one subscription removed from the panel yesterday, one parked domain the adapter skipped, one subscription renamed and not backed up for three days):
 
     {
       "generated": "2026-10-29T06:04:40Z",
-      "subscriptions": 3,
-      "ok": 5,
+      "subscriptions": 2,
+      "ok": 4,
       "failed": 1,
       "skipped_rows": 1,
       "stored_bytes": 1684013056,
       "rows": [
         {"subscription": "_server", "unit": "panel-config", "ok": true, "time": "2026-10-29T01:25:00Z", "error": "", "stored_bytes": 20971520},
-        {"subscription": "closed.test", "unit": "mail", "ok": true, "time": "2026-10-29T01:01:00Z", "error": "", "stored_bytes": 0},
         {"subscription": "example.test", "unit": "db:example_pg", "ok": true, "time": "2026-10-29T01:15:02Z", "error": "", "stored_bytes": 1610612736},
         {"subscription": "example.test", "unit": "db:example_wp", "ok": false, "time": "2026-10-29T01:15:02Z", "error": "mysqldump: exit status 2: Got error: 1045: Access denied", "stored_bytes": 1610612736},
         {"subscription": "example.test", "unit": "files", "ok": true, "time": "2026-10-29T01:14:40Z", "error": "", "stored_bytes": 1610612736},
@@ -272,7 +271,7 @@ Sample `relical report` (one database failed, one of an unsupported type, one su
         {"name": "parked.test", "reason": "no hosting and no mail"}
       ],
       "warnings": [
-        "closed.test: in the state file but no longer in the inventory; its repository is kept",
+        "closed.test: no longer in the inventory, so no longer backed up; its repository is kept",
         "example.test: the last check (2026-10-12T03:10:00Z) is older than 10 days",
         "shop.test mail: the last backup (2026-10-26T01:05:00Z) is older than 48 hours"
       ]

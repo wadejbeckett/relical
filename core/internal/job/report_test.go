@@ -17,7 +17,8 @@ import (
 func TestReportShape(t *testing.T) {
 	now := time.Date(2026, 10, 29, 6, 0, 0, 0, time.UTC)
 	st := State{"example.test": {"mail": {"backup": {Subscription: "example.test", Unit: "mail", Action: "backup", OK: true, Time: now}}}}
-	inv := &inventory.Inventory{Renamed: []inventory.Rename{{Subscription: "new.test", RenamedFrom: "old.test", Note: "n"}},
+	inv := &inventory.Inventory{Subscriptions: []inventory.Subscription{{Name: "example.test", Features: []string{"mail"}}},
+		Renamed: []inventory.Rename{{Subscription: "new.test", RenamedFrom: "old.test", Note: "n"}},
 		Skipped: []inventory.Skip{{Name: "nohosting.test", Reason: "no hosting"}, {Name: "bad.test", Reason: "invalid inventory entry: sys_user: is empty", Invalid: true}}}
 	b, err := json.Marshal(BuildReport(st, inv, nil, now))
 	if err != nil {
@@ -105,18 +106,21 @@ func TestReportCountsAndWarnings(t *testing.T) {
 	put(res("gone.test", "mail", "backup", true, recent))
 	put(res("_server", "panel-config", "backup", true, recent))
 	put(stats("_server", 500))
-	inv := &inventory.Inventory{Subscriptions: []inventory.Subscription{{Name: "a.test"}, {Name: "b.test"}},
+	inv := &inventory.Inventory{Subscriptions: []inventory.Subscription{{Name: "a.test", Features: []string{"mail"}},
+		{Name: "b.test", Features: []string{"mail", "files", "db"}, Databases: []inventory.Database{{Type: "postgresql", Name: "pg"}, {Type: "mysql", Name: "shop"}}}},
+		Server: &inventory.Server{Features: []string{"panel-config"}},
 		Renamed: []inventory.Rename{{Subscription: "b.test", RenamedFrom: "bee.test", Note: "the old repository is kept"}}}
 
 	rep := BuildReport(st, inv, nil, now)
-	if rep.Subscriptions != 3 || rep.OK != 5 || rep.Failed != 1 || rep.SkippedRows != 1 || rep.StoredBytes != 1524 {
+	// gone.test is no longer in the inventory: no row, not counted.
+	if rep.Subscriptions != 2 || rep.OK != 4 || rep.Failed != 1 || rep.SkippedRows != 1 || rep.StoredBytes != 1524 {
 		t.Errorf("counts: %+v", rep)
 	}
 	var order []string
 	for _, r := range rep.Rows {
 		order = append(order, r.Subscription+" "+r.Unit)
 	}
-	wantOrder := []string{"_server panel-config", "a.test mail", "b.test db:pg", "b.test db:shop", "b.test files", "b.test mail", "gone.test mail"}
+	wantOrder := []string{"_server panel-config", "a.test mail", "b.test db:pg", "b.test db:shop", "b.test files", "b.test mail"}
 	if !reflect.DeepEqual(order, wantOrder) {
 		t.Errorf("rows %q, want %q", order, wantOrder)
 	}
@@ -130,7 +134,7 @@ func TestReportCountsAndWarnings(t *testing.T) {
 	for _, w := range []string{
 		"b.test files: the last backup (2026-10-26T06:00:00Z) is older than 48 hours",
 		"b.test: the last check (2026-10-18T06:00:00Z) is older than 10 days",
-		"gone.test: in the state file but no longer in the inventory",
+		"gone.test: no longer in the inventory, so no longer backed up; its repository is kept",
 	} {
 		if !strings.Contains(all, w) {
 			t.Errorf("warnings lack %q:\n%s", w, all)
@@ -152,8 +156,57 @@ func TestReportCountsAndWarnings(t *testing.T) {
 func TestReportNeverChecked(t *testing.T) {
 	now := time.Date(2026, 10, 29, 6, 0, 0, 0, time.UTC)
 	st := State{"a.test": {"mail": {"backup": {Subscription: "a.test", Unit: "mail", Action: "backup", OK: true, Time: now.Add(-11 * 24 * time.Hour)}}}}
-	rep := BuildReport(st, &inventory.Inventory{Subscriptions: []inventory.Subscription{{Name: "a.test"}}}, nil, now)
+	rep := BuildReport(st, &inventory.Inventory{Subscriptions: []inventory.Subscription{{Name: "a.test", Features: []string{"mail"}}}}, nil, now)
 	if !strings.Contains(strings.Join(rep.Warnings, "\n"), "a.test: backed up since 2026-10-18T06:00:00Z but never checked") {
 		t.Errorf("%q", rep.Warnings)
+	}
+}
+
+// TestReportCoverage: units the inventory covers without a row are
+// warned about; units it no longer covers have no row and no stale
+// warning, and are reported as no longer backed up only within 48 hours
+// of their last backup.
+func TestReportCoverage(t *testing.T) {
+	now := time.Date(2026, 10, 29, 6, 0, 0, 0, time.UTC)
+	row := func(sub, unit string, at time.Time) Result {
+		return Result{Subscription: sub, Unit: unit, Action: "backup", OK: true, Time: at}
+	}
+	st := State{}
+	for _, r := range []Result{
+		row("a.test", "mail", now.Add(-5*time.Hour)),
+		row("a.test", "db:dropped", now.Add(-30*time.Hour)),    // dropped yesterday
+		row("a.test", "db:old", now.Add(-20*24*time.Hour)),     // dropped long ago
+		row("removed.test", "mail", now.Add(-30*time.Hour)),    // removed yesterday
+		row("ancient.test", "mail", now.Add(-60*24*time.Hour)), // removed long ago
+	} {
+		k := r.StateKey()
+		if r.Unit == "db:dropped" || r.Unit == "db:old" {
+			r.Unit, r.Database = "db", r.Unit[3:]
+			k = r.StateKey()
+		}
+		if st[r.Subscription] == nil {
+			st[r.Subscription] = map[string]map[string]Result{}
+		}
+		st[r.Subscription][k] = map[string]Result{"backup": r}
+		st[r.Subscription][RepositoryKey] = map[string]Result{"check": {Time: now}}
+	}
+	inv := &inventory.Inventory{Subscriptions: []inventory.Subscription{
+		{Name: "a.test", Features: []string{"mail", "files", "db"}, Databases: []inventory.Database{{Type: "mysql", Name: "shop"}}},
+		{Name: "new.test", Features: []string{"mail"}},
+	}, Server: &inventory.Server{Features: []string{"panel-config"}}}
+	rep := BuildReport(st, inv, nil, now)
+	if len(rep.Rows) != 1 || rep.Rows[0].Unit != "mail" || rep.Subscriptions != 1 {
+		t.Errorf("rows %+v", rep.Rows)
+	}
+	want := []string{
+		"a.test db:dropped: no longer backed up (no longer in the inventory); its backups are kept",
+		"removed.test: no longer in the inventory, so no longer backed up; its repository is kept",
+		"_server panel-config: in the inventory but never backed up",
+		"a.test db:shop: in the inventory but never backed up",
+		"a.test files: in the inventory but never backed up",
+		"new.test mail: in the inventory but never backed up",
+	}
+	if !reflect.DeepEqual(rep.Warnings, want) {
+		t.Errorf("warnings\n%s\nwant\n%s", strings.Join(rep.Warnings, "\n"), strings.Join(want, "\n"))
 	}
 }
