@@ -13,8 +13,13 @@ integration:
 	cd core && RELICAL_RESTIC=$(RELICAL_RESTIC) RELICAL_REST_SERVER=$(RELICAL_REST_SERVER) \
 		go test -tags integration -count=1 ./...
 
-e2e:
-	core/tests/e2e/restore-dovecot.sh
+# The pinned restic is fetched (tools/fetch.sh) when e2e uses the default
+# RELICAL_RESTIC and .tools/ does not have it yet, as in a fresh checkout.
+$(CURDIR)/.tools/restic:
+	tools/fetch.sh
+
+e2e: $(filter $(CURDIR)/.tools/restic,$(RELICAL_RESTIC))
+	RELICAL_RESTIC=$(RELICAL_RESTIC) core/tests/e2e/restore-dovecot.sh
 
 build:
 	cd core && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" \
