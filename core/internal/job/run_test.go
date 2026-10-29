@@ -112,9 +112,16 @@ func TestDestinationOverrideAndRetention(t *testing.T) {
 func TestForgetRemoteSkips(t *testing.T) {
 	e, _, log := setup(t, "remote")
 	keysEnsure(t, e)
-	r := e.Forget(context.Background(), mustSub(t, e, "example.test"))
-	if !r.OK || !strings.Contains(r.Note, "remote") || log() != "" {
+	sub := mustSub(t, e, "example.test")
+	r := e.Forget(context.Background(), sub)
+	want := "for the repository /repo/example.test: restic forget --group-by tags --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune"
+	if !r.OK || !strings.Contains(r.Note, "prune: remote") || !strings.Contains(r.Note, want) || log() != "" {
 		t.Fatalf("%+v\n%s", r, log())
+	}
+	// A subscription's own retention is the one reported.
+	sub.Retention = &config.Retention{Daily: 3}
+	if r := e.Forget(context.Background(), sub); !strings.Contains(r.Note, "--keep-daily 3 --keep-weekly 0 --keep-monthly 0 --prune") {
+		t.Errorf("%+v", r)
 	}
 }
 

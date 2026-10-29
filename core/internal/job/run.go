@@ -432,8 +432,13 @@ func (e Env) Forget(ctx context.Context, sub inventory.Subscription) Result {
 		return e.noRepository(res, sub, err)
 	}
 	if dst.Prune == "remote" {
+		// The destination host must group and keep exactly as a local
+		// forget would; restic's default grouping (host, paths) differs.
+		k := e.RetentionFor(sub)
 		res.OK = true
-		res.Note = "pruning runs on the destination host (prune: remote)"
+		res.Note = fmt.Sprintf("pruning runs on the destination host (prune: remote); it must run, for the repository %s: "+
+			"restic forget --group-by %s --keep-daily %d --keep-weekly %d --keep-monthly %d --prune",
+			dst.Repository, GroupBy, k.Daily, k.Weekly, k.Monthly)
 		return res
 	}
 	// A restic killed mid-run (SIGKILL, OOM, power loss) leaves a stale lock
