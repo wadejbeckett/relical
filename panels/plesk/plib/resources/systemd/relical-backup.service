@@ -12,14 +12,13 @@ ConditionPathExists=/etc/relical/config.json
 [Service]
 Type=oneshot
 ExecStart=/usr/local/lib/relical/relical -config /etc/relical/config.json backup --all
-# Retention runs after every backup run, whatever its result: ExecStartPost=
-# would be skipped when one subscription's backup fails, and then no old
-# snapshots would ever be pruned. ExecStopPost= runs regardless of result
-# (the unit still records the backup's failure).
-ExecStopPost=/usr/local/lib/relical/relical -config /etc/relical/config.json forget --all
-# ExecStopPost= is bounded by TimeoutStopSec= (default 90s), which a prune
-# can easily exceed.
-TimeoutStopSec=infinity
+# `backup --all` runs retention (forget) itself at the end of the run,
+# unless it was stopped; a stop or a reboot therefore never starts a prune.
+# A stop waits this long for relical to finish its SIGTERM handling.
+TimeoutStopSec=15min
+# Last resort against a run that hangs (a stalled SFTP session): the next
+# night's timer cannot start while this one is active.
+RuntimeMaxSec=20h
 # The backup yields CPU and disk to the sites and mail it is backing up.
 Nice=19
 IOSchedulingClass=idle

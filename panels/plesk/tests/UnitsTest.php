@@ -47,7 +47,6 @@ final class UnitsTest extends TestCase
         $check = $units[Units::CHECK_SERVICE];
 
         self::assertStringContainsString("ExecStart=/usr/local/lib/relical/relical -config /etc/relical/config.json backup --all\n", $backup);
-        self::assertStringContainsString("ExecStopPost=/usr/local/lib/relical/relical -config /etc/relical/config.json forget --all\n", $backup);
         self::assertStringContainsString("ExecStart=/usr/local/lib/relical/relical -config /etc/relical/config.json check --all --read-data-subset 5%%\n", $check);
         foreach ($units as $name => $unit) {
             self::assertStringNotContainsString('/usr/local/bin/relical', $unit, $name);
@@ -58,6 +57,19 @@ final class UnitsTest extends TestCase
         }
         foreach (Units::SERVICES as $name) {
             self::assertStringContainsString("ConditionPathExists=/etc/relical/config.json\n", $units[$name], $name);
+        }
+    }
+
+    public function testRetentionRunsInsideTheBackupAndStopsAreBounded(): void
+    {
+        $units = self::rendered();
+
+        self::assertStringNotContainsString('ExecStopPost', $units[Units::BACKUP_SERVICE], 'a stop or reboot must not start a prune');
+        self::assertDoesNotMatchRegularExpression('/^Exec.*forget/m', $units[Units::BACKUP_SERVICE]);
+        foreach (Units::SERVICES as $name) {
+            self::assertStringNotContainsString('TimeoutStopSec=infinity', $units[$name], $name);
+            self::assertStringContainsString("\nTimeoutStopSec=15min\n", $units[$name], $name);
+            self::assertStringContainsString("\nRuntimeMaxSec=20h\n", $units[$name], $name);
         }
     }
 
