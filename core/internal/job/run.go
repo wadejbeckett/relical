@@ -50,6 +50,16 @@ type Env struct {
 	// Breaker stops an --all run from trying a destination that has
 	// failed to connect BreakerTrips times in a row; nil runs without one.
 	Breaker *Breaker
+	// Progress, when set, gets the results of each subscription (and of
+	// the server, each stats call and each forget or check) as soon as
+	// they are known, so that the caller can record them during the run.
+	Progress func([]Result)
+}
+
+func (e Env) progress(rs []Result) {
+	if e.Progress != nil && len(rs) > 0 {
+		e.Progress(rs)
+	}
 }
 
 // BreakerTrips is how many subscriptions in a row may fail to reach a
@@ -178,6 +188,7 @@ func (e Env) eachRepository(ctx context.Context, subs []inventory.Subscription, 
 		rs := e.guarded(s, func() []Result { return []Result{fn(s)} }, func(msg string) []Result {
 			return []Result{failed(e.result(s.Name, "", action), errors.New(msg))}
 		})
+		e.progress(rs)
 		results = append(results, rs...)
 	}
 	return results
@@ -518,6 +529,7 @@ func (e Env) BackupAll(ctx context.Context, unit string) []Result {
 			break
 		}
 		rs := e.guarded(s, func() []Result { return e.BackupSubscription(ctx, s, unit) }, e.notTried(s, unit))
+		e.progress(rs)
 		results = append(results, rs...)
 		for _, r := range rs {
 			if r.Snapshot != "" {
@@ -535,6 +547,7 @@ func (e Env) BackupAll(ctx context.Context, unit string) []Result {
 	} else {
 		rs = e.runServer(ctx, unit)
 	}
+	e.progress(rs)
 	results = append(results, rs...)
 	for _, r := range rs {
 		if r.Snapshot != "" {
@@ -546,7 +559,9 @@ func (e Env) BackupAll(ctx context.Context, unit string) []Result {
 		if ctx.Err() != nil {
 			break
 		}
-		results = append(results, e.Stats(ctx, s))
+		st := e.Stats(ctx, s)
+		e.progress([]Result{st})
+		results = append(results, st)
 	}
 	return results
 }

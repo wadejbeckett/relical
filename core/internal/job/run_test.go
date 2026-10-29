@@ -731,3 +731,42 @@ func TestBreakerResetsAndIgnoresOtherFailures(t *testing.T) {
 		t.Error("a nil breaker is open")
 	}
 }
+
+// TestStateIsRecordedAfterEachSubscription: with Progress recording the
+// results, state.json read after the second of three subscriptions holds
+// the first two, so a run killed or hung later still leaves them.
+func TestStateIsRecordedAfterEachSubscription(t *testing.T) {
+	e, _, _ := setup(t, "local")
+	sftpSubs(t, &e)
+	e.Cfg.Destinations["d"] = config.Destination{Repository: "/repo/{subscription}", Prune: "local"}
+	e.Inv.Subscriptions = e.Inv.Subscriptions[:3]
+	calls := 0
+	var mid State
+	e.Progress = func(rs []Result) {
+		if err := e.Record(rs); err != nil {
+			t.Fatal(err)
+		}
+		calls++
+		if calls == 2 {
+			st, err := ReadState(e.Cfg.StateDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mid = st
+		}
+	}
+	rs := e.BackupAll(context.Background(), "")
+	if len(rs) != 6 || calls != 6 { // three mail backups, three stats
+		t.Fatalf("%d results, %d progress calls", len(rs), calls)
+	}
+	for sub, want := range map[string]bool{"a.test": true, "b.test": true, "c.test": false} {
+		_, got := mid[sub]["mail"]["backup"]
+		if got != want {
+			t.Errorf("state after the second subscription: %s recorded %v, want %v", sub, got, want)
+		}
+	}
+	st, _ := ReadState(e.Cfg.StateDir)
+	if !st["c.test"]["mail"]["backup"].OK || st["c.test"][RepositoryKey]["stats"].StoredBytes == 0 {
+		t.Errorf("final state: %+v", st["c.test"])
+	}
+}

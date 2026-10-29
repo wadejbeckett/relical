@@ -346,6 +346,32 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (code int
 		// subscriptions instead of costing timeouts for every one.
 		env.Breaker = job.NewBreaker()
 	}
+	// Subscriptions whose inventory entry is invalid were left out: they
+	// fail the run and are logged, but are not recorded in the state file.
+	invalid := []job.Result{}
+	if *all {
+		invalid = env.InvalidResults(cmd)
+	}
+	for _, r := range invalid {
+		if lg != nil {
+			lg.Result(r)
+		}
+	}
+	// Each subscription's results reach state.json and the run log as soon
+	// as they are known, so a run that is killed or hangs still leaves the
+	// evidence of what it did.
+	saveWarned := false
+	env.Progress = func(rs []job.Result) {
+		if err := env.Record(rs); err != nil && !saveWarned {
+			saveWarned = true
+			fmt.Fprintln(stderr, "warning: state not saved:", err)
+		}
+		if lg != nil {
+			for _, r := range rs {
+				lg.Result(r)
+			}
+		}
+	}
 	results := []job.Result{}
 	switch {
 	case cmd == "backup" && *all:
@@ -358,20 +384,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) (code int
 		}
 	case cmd == "backup":
 		results = append(results, env.BackupSubscription(ctx, subs[0], *unit)...)
+		env.Progress(results)
 	case cmd == "forget":
 		results = env.ForgetAll(ctx, subs)
 	case cmd == "check":
 		results = env.CheckAll(ctx, subs, *subset)
 	}
-	if err := env.Record(results); err != nil {
-		fmt.Fprintln(stderr, "warning: state not saved:", err)
-	}
-	if *all {
-		// Subscriptions whose inventory entry is invalid were left out;
-		// they fail the run, but are not recorded in the state file.
-		results = append(env.InvalidResults(cmd), results...)
-	}
-	code = emit(stdout, results, nil)
+	results = append(invalid, results...)
+	code = emitJSON(stdout, results, nil) // already logged as they came
 	for _, r := range results {
 		if !r.OK {
 			code = 1
