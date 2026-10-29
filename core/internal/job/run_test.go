@@ -127,10 +127,45 @@ func TestForgetLocalRunsPrune(t *testing.T) {
 	}
 }
 
-func TestCheckWithoutKeyFails(t *testing.T) {
-	e, _, _ := setup(t, "local")
-	if r := e.Check(context.Background(), mustSub(t, e, "example.test"), "5%"); r.OK {
-		t.Fatalf("%+v", r)
+func TestForgetWithoutRepositoryIsANote(t *testing.T) {
+	e, _, log := setup(t, "local")
+	// A db-only subscription without databases never gets a repository.
+	sub := mustSub(t, e, "example.test")
+	sub.Features, sub.Databases = []string{"db"}, nil
+	if rs := e.BackupSubscription(context.Background(), sub, ""); len(rs) != 1 || !rs[0].OK {
+		t.Fatalf("%+v", rs)
+	}
+	for _, r := range []Result{e.Forget(context.Background(), sub), e.Check(context.Background(), sub, "5%")} {
+		if !r.OK || r.Note != NoRepositoryNote || r.Error != "" {
+			t.Errorf("%+v", r)
+		}
+	}
+	if log() != "" {
+		t.Errorf("restic ran:\n%s", log())
+	}
+	// An owner file of another id still fails, even without a key.
+	sub.ID = "42"
+	os.WriteFile(filepath.Join(e.Cfg.KeysDir, "example.test.id"), []byte("17\n"), 0o600)
+	if r := e.Forget(context.Background(), sub); r.OK || !strings.Contains(r.Error, `id "17"`) {
+		t.Errorf("owner mismatch: %+v", r)
+	}
+	os.Remove(filepath.Join(e.Cfg.KeysDir, "example.test.id"))
+	// A key with the wrong mode fails.
+	keysEnsure(t, e)
+	os.Chmod(filepath.Join(e.Cfg.KeysDir, "example.test.key"), 0o644)
+	for _, r := range []Result{e.Forget(context.Background(), sub), e.Check(context.Background(), sub, "")} {
+		if r.OK || !strings.Contains(r.Error, "readable by others") {
+			t.Errorf("wrong-mode key: %+v", r)
+		}
+	}
+	// A keys directory that cannot be used fails too.
+	os.Chmod(filepath.Join(e.Cfg.KeysDir, "example.test.key"), 0o600)
+	os.Chmod(e.Cfg.KeysDir, 0o755)
+	if r := e.Check(context.Background(), sub, ""); r.OK || !strings.Contains(r.Error, "mode 0700") {
+		t.Errorf("open keys dir: %+v", r)
+	}
+	if log() != "" {
+		t.Errorf("restic ran:\n%s", log())
 	}
 }
 

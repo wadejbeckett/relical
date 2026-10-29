@@ -48,6 +48,10 @@ func checkFile(p string, fi fs.FileInfo) error {
 	return nil
 }
 
+// ErrNoKey is returned by Path when the repository has no key file yet,
+// which means nothing has been backed up into it.
+var ErrNoKey = errors.New("no key file")
+
 // Path returns the existing key file for a subscription.
 func Path(dir, name string) (string, error) {
 	p, err := keyPath(dir, name)
@@ -55,6 +59,9 @@ func Path(dir, name string) (string, error) {
 		return "", err
 	}
 	fi, err := os.Stat(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("no key for %s: %w (%s)", name, ErrNoKey, p)
+	}
 	if err != nil {
 		return "", fmt.Errorf("no key for %s: %w", name, err)
 	}

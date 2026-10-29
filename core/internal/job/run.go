@@ -352,7 +352,7 @@ func (e Env) Forget(ctx context.Context, sub inventory.Subscription) Result {
 	}
 	r, dst, err := e.Runner(sub)
 	if err != nil {
-		return failed(res, err)
+		return e.noRepository(res, sub, err)
 	}
 	if dst.Prune == "remote" {
 		res.OK = true
@@ -371,6 +371,27 @@ func (e Env) Forget(ctx context.Context, sub inventory.Subscription) Result {
 	return res
 }
 
+// noRepository turns Runner's error for forget and check into the result:
+// a repository without a key has never been backed up into (a db-only
+// subscription without databases, or one not yet backed up), which is a
+// note. Any other error, such as a key readable by others or a repository
+// recorded as another id's, fails.
+func (e Env) noRepository(res Result, sub inventory.Subscription, err error) Result {
+	if !errors.Is(err, keys.ErrNoKey) {
+		return failed(res, err)
+	}
+	if oerr := keys.CheckOwner(e.Cfg.KeysDir, sub.Name, sub.ID); oerr != nil {
+		return failed(res, oerr)
+	}
+	res.OK = true
+	res.Note = NoRepositoryNote
+	return res
+}
+
+// NoRepositoryNote is the note of forget and check for a repository that
+// does not exist yet.
+const NoRepositoryNote = "no repository yet (nothing has been backed up)"
+
 func (e Env) Check(ctx context.Context, sub inventory.Subscription, subset string) Result {
 	res := e.result(sub.Name, "", "check")
 	if !hasUnits(sub) {
@@ -380,7 +401,7 @@ func (e Env) Check(ctx context.Context, sub inventory.Subscription, subset strin
 	}
 	r, _, err := e.Runner(sub)
 	if err != nil {
-		return failed(res, err)
+		return e.noRepository(res, sub, err)
 	}
 	if err := r.Unlock(ctx); err != nil {
 		return failed(res, err)
