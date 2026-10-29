@@ -48,6 +48,7 @@
   "server": {
     "features": ["panel-config"],
     "config_command": ["/usr/sbin/plesk", "bin", "pleskbackup", "--server", "-exclude-mail", "-exclude-files", "-exclude-databases", "-exclude-logs", "-include-server-settings", "-output-file", "{output}"],
-    "config_ext": "tar"
+    "config_ext": "tar",
+    "encrypt_with_repo_key": true
   }
 }
