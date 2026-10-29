@@ -37,6 +37,10 @@ applies the retention policy afterwards. The weekly repository check runs on
 Sunday, twelve hours after the backup time. Until the destination is saved,
 both are skipped rather than failed.
 
+The default backup time is 01:00. Phase 1 builds used 02:30; on a server
+where the backup time was never saved, an upgrade moves the timer to 01:00.
+Save a backup time in the settings to keep another one.
+
 If any step fails, the installer exits with an error that names the failed
 step, the steps already completed and the steps not done. Running it again
 is safe, because every step checks what is already there:
