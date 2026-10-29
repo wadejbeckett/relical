@@ -298,3 +298,27 @@ func TestCopyTreeKeepsSymlinksAndRefusesExisting(t *testing.T) {
 		t.Errorf("copy over an existing entry: %v", err)
 	}
 }
+
+// A restored folder that is still root's (left by a restore killed on the
+// fallback path) cannot be removed by the customer: the error says to ask
+// the administrator. One the customer owns keeps "delete or rename it".
+func TestPartialTargetNamesTheAdministrator(t *testing.T) {
+	e, _, _ := webSetup(t)
+	target := filepath.Join(home(e), "restored-2026-10-20-aaaaaaaa")
+	os.Mkdir(target, 0o700)
+	_, err := RunFiles(context.Background(), e, FilesRequest{Subscription: "example.test", Snapshot: "latest"})
+	if err == nil || !strings.Contains(err.Error(), "delete or rename it") {
+		t.Fatalf("the user's own folder: %v", err)
+	}
+	// In the test the effective user is also the subscription's user; as
+	// another uid, the same folder is root's partial one.
+	s := &e.Inv.Subscriptions[0]
+	ws := &webspace{home: s.Home, uid: s.UID + 1}
+	fd, _ := syscall.Open(s.Home, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	defer syscall.Close(fd)
+	ws.fd = fd
+	if err := ws.targetExists("restored-2026-10-20-aaaaaaaa"); !strings.Contains(err.Error(), "ask the server's administrator to remove it") ||
+		!strings.Contains(err.Error(), "already exists") {
+		t.Errorf("%v", err)
+	}
+}

@@ -2,7 +2,7 @@
 
 Backup for hosting servers (mail, website files, databases and the panel configuration), built on restic. A panel-neutral core (`core/`) with thin control-panel adapters (`panels/`, starting with Plesk). Part of the Noiz Déjà Vu backup range.
 
-Status: phase 2 in development (mail, website files and databases are backed up per subscription, and the panel configuration into its own repository; each can be restored next to the live data). Phase 2 in development: pilot pending.
+Status: phase 2 in development, pilot pending (mail, website files and databases are backed up per subscription, and the panel configuration into its own repository; each can be restored next to the live data).
 
 ## Build and test
 
@@ -293,7 +293,7 @@ The finished `restored-<snapshot date>-<short id>/` folder is built in full in a
 
 As for mail, a second restore of the same snapshot is refused while its `restored-…` folder (or panel configuration file) exists; delete or rename it first.
 
-A restore that is killed (SIGKILL, out of memory, power loss) can leave its staging behind, never a partial folder in `home`. Every restore holds an exclusive `flock` on its own staging directory while it runs. Every restore, and every `backup --all` after it takes the run lock, removes staging older than 24 hours whose lock nobody holds (so a restore that runs for more than a day keeps its staging): everything in each `<files root>/.relical/`, and mail staging (`run-*`), staging from earlier builds (`files-*`) and temporary `.*.part` files in `<state_dir>/restore`.
+A restore that is killed (SIGKILL, out of memory, power loss) leaves its staging behind and, on the usual path, nothing in `home`. On the fallback path (`home` on another file system, or no `renameat2`) the folder is created in `home` first, so a restore killed while filling it leaves a partial `restored-…` folder there, owned by root with mode 0700, which the customer cannot remove; restoring the same snapshot again is then refused with an error that asks them to have the server's administrator remove it. Every restore holds an exclusive `flock` on its own staging directory while it runs. Every restore, and every `backup --all` after it takes the run lock, removes staging older than 24 hours whose lock nobody holds (so a restore that runs for more than a day keeps its staging): everything in each `<files root>/.relical/`, and mail staging (`run-*`), staging from earlier builds (`files-*`) and temporary `.*.part` files in `<state_dir>/restore`.
 
 ## Configuration
 
@@ -338,9 +338,9 @@ A Storage Box cannot run rest-server, so there is no append-only mode: the serve
 The inventory says which subscriptions are covered. It is given in one of two ways, never both:
 
 - statically, in the configuration, as `subscriptions` (and optionally `server`), as in `packaging/config.example.json`;
-- or by a panel adapter, as `inventory_command`: a command (first element an absolute path) that Relical runs as root before every command that needs the inventory, and whose standard output is the inventory JSON:
+- or by a panel adapter, as `inventory_command`: a command (first element an absolute path) that Relical runs as root before every command that needs the inventory, and whose standard output is the inventory JSON. The Plesk extension writes:
 
-      "inventory_command": ["/usr/sbin/plesk", "bin", "extension", "--exec", "relical", "inventory.php"]
+      "inventory_command": ["/opt/psa/admin/sbin/modules/relical/relical-root", "inventory.php"]
 
   The output must be `{"version": 2, "subscriptions": [...]}`, optionally with `server` (unless the configuration has one) and `skipped`; every subscription must have an `id`. The command runs with `PATH` as its only environment variable, in its own process group. It gets 60 seconds and at most 16 MiB of output; on a timeout the whole process group is killed. A non-zero exit fails the run with its exit code and standard error.
 

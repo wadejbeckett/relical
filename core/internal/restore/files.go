@@ -86,7 +86,7 @@ func RunFiles(ctx context.Context, env job.Env, req FilesRequest) (FilesResult, 
 	if ex, err := ws.exists(name); err != nil {
 		return res, err
 	} else if ex {
-		return res, errTargetExists(res.RestoredTo)
+		return res, ws.targetExists(name)
 	}
 
 	src := ws.home

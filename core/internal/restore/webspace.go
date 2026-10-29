@@ -146,6 +146,23 @@ func errTargetExists(path string) error {
 	return fmt.Errorf("%s already exists (it may be from an earlier, possibly incomplete restore of this snapshot); delete or rename it to restore this snapshot again", path)
 }
 
+// targetExists is errTargetExists for name in home. A folder there that
+// is still root's is what a restore killed on the fallback path (home on
+// another file system) leaves: the customer cannot remove it, so the
+// error says to ask the server's administrator.
+func (w *webspace) targetExists(name string) error {
+	path := filepath.Join(w.home, name)
+	var st syscall.Stat_t
+	if fstatat(w.fd, name, &st) == nil && int(st.Uid) == os.Geteuid() && int(st.Uid) != w.uid {
+		return errPartialTarget(path)
+	}
+	return errTargetExists(path)
+}
+
+func errPartialTarget(path string) error {
+	return fmt.Errorf("%s already exists and is still owned by root: it is left from a restore of this snapshot that was interrupted; ask the server's administrator to remove it, then restore again", path)
+}
+
 // stage creates a new root-only directory for one restore in the files
 // root's restore staging directory, which is created when missing and
 // refused unless it is root's with mode 0700, and locks it (lockStage).
@@ -186,7 +203,7 @@ func (w *webspace) place(stage, name string) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, syscall.EEXIST):
-		return errTargetExists(filepath.Join(w.home, name))
+		return w.targetExists(name)
 	case !errors.Is(err, syscall.EXDEV) && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOSYS):
 		return fmt.Errorf("moving %s into %s: %w", name, w.home, err)
 	}
@@ -224,7 +241,7 @@ func (w *webspace) mkdirEmpty(name string) (int, error) {
 	path := filepath.Join(w.home, name)
 	if err := syscall.Mkdirat(w.fd, name, 0o700); err != nil {
 		if errors.Is(err, syscall.EEXIST) {
-			return -1, errTargetExists(path)
+			return -1, w.targetExists(name)
 		}
 		return -1, fmt.Errorf("creating %s: %w", path, err)
 	}

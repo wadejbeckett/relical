@@ -96,7 +96,7 @@ func RunDB(ctx context.Context, env job.Env, req DBRequest) (DBResult, error) {
 	if ex, err := ws.exists(name); err != nil {
 		return res, err
 	} else if ex {
-		return res, errTargetExists(filepath.Join(ws.home, name))
+		return res, ws.targetExists(name)
 	}
 	if err := ws.ensureSpace(ctx, r, snap.ID, "/"+job.DumpFilename(req.Database)); err != nil {
 		return res, err
