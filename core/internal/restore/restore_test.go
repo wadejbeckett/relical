@@ -2,6 +2,7 @@ package restore
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -315,5 +316,81 @@ func TestSourceFolderDropsTheLivePrefix(t *testing.T) {
 		if got := sourceFolder(c.folder, c.prefix); got != c.want {
 			t.Errorf("sourceFolder(%q, %q) = %q, want %q", c.folder, c.prefix, got, c.want)
 		}
+	}
+}
+
+// TestMailStageChownNeverLeavesTheStage swaps a mail folder that the walk
+// has not reached yet for a symlink to a directory outside the stage, as
+// the mail user could once a directory is theirs. No owner change may
+// land outside the stage, and the stage root must be changed last.
+func TestMailStageChownNeverLeavesTheStage(t *testing.T) {
+	stage := filepath.Join(t.TempDir(), "run-1")
+	m := filepath.Join(stage, "mail", "example.test", "alice", "Maildir")
+	for _, d := range []string{"cur", ".Sent/cur", ".ZZZ/cur", ".AAA/cur"} {
+		os.MkdirAll(filepath.Join(m, d), 0o700)
+	}
+	for _, f := range []string{"cur/1", ".Sent/cur/2", ".ZZZ/cur/3", ".AAA/cur/4"} {
+		os.WriteFile(filepath.Join(m, f), []byte("x"), 0o600)
+	}
+	outside := t.TempDir()
+	os.WriteFile(filepath.Join(outside, "passwd"), []byte("root"), 0o644)
+
+	var calls []string
+	swapped := ""
+	record := func(p string) {
+		calls = append(calls, p)
+		if swapped != "" {
+			return
+		}
+		// Swap a folder the walk has not reached yet.
+		for _, d := range []string{".ZZZ", ".AAA", ".Sent"} {
+			if !strings.HasPrefix(p, filepath.Join(m, d)) {
+				swapped = filepath.Join(m, d)
+				os.Rename(swapped, swapped+".moved")
+				os.Symlink(outside, swapped)
+				return
+			}
+		}
+	}
+	fdPath := func(fd int) string { p, _ := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", fd)); return p }
+	oldAt, oldF := fchownat, fchown
+	fchownat = func(dirfd int, name string, uid, gid, flags int) error {
+		if flags != unix_AT_SYMLINK_NOFOLLOW {
+			t.Errorf("fchownat %s without AT_SYMLINK_NOFOLLOW", name)
+		}
+		record(filepath.Join(fdPath(dirfd), name))
+		return nil
+	}
+	fchown = func(fd, uid, gid int) error { record(fdPath(fd)); return nil }
+	t.Cleanup(func() { fchownat, fchown = oldAt, oldF })
+
+	if err := chownStage(stage, 2000, 2000); err != nil {
+		t.Fatal(err)
+	}
+	if swapped == "" {
+		t.Fatal("no folder was swapped")
+	}
+	sawLink := false
+	for _, c := range calls {
+		if c != stage && !strings.HasPrefix(c, stage+"/") {
+			t.Errorf("chown outside the stage: %s", c)
+		}
+		sawLink = sawLink || c == swapped
+	}
+	if !sawLink {
+		t.Errorf("the symlink %s itself was not changed: %q", swapped, calls)
+	}
+	if calls[len(calls)-1] != stage {
+		t.Errorf("the stage root was not changed last: %q", calls)
+	}
+	// Children before parents.
+	seen := map[string]bool{}
+	for _, c := range calls {
+		for d := filepath.Dir(c); strings.HasPrefix(d, stage); d = filepath.Dir(d) {
+			if seen[d] {
+				t.Errorf("%s changed before its child %s", d, c)
+			}
+		}
+		seen[c] = true
 	}
 }

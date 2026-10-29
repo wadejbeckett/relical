@@ -214,13 +214,7 @@ func Run(ctx context.Context, env job.Env, req Request) (Result, error) {
 		return res, err
 	}
 	// doveadm drops to the mail user, which must be able to read the staging copy.
-	err = filepath.WalkDir(stage, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		return os.Lchown(p, box.UID, box.GID)
-	})
-	if err != nil {
+	if err := chownStage(stage, box.UID, box.GID); err != nil {
 		return res, err
 	}
 	// A plain mail_driver:mail_path location: Dovecot 2.4 (Plesk 18.0.81)
@@ -292,4 +286,70 @@ func sourceFolder(folder, prefix string) string {
 		return folder[len(prefix):]
 	}
 	return folder
+}
+
+// fchownat and fchown change owners in chownStage; variables so that a
+// test can record each call (and act between calls) without root.
+var (
+	fchownat = syscall.Fchownat
+	fchown   = syscall.Fchown
+)
+
+// chownStage hands the mail staging tree at stage to uid:gid, so that
+// doveadm, running as the mail user, can read it. Once a directory is the
+// mail user's, they can rename entries in it and put symlinks in their
+// place. So the walk works through directory descriptors (openat with
+// O_DIRECTORY|O_NOFOLLOW, then fchownat with AT_SYMLINK_NOFOLLOW for
+// what is not a directory) and changes children before their parent, the
+// stage root last: until the walk is done, every directory above the one
+// being changed is still root's mode 0700 staging, which the mail user
+// cannot enter. A directory swapped for a symlink is never followed; the
+// symlink itself is changed.
+func chownStage(stage string, uid, gid int) error {
+	fd, err := syscall.Open(stage, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("mail staging %s: %w", stage, err)
+	}
+	defer syscall.Close(fd)
+	if err := chownChildren(fd, stage, uid, gid); err != nil {
+		return err
+	}
+	if err := fchown(fd, uid, gid); err != nil {
+		return fmt.Errorf("chown %s: %w", stage, err)
+	}
+	return nil
+}
+
+// chownChildren changes the owner of everything in the directory open at
+// dirfd (path is for messages only), deepest first.
+func chownChildren(dirfd int, path string, uid, gid int) error {
+	dup, err := syscall.Dup(dirfd)
+	if err != nil {
+		return err
+	}
+	d := os.NewFile(uintptr(dup), path)
+	names, err := d.Readdirnames(-1)
+	d.Close()
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+	for _, name := range names {
+		p := filepath.Join(path, name)
+		cfd, err := syscall.Openat(dirfd, name, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+		switch {
+		case err == nil:
+			err = chownChildren(cfd, p, uid, gid)
+			if err == nil {
+				err = fchown(cfd, uid, gid)
+			}
+			syscall.Close(cfd)
+		case errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ELOOP):
+			// Not a directory, or a symlink: change the entry itself.
+			err = fchownat(dirfd, name, uid, gid, unix_AT_SYMLINK_NOFOLLOW)
+		}
+		if err != nil {
+			return fmt.Errorf("chown %s: %w", p, err)
+		}
+	}
+	return nil
 }
