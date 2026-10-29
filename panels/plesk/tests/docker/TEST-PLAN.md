@@ -243,7 +243,12 @@ has not yet seen. Each line is open until the next `run.sh` run.
       has had 3 website or database restores in the last 24 hours", both on
       the form (`restore-running.php` returns `recent_restores`) and in
       `restore-run.php` as root; mail restores and an administrator's
-      (`restore-run.php <id> --admin restore ...`) are not counted or held.
+      (`restore-run.php <id> --admin restore ...`) are not counted or held,
+      and neither is a restore the core refused before restoring anything
+      ("already exists", "is not in snapshot", "not enough free space", a
+      locked repository). `run.sh` step 6: the refused second files restore
+      leaves the count at 2, the whole-webspace restore is the third, a
+      fourth (database) is refused, and an administrator's then runs.
 - [~] Plesk disk quota: a restore is not checked against the
       subscription's Plesk disk quota (whole-branch review finding 4). Not
       done for the pilot; the daily limit and the five-copy cap bound how

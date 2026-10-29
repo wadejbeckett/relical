@@ -281,7 +281,9 @@ SQL=$(px "ls $W/restored-*-$DB1/example_wp.sql")
 px "mysql -uadmin -p\"\$(cat /etc/psa/.psa.shadow)\" -e 'CREATE DATABASE scratch_wp' && mysql -uadmin -p\"\$(cat /etc/psa/.psa.shadow)\" scratch_wp < $SQL"
 [ "$(px 'mysql -uadmin -p"$(cat /etc/psa/.psa.shadow)" -N scratch_wp -e "select title from posts where id=1"')" = 'hello relical' ] || fail "dump does not load"
 px 'mysql -uadmin -p"$(cat /etc/psa/.psa.shadow)" -e "DROP DATABASE scratch_wp"'
-ok "db: example_wp.sql (0600, exampleuser) loads into a scratch database"
+asPanel "restore-running.php example.test" | grep -q '"recent_restores":2' \
+    || fail "the refused second files restore counted towards the daily limit: $(asPanel "restore-running.php example.test")"
+ok "db: example_wp.sql (0600, exampleuser) loads into a scratch database; the refused restore did not count (2 of 3 today)"
 
 asPanel "restore-run.php $(newId) restore --subscription example.test --unit mail --domain example.test --mailbox alice --snapshot $MAIL1" > "$WORK/r-mail.json"
 grep -q "\"restored_to\":\"INBOX.Restored [0-9-]* $MAIL1\"" "$WORK/r-mail.json" || fail "mail restore: $(cat "$WORK/r-mail.json")"
@@ -303,7 +305,8 @@ px 'M=/var/qmail/mailnames/example.test/alice/Maildir; t=$(mktemp)
     printf "From: bob@example.test\r\nTo: alice@example.test\r\nSubject: second message\r\n\r\nA second message.\r\n" > $t
     f="$M/cur/1761700100.M2P1.plesk.example.test,S=$(stat -c %s $t):2,S"; mv $t "$f"; chown popuser:popuser "$f"; chmod 600 "$f"'
 px 'plesk bin extension --exec relical cli.php backup --subscription example.test' > "$WORK/backup2.json"
-FILES2=$(snap files "$WORK/backup2.json"); MAIL2=$(snap mail "$WORK/backup2.json")
+FILES2=$(snap files "$WORK/backup2.json"); MAIL2=$(snap mail "$WORK/backup2.json"); DB2=$(snap db "$WORK/backup2.json")
+# The customer's third files or database restore today (the limit is 3).
 asPanel "restore-run.php $(newId) restore --subscription example.test --unit files --snapshot $FILES2" > "$WORK/r-whole.json"
 grep -q '"dropped":\["dev/null","dev/random","dev/urandom"\]' "$WORK/r-whole.json" || fail "device nodes not listed as dropped: $(cat "$WORK/r-whole.json")"
 px "test -d $W/restored-*-$FILES2/httpdocs && test -z \"\$(find $W/restored-*-$FILES2 -type c)\"" || fail "whole-webspace restore"
@@ -313,6 +316,21 @@ grep -q '"messages":0' "$WORK/r-inbox.json" && fail "INBOX restore imported noth
 px "doveadm mailbox list -u alice@example.test" | grep -q "^INBOX.Restored [0-9-]* $MAIL2.INBOX\$" || fail "INBOX-only restore folder"
 px "doveadm fetch -u alice@example.test hdr.subject mailbox 'INBOX.Restored * $MAIL2.INBOX' ALL" | grep -q 'second message' || fail "INBOX-only restore content"
 ok "whole webspace $FILES2 lists dev/null, dev/random, dev/urandom as dropped; restored-* not backed up; INBOX only from $MAIL2"
+
+# The daily limit: a fourth customer files or database restore is refused
+# before the core runs; an administrator's is not held to it.
+asPanel "restore-running.php example.test" | grep -q '"recent_restores":3' || fail "restore-running.php does not report 3 restores today"
+ID=$(newId)
+if asPanel "restore-run.php $ID restore --subscription example.test --unit db --database example_wp --snapshot $DB2" > "$WORK/r-fourth.txt" 2>&1; then
+    fail "a fourth customer restore in 24 hours was not refused"
+fi
+asPanel "restore-result.php $ID" | grep -q 'has had 3 website or database restores in the last 24 hours' || fail "the fourth restore's refusal is not in the record"
+px "test -z \"\$(ls -d $W/restored-*-$DB2 2>/dev/null)\"" || fail "the refused fourth restore wrote a restored-* folder"
+asPanel "restore-run.php $(newId) --admin restore --subscription example.test --unit db --database example_wp --snapshot $DB2" > /dev/null \
+    || fail "an administrator's restore past the daily limit was refused"
+px "test -s $W/restored-*-$DB2/example_wp.sql" || fail "the administrator's restore past the limit wrote no dump"
+asPanel "restore-running.php example.test" | grep -q '"recent_restores":3' || fail "the administrator's restore counted towards the customer's limit"
+ok "a fourth customer restore in 24 hours is refused (TOO_MANY_RESTORES, nothing written); an administrator's runs and does not count"
 
 # ---------------------------------------------------------------------------
 say "7. HTTP: admin and customer screens"
