@@ -15,7 +15,8 @@ use InvalidArgumentException;
  *
  *     /usr/local/lib/relical/relical -config /etc/relical/config.json <command> <flags>
  *
- * Flags are written `--name value`; boolean flags (`--all`) take no value.
+ * Flags are written `--name value`; boolean flags (`--all`, and
+ * `--no-forget` on backup --all) take no value.
  */
 final class Command
 {
@@ -75,7 +76,14 @@ final class Command
                 $unit = self::optional($flags, 'unit', [self::class, 'unit']);
                 self::unitFitsTarget($flags, $unit);
                 $out = array_merge($out, self::emit('unit', $unit));
-                self::only($flags, ['subscription', 'all', 'unit']);
+                if (array_key_exists('no-forget', $flags)) {
+                    // As the core: retention is only applied after backup --all.
+                    if (!array_key_exists('all', $flags)) {
+                        throw new InvalidArgumentException('--no-forget is for backup --all');
+                    }
+                    $out[] = '--no-forget';
+                }
+                self::only($flags, ['subscription', 'all', 'unit', 'no-forget']);
                 break;
 
             case 'forget':
@@ -526,7 +534,7 @@ final class Command
             if (array_key_exists($name, $flags)) {
                 throw new InvalidArgumentException(sprintf('--%s given twice', $name));
             }
-            if ($name === 'all') {
+            if ($name === 'all' || $name === 'no-forget') {
                 $flags[$name] = true;
                 continue;
             }

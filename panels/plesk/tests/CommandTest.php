@@ -163,6 +163,8 @@ final class CommandTest extends TestCase
         yield 'backup one' => [['backup', '--subscription', 'example.test'], ['backup', '--subscription', 'example.test']];
         yield 'backup all' => [['backup', '--all'], ['backup', '--all']];
         yield 'backup unit' => [['backup', '--subscription', 'example.test', '--unit', 'db'], ['backup', '--subscription', 'example.test', '--unit', 'db']];
+        yield 'backup all without forget' => [['backup', '--all', '--no-forget'], ['backup', '--all', '--no-forget']];
+        yield 'backup all one unit without forget' => [['backup', '--no-forget', '--unit', 'files', '--all'], ['backup', '--all', '--unit', 'files', '--no-forget']];
         yield 'backup all one unit' => [['backup', '--all', '--unit', 'mail'], ['backup', '--all', '--unit', 'mail']];
         yield 'backup panel config' => [['backup', '--subscription', '_server', '--unit', 'panel-config'], ['backup', '--subscription', '_server', '--unit', 'panel-config']];
         yield 'forget all' => [['forget', '--all'], ['forget', '--all']];
@@ -228,6 +230,11 @@ final class CommandTest extends TestCase
         yield 'stray positional' => [['status', 'extra']];
         yield 'status takes no flags' => [['status', '--all']];
         yield 'unit on forget' => [['forget', '--all', '--unit', 'mail']];
+        yield 'no-forget on one subscription' => [['backup', '--subscription', 'example.test', '--no-forget']];
+        yield 'no-forget with a value' => [['backup', '--all', '--no-forget', 'true']];
+        yield 'no-forget twice' => [['backup', '--all', '--no-forget', '--no-forget']];
+        yield 'no-forget on forget' => [['forget', '--all', '--no-forget']];
+        yield 'no-forget on check' => [['check', '--all', '--no-forget']];
         yield 'subset on backup' => [['backup', '--all', '--read-data-subset', '5%']];
         yield 'snapshots needs subscription' => [['snapshots', '--all']];
         yield 'ls needs snapshot' => [['ls', '--subscription', 'example.test']];
