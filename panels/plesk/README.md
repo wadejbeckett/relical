@@ -95,6 +95,28 @@ Every privileged step runs as root through
 `plesk bin extension --exec relical <script>` with checked arguments; the
 panel itself never runs the backup tools.
 
+## Restores for customers
+
+A covered subscription has a "Backups" button on its page, for the customer
+and for administrators. It lists the restore points of the subscription's
+mail, website files and databases, and restores:
+
+- mail of one mailbox (or one of its folders) into a new folder
+  `Restored <date> <id>` in that mailbox;
+- website files, one folder or everything, into a new folder
+  `restored-<date>-<id>/` in the subscription's home directory, beside
+  `httpdocs`, owned by the subscription's user and not served by the
+  website;
+- a database as `<database>.sql` in such a folder, to import with
+  phpMyAdmin.
+
+Nothing live is overwritten. A restore runs in the background
+(`restore-run.php`, one at a time per subscription) and a status page shows
+where the copy is when it has finished; its record is kept for 30 days in
+the extension's var directory (`restores/`, root only). A customer only
+ever reaches their own subscription, and never the Plesk configuration;
+one whose plan does not include Relical sees a page that says so.
+
 ## Building
 
 From the repository root, with Go, zip and the pinned tools (`make tools`):
