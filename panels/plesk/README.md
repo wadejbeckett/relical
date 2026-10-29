@@ -120,11 +120,20 @@ mail, website files and databases, and restores:
   phpMyAdmin.
 
 Nothing live is overwritten. A restore runs in the background
-(`restore-run.php`, one at a time per subscription) and a status page shows
+(`restore-run.php`, one at a time per subscription and two at a time on the
+server) and a status page shows
 where the copy is when it has finished; its record is kept for 30 days in
 the extension's var directory (`restores/`, root only). A customer only
 ever reaches their own subscription, and never the Plesk configuration;
-one whose plan does not include Relical sees a page that says so.
+one whose plan does not include Relical sees a page that says so. A
+customer cannot start a files or database restore while five `restored-*`
+copies are in the home directory. The screens' answers about restore points
+and mailboxes are reused for five minutes, and only one read of a
+subscription's backups runs at a time, so reloading the page cannot tie up
+the Storage Box's connections (`cache-clear.php [<subscription>]` forgets
+them at once). The permission "Restore from Relical backups"
+(`relical_restore`, on by default) on the Permissions tab of a plan or
+subscription switches the screens off for it.
 
 ## Building
 
