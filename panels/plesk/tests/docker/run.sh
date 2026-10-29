@@ -143,15 +143,35 @@ ok "binaries match SHA256SUMS; /etc/relical, keys, ssh, mysql.cnf modes; timers 
 [ "$(px 'plesk bin extension --exec relical running.php')" = '{"running":false}' ] || fail "running.php through extension --exec"
 ok "plesk bin extension --exec relical <script> reaches root"
 # The panel user's environment must not reach PHP as root (whole-branch review finding 7).
-# The ini disables json_encode and logs errors to a marker file: if it is
-# read, running.php fails and the marker appears. (auto_append_file, the
-# review's proof, does not run after exit(), which every root script calls.)
-px 'mkdir -p /tmp/relical-ini && printf "%s\n" "disable_functions=json_encode" "log_errors=1" "error_log=/tmp/relical-ini/marker" > /tmp/relical-ini/zz.ini && chmod -R a+rX /tmp/relical-ini && chmod 1777 /tmp/relical-ini'
+# The ini sets error_log to a marker file. Plesk's PHP 8.4 reads a scanned
+# ini but does not enforce disable_functions from it, so the checks use
+# what it does honour: error_log, read back with ini_get(), and an error
+# logged to the marker. (auto_append_file, the review's proof, does not run
+# after exit(), which every root script calls.)
+px 'mkdir -p /tmp/relical-ini && printf "%s\n" "log_errors=1" "display_errors=0" "error_log=/tmp/relical-ini/marker" > /tmp/relical-ini/zz.ini && cp /tmp/relical-ini/zz.ini /tmp/relical-ini/php.ini && chmod -R a+rX /tmp/relical-ini && chmod 1777 /tmp/relical-ini'
 OUT=$(docker exec "$P" su -s /bin/sh psaadm -c "PHP_INI_SCAN_DIR=/tmp/relical-ini PHPRC=/tmp/relical-ini $RR running.php" 2>&1 || true)
 [ "$OUT" = '{"running":false}' ] || fail "running.php with the panel user's PHP_INI_SCAN_DIR: $OUT"
-px 'test ! -e /tmp/relical-ini/marker' || fail "PHP_INI_SCAN_DIR from the panel user reached PHP as root through relical-root"
-px 'PHP_INI_SCAN_DIR=/tmp/relical-ini /opt/psa/admin/bin/php -r "echo json_encode(1);" >/dev/null 2>&1; test -e /tmp/relical-ini/marker' \
-    || fail "the ini trick itself did not work, so the check above proves nothing"
+# A root script that reports what PHP read: running.php is swapped for a
+# probe for these checks only (relical-root runs only its allowlisted names).
+S=/opt/psa/admin/plib/modules/relical/scripts
+px "cp -p $S/running.php /root/running.php.keep"
+docker exec -i "$P" sh -c "cat > $S/running.php" <<'EOP'
+<?php
+echo json_encode(['error_log' => (string) ini_get('error_log'), 'scanned' => (string) php_ini_scanned_files(), 'loaded' => (string) php_ini_loaded_file()]), "\n";
+trigger_error('relical ini probe', E_USER_WARNING);
+EOP
+# Positive control: plain PHP with PHP_INI_SCAN_DIR reads the ini and logs to the marker.
+CTRL=$(px "PHP_INI_SCAN_DIR=/tmp/relical-ini /opt/psa/admin/bin/php $S/running.php 2>/dev/null" || true)
+case $CTRL in *'"error_log":"\/tmp\/relical-ini\/marker"'*) ;; *) fail "the ini trick itself did not work (ini_get), so the check below proves nothing: $CTRL" ;; esac
+px 'test -s /tmp/relical-ini/marker' || fail "the ini trick itself did not work (no error logged to the marker), so the check below proves nothing"
+px 'rm -f /tmp/relical-ini/marker'
+# The same probe as the panel user runs it through relical-root.
+ROOTOUT=$(docker exec "$P" su -s /bin/sh psaadm -c "PHP_INI_SCAN_DIR=/tmp/relical-ini PHPRC=/tmp/relical-ini $RR running.php 2>/dev/null" || true)
+px "mv /root/running.php.keep $S/running.php"
+case $ROOTOUT in *'"error_log":'*) ;; *) fail "the probe did not run as root through relical-root: $ROOTOUT" ;; esac
+case $ROOTOUT in *relical-ini*) fail "PHP_INI_SCAN_DIR or PHPRC from the panel user reached PHP as root through relical-root: $ROOTOUT" ;; esac
+px 'test ! -e /tmp/relical-ini/marker' || fail "PHP_INI_SCAN_DIR from the panel user reached PHP as root: the root script logged to the marker"
+[ "$(px 'plesk bin extension --exec relical running.php')" = '{"running":false}' ] || fail "running.php was not put back"
 px 'rm -rf /tmp/relical-ini'
 ok "relical-root clears the environment: PHP_INI_SCAN_DIR and PHPRC do not reach PHP"
 

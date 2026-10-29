@@ -19,6 +19,10 @@ Type=oneshot
 # "%%" is a literal "%" in a unit file.
 ExecStart=/usr/local/lib/relical/relical -config /etc/relical/config.json check --all --read-data-subset 5%%
 TimeoutStopSec=15min
+# relical exits 4 ("interrupted") when SIGINT or SIGTERM stops it, so a
+# deliberate `systemctl stop` is not a failure and sends no notice. A run
+# stopped by TimeoutStartSec= is still a failure (Result=timeout).
+SuccessExitStatus=4
 # A hung check must not run into the next week's (TimeoutStartSec=, not
 # RuntimeMaxSec=, bounds a oneshot service).
 TimeoutStartSec=20h

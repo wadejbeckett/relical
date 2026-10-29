@@ -18,6 +18,10 @@ ExecStart=/usr/local/lib/relical/relical -config /etc/relical/config.json backup
 # unless it was stopped; a stop or a reboot therefore never starts a prune.
 # A stop waits this long for relical to finish its SIGTERM handling.
 TimeoutStopSec=15min
+# relical exits 4 ("interrupted") when SIGINT or SIGTERM stops it, so a
+# deliberate `systemctl stop` is not a failure and sends no notice. A run
+# stopped by TimeoutStartSec= is still a failure (Result=timeout).
+SuccessExitStatus=4
 # Last resort against a run that hangs (a stalled SFTP session): the next
 # night's timer cannot start while this one is active. For Type=oneshot the
 # whole run is the start, so TimeoutStartSec= bounds it (RuntimeMaxSec= has
