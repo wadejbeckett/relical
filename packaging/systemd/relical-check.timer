@@ -1,10 +1,11 @@
+# Starts relical-check.service every Sunday at 03:00 server local time.
+# Override OnCalendar= in a drop-in: systemctl edit relical-check.timer
 [Unit]
-Description=Relical weekly repository check (Sunday 05:00 server local time)
+Description=Relical weekly repository check (Sunday 03:00 server local time)
 
 [Timer]
-# Server local time. To use another time or time zone, override with a
-# drop-in: systemctl edit relical-check.timer
-OnCalendar=Sun *-*-* 05:00:00
+OnCalendar=Sun *-*-* 03:00:00
+# A check missed while the server was off starts at the next boot.
 Persistent=true
 
 [Install]

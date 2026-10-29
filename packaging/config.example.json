@@ -22,6 +22,12 @@
         "RESTIC_CACERT": "/etc/relical/archive-ca.pem"
       },
       "prune": "remote"
+    },
+    "storagebox": {
+      "repository": "sftp:u000000-sub1@u000000-sub1.your-storagebox.example:relical/{subscription}",
+      "env": {},
+      "sftp_args": "-p 23 -i /etc/relical/ssh/id_ed25519 -o UserKnownHostsFile=/etc/relical/ssh/known_hosts -o StrictHostKeyChecking=yes",
+      "prune": "local"
     }
   },
   "retention": {"daily": 14, "weekly": 8, "monthly": 12},

@@ -1,3 +1,5 @@
+# Relical weekly repository check: verifies every repository's structure
+# and reads back 5% of its data. Started by relical-check.timer.
 [Unit]
 Description=Relical weekly repository check
 After=network-online.target
@@ -9,4 +11,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/relical check --all --read-data-subset 5%
+# "%%" is a literal "%" in a unit file.
+ExecStart=/usr/local/lib/relical/relical check --all --read-data-subset 5%%
+Nice=19
+IOSchedulingClass=idle

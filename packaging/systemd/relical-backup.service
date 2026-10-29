@@ -1,3 +1,7 @@
+# Relical nightly backup of every subscription in the inventory, then
+# retention. Started by relical-backup.timer. Install to
+# /etc/systemd/system/; local changes belong in a drop-in
+# (systemctl edit relical-backup.service).
 [Unit]
 Description=Relical nightly backup
 After=network-online.target
@@ -5,12 +9,16 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/relical backup --all
+# The configuration defaults to /etc/relical/config.json.
+ExecStart=/usr/local/lib/relical/relical backup --all
 # Retention runs after every backup run, whatever its result: ExecStartPost=
-# would be skipped when one subscription's backup fails, and then no subscription's old
-# snapshots would ever be pruned. ExecStopPost= runs regardless of result
-# (the unit still records the backup's failure).
-ExecStopPost=/usr/local/bin/relical forget --all
+# would be skipped when one subscription's backup fails, and then no
+# subscription's old snapshots would ever be pruned. ExecStopPost= runs
+# regardless of result (the unit still records the backup's failure).
+ExecStopPost=/usr/local/lib/relical/relical forget --all
 # ExecStopPost= is bounded by TimeoutStopSec= (default 90s), which a prune
 # can easily exceed.
 TimeoutStopSec=infinity
+# The backup yields CPU and disk to the sites and mail it is backing up.
+Nice=19
+IOSchedulingClass=idle

@@ -1,11 +1,15 @@
+# Starts relical-backup.service every night between 01:00 and 01:30 server
+# local time. To use another time or time zone, override OnCalendar= in a
+# drop-in: systemctl edit relical-backup.timer
 [Unit]
-Description=Relical nightly mail backup (01:00 server local time)
+Description=Relical nightly backup (01:00 server local time)
 
 [Timer]
-# Server local time. To use another time or time zone, override with a
-# drop-in: systemctl edit relical-backup.timer
 OnCalendar=*-*-* 01:00:00
+# Spreads the start over 30 minutes, so that servers sharing a destination
+# do not all start at once.
 RandomizedDelaySec=30min
+# A run missed while the server was off starts at the next boot.
 Persistent=true
 
 [Install]
