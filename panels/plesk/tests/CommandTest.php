@@ -224,7 +224,10 @@ final class CommandTest extends TestCase
         yield 'duplicate flag' => [['snapshots', '--subscription', 'example.test', '--subscription', 'other.example.test']];
         yield 'missing value' => [['snapshots', '--subscription']];
         yield 'flag as value' => [['snapshots', '--subscription', '--unit']];
-        yield 'dash value for path' => [['ls', '--subscription', 'example.test', '--snapshot', 'latest', '--path', '-osftp.command=id']];
+        yield 'dash value for path' => [['ls', '--subscription', 'example.test', '--snapshot', 'abcdef12', '--path', '-osftp.command=id']];
+        yield 'ls of latest' => [['ls', '--subscription', 'example.test', '--snapshot', 'latest']];
+        yield 'ls of a short id' => [['ls', '--subscription', 'example.test', '--snapshot', 'abcdef1']];
+        yield 'ls of an upper-case id' => [['ls', '--subscription', 'example.test', '--snapshot', 'ABCDEF12']];
         yield 'dash value for folder' => [['restore', '--subscription', 'example.test', '--unit', 'mail', '--domain', 'example.test', '--mailbox', 'info', '--folder', '-x']];
         yield 'dash value for subscription' => [['backup', '--subscription', '-x']];
         yield 'stray positional' => [['status', 'extra']];
@@ -291,6 +294,11 @@ final class CommandTest extends TestCase
         yield ['snapshot', str_repeat('a', 65), false];
         yield ['snapshot', 'ABCDEF12', false];
         yield ['snapshot', 'abcdef12 ', false];
+        yield ['snapshotId', 'abcdef12', true];
+        yield ['snapshotId', str_repeat('a', 64), true];
+        yield ['snapshotId', 'latest', false];
+        yield ['snapshotId', 'abcdef1', false];
+        yield ['snapshotId', 'ABCDEF12', false];
         yield ['snapshot', "abcdef12\n", false];
         // unit
         yield ['unit', 'mail', true];

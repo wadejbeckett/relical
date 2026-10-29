@@ -42,6 +42,8 @@ final class Command
     public const CUSTOMER_UNITS = ['mail', 'files', 'db'];
 
     private const SNAPSHOT = '/^(latest|[0-9a-f]{8,64})$/D';
+    /** A snapshot id only: what the core's ls needs (it refuses "latest"). */
+    private const SNAPSHOT_ID = '/^[0-9a-f]{8,64}$/D';
     private const MAILBOX = '/^[a-z0-9][a-z0-9._+-]{0,63}$/D';
     private const DATABASE = '/^[A-Za-z0-9_$][A-Za-z0-9_$-]{0,63}$/D';
     private const SUBSET = '/^(100|[1-9][0-9]?)%$/D';
@@ -115,7 +117,7 @@ final class Command
             case 'ls':
                 $out = array_merge(
                     self::emit('subscription', self::required($flags, 'subscription', [self::class, 'subscription'])),
-                    self::emit('snapshot', self::required($flags, 'snapshot', [self::class, 'snapshot'])),
+                    self::emit('snapshot', self::required($flags, 'snapshot', [self::class, 'snapshotId'])),
                     self::emit('path', self::optional($flags, 'path', [self::class, 'path']))
                 );
                 self::only($flags, ['subscription', 'snapshot', 'path']);
@@ -380,7 +382,7 @@ final class Command
         if (($kind === 'snapshots' || $kind === 'mailboxes') && $count === 2) {
             $cli = [$kind, '--subscription', self::domain($args[1])];
         } elseif ($kind === 'ls' && ($count === 3 || $count === 4)) {
-            if (preg_match('/^[0-9a-f]{8,64}$/D', $args[2]) !== 1) {
+            if (preg_match(self::SNAPSHOT_ID, $args[2]) !== 1) {
                 throw new InvalidArgumentException('ls needs a hexadecimal snapshot id');
             }
             $cli = ['ls', '--subscription', self::domain($args[1]), '--snapshot', $args[2]];
@@ -437,6 +439,15 @@ final class Command
     {
         if (preg_match(self::SNAPSHOT, $value) !== 1) {
             throw new InvalidArgumentException('snapshot must be "latest" or a hexadecimal snapshot id');
+        }
+
+        return $value;
+    }
+
+    public static function snapshotId(string $value): string
+    {
+        if (preg_match(self::SNAPSHOT_ID, $value) !== 1) {
+            throw new InvalidArgumentException('snapshot must be a hexadecimal snapshot id (8 to 64 characters)');
         }
 
         return $value;
