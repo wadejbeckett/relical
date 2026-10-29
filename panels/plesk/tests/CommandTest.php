@@ -40,6 +40,7 @@ final class CommandTest extends TestCase
         yield 'restore files' => [['restore', '--subscription', 'example.test', '--unit', 'files', '--path', '/httpdocs/index.php'], ['restore', '--subscription', 'example.test', '--unit', 'files', '--path', '/httpdocs/index.php']];
         yield 'restore db' => [['restore', '--subscription', 'example.test', '--unit', 'db', '--database', 'example_wp'], ['restore', '--subscription', 'example.test', '--unit', 'db', '--database', 'example_wp']];
         yield 'restore panel config' => [['restore', '--subscription', '_server', '--unit', 'panel-config'], ['restore', '--subscription', '_server', '--unit', 'panel-config']];
+        yield 'mailboxes' => [['mailboxes', '--subscription', 'example.test'], ['mailboxes', '--subscription', 'example.test']];
         yield 'status' => [['status'], ['status']];
         yield 'report' => [['report'], ['report']];
         yield 'inventory' => [['inventory'], ['inventory']];
@@ -62,6 +63,10 @@ final class CommandTest extends TestCase
     /** @return iterable<string, array{0: list<string>}> */
     public static function refused(): iterable
     {
+        yield 'mailboxes without a subscription' => [['mailboxes']];
+        yield 'mailboxes of the server' => [['mailboxes', '--subscription', '_server']];
+        yield 'mailboxes with a unit' => [['mailboxes', '--subscription', 'example.test', '--unit', 'mail']];
+        yield 'mailboxes of every subscription' => [['mailboxes', '--all']];
         yield 'no command' => [[]];
         yield 'unknown command' => [['init']];
         yield 'version is not exposed' => [['version']];
@@ -251,6 +256,7 @@ final class CommandTest extends TestCase
     // ----- root scripts of the administrator screens -----
 
     private const FINGERPRINT = 'SHA256:mKqU+0K8OhKmA8bBQi9Rz0Q5l7/g160hIP+rJYSTNj4';
+    private const RESTORE_ID = '20261029120000-0123456789abcdef01234567';
 
     /** @return iterable<string, array{string, list<string>}> */
     public static function allowedScripts(): iterable
@@ -265,6 +271,12 @@ final class CommandTest extends TestCase
         yield 'hostkey trust' => ['hostkey.php', ['trust', self::FINGERPRINT]];
         yield 'cli status' => ['cli.php', ['status']];
         yield 'cli backup one' => ['cli.php', ['backup', '--subscription', 'example.test']];
+        yield 'cli mailboxes' => ['cli.php', ['mailboxes', '--subscription', 'example.test']];
+        yield 'restore-run mail' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'mail', '--domain', 'example.test', '--mailbox', 'info', '--snapshot', 'abcdef12']];
+        yield 'restore-run files' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'files', '--snapshot', 'abcdef12', '--path', 'httpdocs']];
+        yield 'restore-run db' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'db', '--database', 'example_wp']];
+        yield 'restore-result' => ['restore-result.php', [self::RESTORE_ID]];
+        yield 'restore-running' => ['restore-running.php', ['example.test']];
     }
 
     /**
@@ -298,6 +310,22 @@ final class CommandTest extends TestCase
         yield 'cli not allowed' => ['cli.php', ['version']];
         yield 'cli probe' => ['cli.php', ['probe']];
         yield 'cli bad value' => ['cli.php', ['backup', '--subscription', '-x']];
+        yield 'restore-run without an id' => ['restore-run.php', ['restore', '--subscription', 'example.test', '--unit', 'files']];
+        yield 'restore-run with a bad id' => ['restore-run.php', ['../x', 'restore', '--subscription', 'example.test', '--unit', 'files']];
+        yield 'restore-run with an upper-case id' => ['restore-run.php', ['20261029120000-ABCDEF0123456789ABCDEF01', 'restore', '--subscription', 'example.test', '--unit', 'files']];
+        yield 'restore-run without a command' => ['restore-run.php', [self::RESTORE_ID]];
+        yield 'restore-run a backup' => ['restore-run.php', [self::RESTORE_ID, 'backup', '--subscription', 'example.test']];
+        yield 'restore-run the panel configuration' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', '_server', '--unit', 'panel-config']];
+        yield 'restore-run in _server' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', '_server', '--unit', 'files']];
+        yield 'restore-run without a unit' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--domain', 'example.test', '--mailbox', 'info']];
+        yield 'restore-run a refused flag' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'files', '--database', 'x']];
+        yield 'restore-run an option as a value' => ['restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'files', '--path', '-x']];
+        yield 'restore-result without an id' => ['restore-result.php', []];
+        yield 'restore-result with a path' => ['restore-result.php', ['../../etc/shadow']];
+        yield 'restore-result twice' => ['restore-result.php', [self::RESTORE_ID, self::RESTORE_ID]];
+        yield 'restore-running of the server' => ['restore-running.php', ['_server']];
+        yield 'restore-running without a subscription' => ['restore-running.php', []];
+        yield 'restore-running with a path' => ['restore-running.php', ['../x']];
     }
 
     /**
@@ -320,6 +348,20 @@ final class CommandTest extends TestCase
             "'/usr/sbin/plesk' 'bin' 'extension' '--exec' 'relical' 'cli.php' 'backup' '--all' < /dev/null > /dev/null 2>&1 &",
             Command::detached(['backup', '--all'])
         );
+    }
+
+    public function testBackgroundRestoreIsFullyEscapedAndDetached(): void
+    {
+        self::assertSame(
+            "'/usr/sbin/plesk' 'bin' 'extension' '--exec' 'relical' 'restore-run.php' '" . self::RESTORE_ID . "' 'restore' '--subscription' 'example.test' '--unit' 'files' '--path' 'my '\\''file'\\''' < /dev/null > /dev/null 2>&1 &",
+            Command::detachedScript('restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', 'example.test', '--unit', 'files', '--path', "my 'file'"])
+        );
+    }
+
+    public function testBackgroundRestoreRefusesWhatRestoreRunRefuses(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        Command::detachedScript('restore-run.php', [self::RESTORE_ID, 'restore', '--subscription', '_server', '--unit', 'panel-config']);
     }
 
     public function testBackgroundRunRefusesWhatCliRefuses(): void

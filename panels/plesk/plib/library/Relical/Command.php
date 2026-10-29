@@ -22,19 +22,25 @@ final class Command
     public const UNITS = ['mail', 'files', 'db', 'panel-config'];
 
     /**
-     * The root scripts the administrator screens run through
+     * The root scripts the screens run through
      * `plesk bin extension --exec relical <script>`, and the arguments each
      * takes. cli.php takes what parse() accepts.
      */
     public const SCRIPTS = [
         'cli.php', 'write-config.php', 'install-timers.php', 'show-pubkey.php',
         'hostkey.php', 'probe.php', 'log-tail.php', 'running.php',
+        'restore-run.php', 'restore-result.php', 'restore-running.php',
     ];
+
+    /** The units a customer restores (the panel configuration is the administrator's). */
+    public const CUSTOMER_UNITS = ['mail', 'files', 'db'];
 
     private const SNAPSHOT = '/^(latest|[0-9a-f]{8,64})$/D';
     private const MAILBOX = '/^[a-z0-9][a-z0-9._+-]{0,63}$/D';
     private const DATABASE = '/^[A-Za-z0-9_$][A-Za-z0-9_$-]{0,63}$/D';
     private const SUBSET = '/^(100|[1-9][0-9]?)%$/D';
+    /** A restore's reference: its start time (UTC, YYYYmmddHHMMSS) and 96 random bits. */
+    private const RESTORE_ID = '/^[0-9]{14}-[0-9a-f]{24}$/D';
 
     /** @var list<string> */
     private array $argv;
@@ -76,6 +82,11 @@ final class Command
                 $out = self::target($flags);
                 $out = array_merge($out, self::emit('read-data-subset', self::optional($flags, 'read-data-subset', [self::class, 'subset'])));
                 self::only($flags, ['subscription', 'all', 'read-data-subset']);
+                break;
+
+            case 'mailboxes':
+                $out = self::emit('subscription', self::required($flags, 'subscription', [self::class, 'domain']));
+                self::only($flags, ['subscription']);
                 break;
 
             case 'snapshots':
@@ -125,7 +136,9 @@ final class Command
     /**
      * Validates a root script's arguments (each script calls this on its own
      * argv as well): cli.php as parse() does, hostkey.php `scan` or
-     * `trust <SHA256 fingerprint>`, every other script none.
+     * `trust <SHA256 fingerprint>`, restore-run.php `<id> restore ...` (a
+     * customer restore, see customerRestore()), restore-result.php `<id>`,
+     * restore-running.php `<subscription>`, every other script none.
      *
      * @param list<string> $args the arguments after the script name
      * @return list<string> the arguments, unchanged
@@ -150,6 +163,25 @@ final class Command
                     return $args;
                 }
                 throw new InvalidArgumentException('hostkey.php takes "scan" or "trust <fingerprint>"');
+            case 'restore-run.php':
+                if (count($args) < 2) {
+                    throw new InvalidArgumentException('restore-run.php takes <id> restore <flags>');
+                }
+                self::restoreId($args[0]);
+                self::customerRestore(array_slice($args, 1));
+                return $args;
+            case 'restore-result.php':
+                if (count($args) !== 1) {
+                    throw new InvalidArgumentException('restore-result.php takes <id>');
+                }
+                self::restoreId($args[0]);
+                return $args;
+            case 'restore-running.php':
+                if (count($args) !== 1) {
+                    throw new InvalidArgumentException('restore-running.php takes <subscription>');
+                }
+                self::domain($args[0]);
+                return $args;
             default:
                 if ($args !== []) {
                     throw new InvalidArgumentException(sprintf('%s takes no arguments', $script));
@@ -182,9 +214,55 @@ final class Command
      */
     public static function detached(array $cliArgs): string
     {
-        $words = array_map('escapeshellarg', self::rootArgv('cli.php', $cliArgs));
+        return self::detachedScript('cli.php', $cliArgs);
+    }
+
+    /**
+     * The same for any root script (restore-run.php for a customer restore,
+     * whose outcome lands in its record file).
+     *
+     * @param list<string> $args validated by scriptArgs()
+     */
+    public static function detachedScript(string $script, array $args): string
+    {
+        $words = array_map('escapeshellarg', self::rootArgv($script, $args));
 
         return implode(' ', $words) . ' < /dev/null > /dev/null 2>&1 &';
+    }
+
+    /**
+     * A restore a customer may start: `restore` of mail, files or a
+     * database in a subscription (never `_server`, never the panel
+     * configuration), with everything else parse() checks.
+     *
+     * @param list<string> $cliArgs the arguments after cli.php
+     * @return list<string> the arguments, unchanged
+     * @throws InvalidArgumentException naming what was refused
+     */
+    public static function customerRestore(array $cliArgs): array
+    {
+        $cliArgs = array_values(array_map('strval', $cliArgs));
+        if (($cliArgs[0] ?? '') !== 'restore') {
+            throw new InvalidArgumentException('only a restore can be started here');
+        }
+        $flags = self::flags(array_slice($cliArgs, 1));
+        self::domain(is_string($flags['subscription'] ?? null) ? $flags['subscription'] : '');
+        if (!in_array($flags['unit'] ?? null, self::CUSTOMER_UNITS, true)) {
+            throw new InvalidArgumentException('unit must be one of ' . implode(', ', self::CUSTOMER_UNITS));
+        }
+        self::parse($cliArgs);
+
+        return $cliArgs;
+    }
+
+    /** The reference of a customer restore (its record file's name). */
+    public static function restoreId(string $value): string
+    {
+        if (preg_match(self::RESTORE_ID, $value) !== 1) {
+            throw new InvalidArgumentException('restore id must be YYYYmmddHHMMSS-<24 hexadecimal digits>');
+        }
+
+        return $value;
     }
 
     // ----- validators (public so the restore screens can reuse them) -----
