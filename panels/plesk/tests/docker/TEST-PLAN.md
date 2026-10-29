@@ -92,6 +92,17 @@ what PHPUnit covers. Each line names the assumption and where it lives.
       list or `plesk bin extension --exec` logging). An uncovered
       subscription of the customer's own shows the "not included in the
       plan" page. `_server` is never offered.
+- [ ] Permission `relical_restore` (`plib/hooks/Permissions.php`): it
+      shows on the Permissions tab of service plans and subscriptions, on
+      by default; switched off, the Backups button disappears and the
+      restore URL answers "Permission denied". Confirm that
+      `pm_Client::hasPermission('relical_restore', $domain)` is the right
+      name for an extension's permission (not a prefixed form).
+- [ ] Additional users: what `pm_Session::getClient()` returns for an
+      additional user with a role (the user or the customer account);
+      that a user limited to subscription A cannot open subscription B's
+      restore page; and whether a role can withhold `relical_restore`.
+      Record the behaviour here (Task 9 review finding 7).
 - [ ] A customer cannot open the administrator screens
       (`IndexController::init` refuses non-admins).
 - [ ] Restore points: the index lists mail, files and database restore

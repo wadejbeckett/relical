@@ -22,14 +22,19 @@ final class RestoreAccessTest extends TestCase
     /** @var list<int> */
     private array $lookedUp = [];
 
-    /** @param list<int> $access */
-    private function decide(bool $admin, array $access, int $domainId, string $scope = 'plan-items'): RestoreAccess
+    /**
+     * @param list<int>  $access     domains the viewer may access
+     * @param ?list<int> $permission domains where the viewer holds the restore permission (null: wherever it has access)
+     */
+    private function decide(bool $admin, array $access, int $domainId, string $scope = 'plan-items', ?array $permission = null): RestoreAccess
     {
         $this->lookedUp = [];
+        $permission ??= $access;
 
         return RestoreAccess::decide(
             $admin,
             static fn (int $id): bool => in_array($id, $access, true),
+            static fn (int $id): bool => in_array($id, $permission, true),
             $domainId,
             function (int $id): ?array {
                 $this->lookedUp[] = $id;
@@ -134,5 +139,19 @@ final class RestoreAccessTest extends TestCase
         self::assertSame(['mail', 'files', 'db'], $uncovered->features());
         self::assertFalse($uncovered->covered(), 'the button stays hidden on an uncovered subscription');
         self::assertTrue($foreign->covered());
+    }
+
+    public function testWithoutTheRestorePermissionTheViewerIsRefusedBeforeAnyLookup(): void
+    {
+        // For example an additional user whose role does not grant it.
+        $access = $this->decide(false, [10, 11], 10, 'plan-items', []);
+
+        self::assertSame(RestoreAccess::NO_ACCESS, $access->refusal());
+        self::assertSame([], $this->lookedUp);
+    }
+
+    public function testAnAdministratorNeedsNoPermission(): void
+    {
+        self::assertTrue($this->decide(true, [], 10, 'plan-items', [])->allowed());
     }
 }

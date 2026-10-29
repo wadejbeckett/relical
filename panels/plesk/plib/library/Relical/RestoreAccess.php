@@ -14,7 +14,8 @@ use InvalidArgumentException;
  * in this order:
  *
  * 1. the id is a positive number;
- * 2. the viewer may access that domain (before it is even looked up);
+ * 2. the viewer may access that domain and holds the PERMISSION for it
+ *    (before the subscription is even looked up);
  * 3. the domain resolves to its subscription (webspace), and the restore
  *    acts on that subscription, never on the domain the request named;
  * 4. the viewer may access the subscription as well;
@@ -33,6 +34,9 @@ final class RestoreAccess
     public const NO_ACCESS = 'no-access';
     public const BAD_NAME = 'bad-name';
     public const NOT_COVERED = 'not-covered';
+
+    /** Declared by Modules_Relical_Permissions (plib/hooks/Permissions.php). */
+    public const PERMISSION = 'relical_restore';
 
     private ?string $subscription;
     /** @var list<string> */
@@ -53,17 +57,19 @@ final class RestoreAccess
 
     /**
      * @param callable(int): bool $hasAccess pm_Client::hasAccessToDomain
+     * @param callable(int): bool $hasPermission whether the viewer holds PERMISSION for the domain
+     *        (pm_Client::hasPermission; false when that cannot be asked)
      * @param callable(int): ?array{id: int, name: string, plan_items: list<string>} $webspaceOf
      *        the subscription a domain id belongs to (itself for a main
      *        domain), or null when there is no such domain
      * @param string $scope the Settings scope (Coverage::SCOPE_*)
      */
-    public static function decide(bool $isAdmin, callable $hasAccess, int $domainId, callable $webspaceOf, string $scope): self
+    public static function decide(bool $isAdmin, callable $hasAccess, callable $hasPermission, int $domainId, callable $webspaceOf, string $scope): self
     {
         if ($domainId <= 0) {
             return self::refuse(self::NO_DOMAIN, $isAdmin);
         }
-        if (!$isAdmin && $hasAccess($domainId) !== true) {
+        if (!$isAdmin && ($hasAccess($domainId) !== true || $hasPermission($domainId) !== true)) {
             return self::refuse(self::NO_ACCESS, $isAdmin);
         }
         $webspace = $webspaceOf($domainId);

@@ -53,6 +53,7 @@ final class PleskDomains
         return RestoreAccess::decide(
             (bool) $client->isAdmin(),
             static fn (int $id): bool => (bool) $client->hasAccessToDomain($id),
+            static fn (int $id): bool => self::hasPermission($client, $id),
             self::domainId($params),
             [self::class, 'webspaceOf'],
             Settings::fromPlesk()->scope()
@@ -77,5 +78,24 @@ final class PleskDomains
         }
 
         return is_string($value) && preg_match('/^[1-9][0-9]{0,9}$/D', $value) === 1 ? (int) $value : 0;
+    }
+
+    /**
+     * Whether the viewer holds RestoreAccess::PERMISSION for the domain.
+     * False (refused) when the SDK cannot answer, so an unknown case never
+     * opens the screens.
+     *
+     * @param object $client pm_Client
+     */
+    public static function hasPermission(object $client, int $domainId): bool
+    {
+        if (!method_exists($client, 'hasPermission')) {
+            return false;
+        }
+        try {
+            return (bool) $client->hasPermission(RestoreAccess::PERMISSION, \pm_Domain::getByDomainId($domainId));
+        } catch (Throwable $e) {
+            return false;
+        }
     }
 }

@@ -29,4 +29,21 @@ final class PleskDomainsTest extends TestCase
     {
         self::assertSame(0, PleskDomains::domainId(['dom_id' => '10', 'alias_id' => '3']));
     }
+
+    public function testWithoutHasPermissionInTheSdkThereIsNoPermission(): void
+    {
+        self::assertFalse(PleskDomains::hasPermission(new \stdClass(), 10));
+    }
+
+    public function testAFailingLookupIsNoPermission(): void
+    {
+        $client = new class () {
+            public function hasPermission(string $name, ?object $domain = null): bool
+            {
+                return true;
+            }
+        };
+        // No Plesk here: pm_Domain::getByDomainId cannot be called, which must read as "no".
+        self::assertFalse(PleskDomains::hasPermission($client, 10));
+    }
 }
