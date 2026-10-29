@@ -50,7 +50,7 @@ try {
     }
 
     $source = new PleskSource();
-    $webspaces = $source->webspaces();
+    $webspaces = $source->webspaces($scope);
 
     // The rename hints are a convenience: a missing, unreadable or corrupt
     // hints file means no hints this run, never a failed inventory.

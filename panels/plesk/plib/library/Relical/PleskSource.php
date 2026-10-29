@@ -15,7 +15,8 @@ use SimpleXMLElement;
  * Calls used:
  *  - pm_Domain::getAllDomains(true): the webspaces (subscriptions' main
  *    domains), with getId(), getName(), getHomePath(), getSysUserLogin(),
- *    hasHosting() and getPlanItems();
+ *    hasHosting() and, for scope "plan-items" only, getPlanItems() (which
+ *    is slow on a large server and logs two notices per call in panel.log);
  *  - posix_getpwnam(): the system user's uid and gid;
  *  - API-RPC <site><get><filter><parent-id>…</parent-id></filter>
  *    <dataset><gen_info/></dataset></get></site>: the addon domains and
@@ -41,13 +42,31 @@ final class PleskSource
     /** @var list<array{name: string, reason: string}> */
     private array $notes = [];
 
+    /** @var callable(): iterable<object> */
+    private $domains;
+
+    /** @var callable(string): mixed */
+    private $rpc;
+
     /**
+     * @param ?callable(): iterable<object> $domains the webspaces (pm_Domain::getAllDomains(true); replaceable in tests)
+     * @param ?callable(string): mixed      $rpc     one API-RPC request (pm_ApiRpc; replaceable in tests)
+     */
+    public function __construct(?callable $domains = null, ?callable $rpc = null)
+    {
+        $this->domains = $domains ?? static fn (): iterable => \pm_Domain::getAllDomains(true);
+        $this->rpc = $rpc ?? static fn (string $request) => \pm_ApiRpc::getService()->call($request);
+    }
+
+    /**
+     * @param string $scope Coverage::SCOPE_*; plan items are read only when the scope needs them
      * @return list<array<string, mixed>>
      */
-    public function webspaces(): array
+    public function webspaces(string $scope): array
     {
+        $planItems = $scope !== Coverage::SCOPE_ALL;
         $webspaces = [];
-        foreach (\pm_Domain::getAllDomains(true) as $domain) {
+        foreach (($this->domains)() as $domain) {
             $id = (int) $domain->getId();
             $sysUser = $domain->hasHosting() ? (string) $domain->getSysUserLogin() : '';
             $uid = null;
@@ -68,7 +87,7 @@ final class PleskSource
                 'home' => rtrim((string) $domain->getHomePath(), '/'),
                 'mail_domains' => [],
                 'databases' => [],
-                'plan_items' => array_values(array_map('strval', (array) $domain->getPlanItems())),
+                'plan_items' => $planItems ? array_values(array_map('strval', (array) $domain->getPlanItems())) : [],
             ];
         }
         if ($webspaces === []) {
@@ -256,7 +275,7 @@ final class PleskSource
 
     private function call(string $request): SimpleXMLElement
     {
-        $response = \pm_ApiRpc::getService()->call($request);
+        $response = ($this->rpc)($request);
         if (!$response instanceof SimpleXMLElement) {
             throw new RuntimeException('Plesk API-RPC returned no response');
         }

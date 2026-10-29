@@ -132,6 +132,7 @@ final class RestoreRecordTest extends TestCase
         yield 'storage box down' => ['Fatal: unable to open repository at sftp:u000000-sub1@u000000-sub1.your-storagebox.example:relical/example.test: ssh: connection refused', RestoreRecord::CANNOT_READ];
         yield 'anything else' => ['the server did not finish in time', RestoreRecord::CANNOT_READ];
         yield 'another page is reading' => [RestoreRecord::READ_BUSY, RestoreRecord::READ_BUSY];
+        yield 'the server is busy reading' => [RestoreRecord::READ_SERVER_BUSY, RestoreRecord::READ_SERVER_BUSY];
     }
 
     /** @dataProvider readErrors */

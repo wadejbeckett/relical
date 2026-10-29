@@ -23,6 +23,7 @@ final class RestoreRecord
     public const SERVER_BUSY = 'The server is busy with other restores. Try again later.';
     public const CANNOT_START = 'The restore could not be started just now. Try again later; if it keeps happening, contact your hosting provider.';
     public const READ_BUSY = 'The backups of this subscription are being read for another page. Try again in a moment.';
+    public const READ_SERVER_BUSY = 'The server is busy reading backups for other customers. Try again in a moment.';
 
     /** A customer may not start a files or database restore while this many `restored-*` copies are in the home directory. */
     public const MAX_RESTORED_FOLDERS = 5;
@@ -212,7 +213,7 @@ final class RestoreRecord
      */
     public static function customerReadError(string $message): string
     {
-        if ($message === self::READ_BUSY) {
+        if ($message === self::READ_BUSY || $message === self::READ_SERVER_BUSY) {
             return $message;
         }
         if (preg_match('/repository does not exist|no backup snapshots|no key for|no key file/i', $message) === 1) {
